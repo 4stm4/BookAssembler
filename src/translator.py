@@ -163,8 +163,8 @@ class Glossary:
                 issues.append(msg)
         return issues
 
-    def suggest_new_terms(self, text: str, suggestions_path: str = "glossary_suggestions.json"):
-        """Find English technical terms not in the glossary and suggest them."""
+    def collect_term_candidates(self, text: str):
+        """Find English technical terms not in the glossary. Returns a set of candidates."""
         text_no_code = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
         known_en = set(self.terms.keys())
         keep_flat = set()
@@ -184,8 +184,12 @@ class Glossary:
                     term.lower() not in keep_flat and
                     len(term) > 4):
                     candidates.add(term)
+        return candidates
 
-        if not candidates:
+    def flush_term_suggestions(self, all_candidates: set[str],
+                               suggestions_path: str = "glossary_suggestions.json"):
+        """Write accumulated term candidates to disk in one pass."""
+        if not all_candidates:
             return
 
         existing = {}
@@ -193,7 +197,7 @@ class Glossary:
             with open(suggestions_path, encoding="utf-8") as f:
                 existing = json.load(f)
 
-        for term in candidates:
+        for term in all_candidates:
             if term not in existing:
                 existing[term] = {"count": 1, "status": "pending"}
             else:
@@ -201,6 +205,11 @@ class Glossary:
 
         with open(suggestions_path, "w", encoding="utf-8") as f:
             json.dump(existing, f, ensure_ascii=False, indent=2)
+
+    def suggest_new_terms(self, text: str, suggestions_path: str = "glossary_suggestions.json"):
+        """Convenience wrapper for single-page use."""
+        candidates = self.collect_term_candidates(text)
+        self.flush_term_suggestions(candidates, suggestions_path)
 
 
 # ---------------------------------------------------------------------------

@@ -85,7 +85,6 @@ def check_problematic_unicode(page, text):
         if ord(ch) > 0x2000 and ch not in safe_unicode:
             context = text[max(0,i-10):i+10]
             issues.append(_issue(page, f"U+{ord(ch):04X} '{ch}' may not render: ...{context}...", SEVERITY_WARNING))
-            break
     return issues
 
 
