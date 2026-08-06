@@ -47,9 +47,7 @@ SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SRC_DIR)
 os.chdir(PROJECT_ROOT)
 
-PDF_FILE = "80888086micropro0000trie_2.pdf"
-
-CHAPTERS = {
+_FALLBACK_CHAPTERS = {
     1: (14, 30, "Introduction to Microprocessors"),
     2: (31, 88, "Software Architecture"),
     3: (89, 153, "DEBUG Program"),
@@ -66,11 +64,36 @@ CHAPTERS = {
     14: (837, 918, "Advanced Processors"),
 }
 
+
+def _load_book_config(path="chapters.yaml"):
+    """Load book structure from YAML config, fall back to built-in."""
+    config_path = os.path.join(PROJECT_ROOT, path)
+    if not os.path.exists(config_path):
+        return "80888086micropro0000trie_2.pdf", _FALLBACK_CHAPTERS
+    try:
+        import yaml
+    except ImportError:
+        return "80888086micropro0000trie_2.pdf", _FALLBACK_CHAPTERS
+
+    with open(config_path, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+
+    pdf = cfg.get("book", {}).get("pdf", "80888086micropro0000trie_2.pdf")
+    chapters = {}
+    for ch_num, ch_data in cfg.get("chapters", {}).items():
+        pages = ch_data["pages"]
+        chapters[int(ch_num)] = (pages[0], pages[1], ch_data["title"])
+    return pdf, chapters
+
+
+PDF_FILE, CHAPTERS = _load_book_config()
+
 COMPILE_HOST = os.environ.get("COMPILE_HOST", "")
 COMPILE_DIR = os.environ.get("COMPILE_DIR", "")
 COMPILE_MODE = os.environ.get("COMPILE_MODE", "docker")
 
-STAGES = ["extract", "manifest", "figures", "translate", "agents", "autofix", "validate", "build", "compile"]
+STAGES = ["extract", "manifest", "figures", "translate", "autofix", "validate", "build", "compile"]
+ALL_STAGES = STAGES + ["agents", "compile"]
 
 
 def run(cmd, check=True, capture=False):
@@ -151,16 +174,27 @@ def stage_figures(ch, start, end):
     doc.close()
     print(f"  Отрендерено {len(rendered)} страниц")
 
-    # Run CV analysis on missing figures
+    # Run CV analysis on missing figures (with per-figure cache)
     sys.path.insert(0, SRC_DIR)
     from diagram_extract import analyze_figure
+    analysis_cache_dir = os.path.join("cache", "diagram_analysis")
+    os.makedirs(analysis_cache_dir, exist_ok=True)
     analyses = {}
     for fig in missing:
+        cache_key = f"fig_{fig['number'].replace('.', '_')}.json"
+        cache_path = os.path.join(analysis_cache_dir, cache_key)
+        if os.path.exists(cache_path):
+            with open(cache_path, encoding="utf-8") as f:
+                analyses[fig["number"]] = json.load(f)
+            continue
         try:
             analysis = analyze_figure(PDF_FILE, fig["page"], fig["number"], save_debug=True)
-            analyses[fig["number"]] = analysis.to_dict()
+            result = analysis.to_dict()
+            analyses[fig["number"]] = result
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"  ⚠ Ошибка анализа Figure {fig['number']}: {e}")
+            print(f"  Ошибка анализа Figure {fig['number']}: {e}")
 
     tasks = []
     for fig in missing:
@@ -285,52 +319,75 @@ def stage_agents(ch, start, end):
     print(f"  Файл задач: {tasks_file}")
 
 
+def _load_translations(ch, start, end, translations_dir="claude_translations"):
+    """Load translations with layered merge: original < autofix < manual_fixed.
+
+    Priority (lowest to highest):
+      1. Original agent translations (ch4_154_169.json)
+      2. Autofix corrections (ch4_autofix.json)
+      3. Manual fixes (ch4_*_fixed.json)
+
+    Returns (merged_dict, originals_dict) so autofix can compare against originals.
+    """
+    originals = {}
+    merged = {}
+    files = sorted(os.listdir(translations_dir))
+
+    base = [f for f in files if f.startswith(f"ch{ch}") and f.endswith(".json")
+            and "_fixed" not in f and "_autofix" not in f]
+    autofix = [f for f in files if f.startswith(f"ch{ch}") and f.endswith("_autofix.json")]
+    manual = [f for f in files if f.startswith(f"ch{ch}") and f.endswith(".json")
+              and "_fixed" in f]
+
+    for layer in [base, autofix, manual]:
+        for fname in layer:
+            with open(os.path.join(translations_dir, fname), encoding="utf-8") as fh:
+                data = json.load(fh)
+                if layer is base:
+                    originals.update(data)
+                merged.update(data)
+
+    filtered = {k: v for k, v in merged.items() if start <= int(k) <= end}
+    orig_filtered = {k: v for k, v in originals.items() if start <= int(k) <= end}
+    return filtered, orig_filtered
+
+
 def stage_autofix(ch, start, end):
-    """Auto-fix common translation issues."""
+    """Auto-fix common translation issues. Writes only a diff layer."""
     print("\n[5] AUTOFIX — автоматическое исправление")
     translations_dir = "claude_translations"
+
+    merged, originals = _load_translations(ch, start, end, translations_dir)
     fixes = {}
-    fix_count = 0
 
-    all_translations = {}
-    files = sorted(os.listdir(translations_dir))
-    non_fixed = [f for f in files if f.startswith(f"ch{ch}") and f.endswith(".json") and "_fixed" not in f and "_autofix" not in f]
-    fixed = [f for f in files if f.startswith(f"ch{ch}") and f.endswith(".json") and "_fixed" in f]
-    for f in non_fixed + fixed:
-        with open(os.path.join(translations_dir, f), encoding="utf-8") as fh:
-            all_translations.update(json.load(fh))
+    for page, text in originals.items():
+        if page in merged and merged[page] != originals[page]:
+            continue
 
-    for page, text in all_translations.items():
-            if not (start <= int(page) <= end):
-                continue
-            fixed = text
-            original = text
+        fixed_text = text
 
-            # Fix 1: Wrap naked DEBUG output in code blocks (only if no fences)
-            if '```' not in fixed:
-                fixed = wrap_naked_debug(fixed)
+        if '```' not in fixed_text:
+            fixed_text = wrap_naked_debug(fixed_text)
+        if '```' not in fixed_text:
+            fixed_text = wrap_naked_asm(fixed_text)
+        fixed_text = remove_duplicate_tables(fixed_text, ch)
+        fixed_text = fix_subscripts(fixed_text)
 
-            # Fix 2: Wrap naked assembly in code blocks (only if no fences)
-            if '```' not in fixed:
-                fixed = wrap_naked_asm(fixed)
-
-            # Fix 3: Remove duplicate markdown tables when TikZ exists
-            fixed = remove_duplicate_tables(fixed, ch)
-
-            # Fix 5: Fix subscript formatting
-            fixed = fix_subscripts(fixed)
-
-            if fixed != original:
-                fixes[page] = fixed
-                fix_count += 1
+        if fixed_text != text:
+            fixes[page] = fixed_text
 
     if fixes:
         fix_file = os.path.join(translations_dir, f"ch{ch}_autofix.json")
+        existing_fixes = {}
+        if os.path.exists(fix_file):
+            with open(fix_file, encoding="utf-8") as f:
+                existing_fixes = json.load(f)
+        existing_fixes.update(fixes)
         with open(fix_file, "w", encoding="utf-8") as f:
-            json.dump(fixes, f, ensure_ascii=False, indent=2)
-        print(f"  Исправлено {fix_count} страниц → {fix_file}")
+            json.dump(existing_fixes, f, ensure_ascii=False, indent=2)
+        print(f"  Исправлено {len(fixes)} страниц → {fix_file}")
     else:
-        print("  ✅ Нечего исправлять")
+        print("  Нечего исправлять")
 
 
 def merge_debug_sessions(text):
@@ -562,12 +619,18 @@ def fix_subscripts(text):
 
 
 def stage_validate(ch, start, end):
-    """Validate translation quality."""
+    """Validate translation quality. Raises on critical errors to block build."""
     print("\n[6] VALIDATE — проверка качества перевода")
     manifest_file = f"ch{ch}_manifest.json"
     manifest_arg = f"-m {manifest_file}" if os.path.exists(manifest_file) else ""
     r = run(f"python3 src/validate_chapter.py -p ch{ch} -s {start} -e {end} {manifest_arg}", check=False)
-    return r.returncode == 0 if r else False
+    passed = r.returncode == 0 if r else False
+    if not passed:
+        raise RuntimeError(
+            f"Валидация главы {ch} не пройдена. "
+            "Исправьте проблемы и перезапустите с --resume. "
+            "Для принудительной сборки: --stage build"
+        )
 
 
 def stage_build(ch, start, end):
@@ -759,7 +822,7 @@ def main():
     parser = argparse.ArgumentParser(description="Book translation pipeline")
     parser.add_argument("--chapter", "-c", type=int, help="Chapter number")
     parser.add_argument("--pages", "-p", help="Page range (e.g. 154-217)")
-    parser.add_argument("--stage", "-s", choices=STAGES, help="Run specific stage")
+    parser.add_argument("--stage", "-s", choices=STAGES + ["agents"], help="Run specific stage")
     parser.add_argument("--list", "-l", action="store_true", help="List chapters")
     parser.add_argument("--resume", "-r", action="store_true", help="Resume from last failed/incomplete stage")
     parser.add_argument("--status", action="store_true", help="Show pipeline state for chapter")

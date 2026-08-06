@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 
 
@@ -165,6 +166,45 @@ class Glossary:
                 issues.append(msg)
         return issues
 
+    def suggest_new_terms(self, text: str, suggestions_path: str = "glossary_suggestions.json"):
+        """Find English technical terms not in the glossary and suggest them."""
+        text_no_code = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
+        known_en = set(self.terms.keys())
+        keep_flat = set()
+        for vals in self.keep_as_is.values():
+            if isinstance(vals, list):
+                keep_flat.update(v.lower() for v in vals)
+
+        tech_patterns = [
+            r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b',
+            r'\b([a-z]+\s+(?:register|flag|instruction|controller|interrupt|buffer|port|bus|mode|segment|stack|pointer|address))\b',
+        ]
+        candidates = set()
+        for pattern in tech_patterns:
+            for m in re.finditer(pattern, text_no_code):
+                term = m.group(1).strip()
+                if (term.lower() not in known_en and
+                    term.lower() not in keep_flat and
+                    len(term) > 4):
+                    candidates.add(term)
+
+        if not candidates:
+            return
+
+        existing = {}
+        if os.path.exists(suggestions_path):
+            with open(suggestions_path, encoding="utf-8") as f:
+                existing = json.load(f)
+
+        for term in candidates:
+            if term not in existing:
+                existing[term] = {"count": 1, "status": "pending"}
+            else:
+                existing[term]["count"] = existing[term].get("count", 0) + 1
+
+        with open(suggestions_path, "w", encoding="utf-8") as f:
+            json.dump(existing, f, ensure_ascii=False, indent=2)
+
 
 # ---------------------------------------------------------------------------
 # Validators (replace regex autofix with structured checks)
@@ -194,10 +234,11 @@ def validate_translation(page: PageContent, translated_text: str,
         if '```' not in translated_text:
             issues.append("Исходник содержит код, но в переводе нет блоков кода")
 
-    # 3. Glossary compliance
+    # 3. Glossary compliance + auto-suggest
     if glossary:
         glossary_issues = glossary.check_compliance(translated_text)
         issues.extend(glossary_issues)
+        glossary.suggest_new_terms(page.text)
 
     # 4. Structural issues
     if len(translated_text) < len(page.text) * 0.3:
@@ -287,15 +328,30 @@ class APIBackend(TranslatorBackend):
         client = anthropic.Anthropic(api_key=self.api_key)
         results = []
         glossary = request.glossary
+        max_retries = int(os.environ.get("TRANSLATE_MAX_RETRIES", "3"))
 
         for page in request.pages:
             prompt = self._build_prompt(page, request)
-            message = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=8192,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            translated_text = message.content[0].text
+            translated_text = ""
+
+            for attempt in range(max_retries):
+                try:
+                    message = client.messages.create(
+                        model=os.environ.get("TRANSLATE_MODEL", "claude-sonnet-4-20250514"),
+                        max_tokens=8192,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    translated_text = message.content[0].text
+                    break
+                except Exception as e:
+                    wait = 2 ** attempt
+                    print(f"  Стр.{page.page_number}: ошибка API ({e}), "
+                          f"повтор через {wait}с ({attempt+1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        time.sleep(wait)
+                    else:
+                        translated_text = ""
+
             issues = validate_translation(page, translated_text, glossary)
             results.append(TranslatedPage(
                 page_number=page.page_number,

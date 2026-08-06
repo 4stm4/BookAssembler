@@ -34,7 +34,7 @@ CONTRACTS = {
         "outputs": [],
     },
     "build": {
-        "requires": ["translate"],
+        "requires": ["translate", "validate"],
         "outputs": ["latex_output/ch{ch:02d}.tex"],
     },
     "compile": {

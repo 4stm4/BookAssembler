@@ -1,175 +1,170 @@
-# Система автоматического перевода книг
+# BookAssembler — автоматический перевод технических книг
 
-Набор скриптов для перевода технических PDF-книг (сканов) в печатный LaTeX на русском языке.
-Разработано для книги *"The 8088 and 8086 Microprocessors"* (Triebel & Singh), но архитектура универсальна.
+Пайплайн для перевода отсканированных PDF-книг в печатный LaTeX на русском языке.
+Разработан для *"The 8088 and 8086 Microprocessors"* (Triebel & Singh), но архитектура универсальна.
+
+## Быстрый старт
+
+```bash
+# Зависимости
+pip install pymupdf opencv-python-headless numpy pyyaml
+
+# Скопировать конфиг
+cp .env.example .env
+
+# Собрать Docker-образ для компиляции LaTeX
+docker build -t bookassembler-xelatex .
+
+# Запустить пайплайн для главы 5
+python3 src/pipeline.py --chapter 5
+
+# Продолжить после ошибки
+python3 src/pipeline.py --chapter 5 --resume
+
+# Проверить статус
+python3 src/pipeline.py --chapter 5 --status
+```
 
 ## Архитектура
 
 ```
-PDF (скан) → extract → manifest → figures → translate → autofix → validate → build → compile → PDF (печать)
+PDF (скан) → extract → manifest → figures → translate → autofix → validate → build → compile → PDF
 ```
 
-Все скрипты работают из корня проекта. Данные лежат в корне, скрипты — в `src/`.
+### Конфигурация
+
+Вся конфигурация вынесена из кода:
+
+| Файл | Что настраивает |
+|------|----------------|
+| `chapters.yaml` | Структура книги: главы, диапазоны страниц, PDF-файл |
+| `.env` | Режим перевода, режим компиляции, ключи API |
+| `glossary.json` | Словарь терминов (EN→RU), keep-as-is списки, правила форматирования |
+
+```bash
+# .env
+TRANSLATE_MODE=api          # "api" (автоматический) или "agent" (задачи для Claude Code)
+ANTHROPIC_API_KEY=sk-...    # только для TRANSLATE_MODE=api
+COMPILE_MODE=docker         # "docker" (локально) или "ssh" (удалённый хост)
+COMPILE_HOST=user@host      # только для COMPILE_MODE=ssh
+COMPILE_DIR=~/path/to/dir   # только для COMPILE_MODE=ssh
+```
+
+## Стадии пайплайна
+
+| # | Стадия | Что делает | Блокирует следующую? |
+|---|--------|-----------|---------------------|
+| 1 | `extract` | Извлекает текст из PDF (PyMuPDF) | — |
+| 2 | `manifest` | Строит инвентарь: фигуры, примеры, DEBUG-сессии, порядок элементов | — |
+| 3 | `figures` | Рендерит страницы, анализирует фигуры (с per-figure кешем), генерирует TikZ-задачи | — |
+| 4 | `translate` | Переводит через Claude API (с retry) или генерирует задачи для агентов | — |
+| 5 | `autofix` | Wrap DEBUG/ASM в code blocks, удаление дублей таблиц, fix подстрочных | — |
+| 6 | `validate` | Проверка по манифесту + глоссарию. **Блокирует build при ошибках** | build |
+| 7 | `build` | Собирает LaTeX из переводов (markdown → LaTeX, вставка фигур) | — |
+| 8 | `compile` | Компиляция XeLaTeX через Docker или SSH | — |
+
+### State management
+
+Каждый этап трекается в `cache/state/ch{N}.json`:
+- **Чекпоинты** — при сбое на 400-й странице, 399 уже сохранены
+- **Resume** — `--resume` продолжает с последнего упавшего этапа
+- **Зависимости** — build не запустится без validate, translate не запустится без extract
+- **Сброс** — `--reset-stage translate` для повторного запуска отдельного этапа
+
+```bash
+python3 src/pipeline.py --chapter 5 --status
+# Глава 5:
+#   [+] extract: done (3с)
+#   [+] manifest: done (12с)
+#   [+] translate: done (180с)
+#   [!!] validate: failed — 12 проблем
+```
+
+## Перевод
+
+### Два режима
+
+**API-режим** (`TRANSLATE_MODE=api`) — полностью автоматический:
+- Прямые вызовы Claude API с контекстными промптами
+- Exponential backoff при ошибках (до `TRANSLATE_MAX_RETRIES` попыток)
+- Встроенная валидация каждой страницы
+
+**Agent-режим** (`TRANSLATE_MODE=agent`) — генерирует задачи:
+- Записывает задачи в `ch{N}_tasks.json` с метаданными (тип контента, глоссарий)
+- Задачи выполняются через Claude Code Agent tool
+
+### Merge-стратегия переводов
+
+Переводы загружаются слоями с чётким приоритетом:
+
+```
+ch4_154_169.json      ← 1. оригинальный перевод (низший приоритет)
+ch4_autofix.json      ← 2. автоматические исправления (diff-слой)
+ch4_all_fixed.json    ← 3. ручные правки (высший приоритет, никогда не затираются)
+```
+
+### Живой глоссарий
+
+При валидации перевода система автоматически находит технические термины, отсутствующие в `glossary.json`, и записывает их в `glossary_suggestions.json` с счётчиком упоминаний. Разбор предложений — вручную.
 
 ## Скрипты
 
-### pipeline.py — главный вход
+| Скрипт | Назначение |
+|--------|-----------|
+| `pipeline.py` | Главный вход — оркестрация всех стадий |
+| `translator.py` | Абстракция перевода: `TranslatorClient`, контракты данных, валидация |
+| `state.py` | State management: чекпоинты, зависимости, resume |
+| `extract_chapter_manifest.py` | Инвентарь главы из оригинального PDF |
+| `validate_chapter.py` | Валидация перевода (11 категорий проверок) |
+| `build_latex.py` | Markdown → LaTeX (заголовки, списки, таблицы, код, примеры, фигуры) |
+| `generate_figures.py` | Поиск фигур в PDF, рендер страниц, промпты для TikZ-агентов |
+| `translate_book.py` | Утилиты извлечения текста и генерации промптов |
+| `diagram_extract.py` | CV-анализ схем: crop → classify → detect → measure → topology → review |
 
-Единая точка запуска всех стадий. Знает границы всех 14 глав.
+## Структура данных
 
-```bash
-# Полный пайплайн для главы:
-python3 src/pipeline.py --chapter 5
+| Путь | Содержимое | В Git? |
+|------|-----------|--------|
+| `chapters.yaml` | Структура книги | Да |
+| `glossary.json` | Словарь терминов | Да |
+| `src/` | Скрипты | Да |
+| `cache/text/` | Извлечённый текст | Нет |
+| `cache/state/` | Состояние пайплайна | Нет |
+| `cache/diagram_analysis/` | Кеш анализа фигур | Нет |
+| `claude_translations/` | JSON с переводами | Нет |
+| `figures/` | TikZ `.tex` файлы | Нет |
+| `latex_output/` | Готовые `.tex` для компиляции | Нет |
+| `glossary_suggestions.json` | Предложения для глоссария | Нет |
 
-# Отдельная стадия:
-python3 src/pipeline.py --chapter 4 --stage validate
+## Компиляция LaTeX
 
-# Список глав:
-python3 src/pipeline.py --list
-```
-
-**9 стадий:**
-
-| # | Стадия | Что делает | Автоматически? |
-|---|--------|-----------|----------------|
-| 1 | `extract` | Извлекает текст из PDF (PyMuPDF) | Да |
-| 2 | `manifest` | Строит инвентарь: фигуры, примеры, DEBUG, порядок элементов | Да |
-| 3 | `figures` | Рендерит страницы с фигурами, генерирует задачи для TikZ-агентов | Да (задачи) |
-| 4 | `translate` | Генерирует задачи для агентов-переводчиков (с глоссарием) | Да (задачи) |
-| 5 | `agents` | Показывает задачи из `ch{N}_tasks.json` для Claude Code Agent tool | Нет — запуск агентов вручную |
-| 6 | `autofix` | Чинит: naked DEBUG → code blocks, дубли таблиц, подстрочные индексы | Да |
-| 7 | `validate` | Проверяет перевод по манифесту + глоссарию | Да |
-| 8 | `build` | Собирает LaTeX из переведённого JSON | Да |
-| 9 | `compile` | rsync на RPi5 + xelatex | Да |
-
-### extract_chapter_manifest.py — инвентарь главы
-
-Строит ground truth из оригинального PDF: разделы, фигуры (с типами и порядком), примеры, DEBUG-сессии, нумерованные списки.
+### Docker (по умолчанию)
 
 ```bash
-python3 src/extract_chapter_manifest.py -i book.pdf -c 4 -s 154 -e 217 -j ch4_manifest.json
+docker build -t bookassembler-xelatex .
+python3 src/pipeline.py --chapter 5 --stage compile
 ```
 
-Выход — `ch{N}_manifest.json` с полями:
-- `sections` — разделы с номерами и заголовками
-- `figures` — фигуры с типами (debug_session, source_listing, register_diagram, ...)
-- `examples` — все EXAMPLE X.Y
-- `debug_sessions` — страницы с DEBUG
-- `element_order` — порядок элементов на каждой странице
+Образ содержит XeLaTeX, кириллические шрифты и все необходимые пакеты.
 
-### validate_chapter.py — валидатор
+### SSH (опционально)
 
-Проверяет перевод по 11 категориям:
-
-- Непереведённый текст (EXAMPLE, Figure, Solution, ...)
-- Мусор/артефакты (_16, ⊠)
-- Проблемные Unicode-символы
-- Отсутствующие таблицы
-- Кривые таблицы (пустые ячейки, неправильные заголовки)
-- Дублирование markdown-таблиц с TikZ
-- Нумерованные списки, превращённые в буллеты
-- Код вне code blocks
-- Разбитые DEBUG-сессии
-- Примеры
-- Глоссарий (ключевые термины переведены)
-- Манифест (все элементы на месте)
+Для компиляции на удалённом хосте установите в `.env`:
 
 ```bash
-python3 src/validate_chapter.py -p ch4 -s 154 -e 217 -m ch4_manifest.json
+COMPILE_MODE=ssh
+COMPILE_HOST=user@hostname
+COMPILE_DIR=~/path/to/latex
 ```
 
-### build_latex.py — сборка LaTeX
-
-Конвертирует JSON с переводами в `.tex`. Обрабатывает:
-- Markdown → LaTeX (заголовки, списки, таблицы, код)
-- examplebox окружения для примеров
-- Автовставка `\input{figures/fig_X_Y}` по ссылкам в тексте
-- Unicode подстрочные → LaTeX `$_{...}$`
-- Стрелки → LaTeX math
-- DEBUG-сессии → lstlisting[style=debug]
-
-```bash
-python3 src/build_latex.py -c 4 -s 154 -e 217
-```
-
-### generate_figures.py — генерация TikZ-фигур
-
-Сканирует PDF на предмет фигур, рендерит страницы как PNG, генерирует промпты для агентов.
-
-```bash
-python3 src/generate_figures.py -i book.pdf -c 4 -s 154 -e 217 --render
-python3 src/generate_figures.py -i book.pdf -c 4 -s 154 -e 217 --validate
-```
-
-### translate_book.py — утилиты перевода
-
-Извлечение текста, генерация промптов для агентов с глоссарием.
-
-```bash
-python3 src/translate_book.py -i book.pdf -c 4 -s extract
-```
-
-## Данные
-
-| Путь | Содержимое |
-|------|-----------|
-| `glossary.json` | Словарь терминов (EN→RU) + keep-as-is списки + правила форматирования |
-| `ch{N}_manifest.json` | Инвентарь главы (ground truth) |
-| `ch{N}_tasks.json` | Задачи для агентов (перевод + TikZ) |
-| `cache/text/` | Извлечённый текст из PDF |
-| `claude_translations/` | JSON с переводами (оригинал + _fixed + _autofix) |
-| `figures/` | TikZ `.tex` файлы фигур |
-| `latex_output/` | Готовые `.tex` файлы для компиляции |
-| `latex_output/book.tex` | Главный файл LaTeX (шрифты, пакеты, стили) |
-
-## Приоритет файлов переводов
-
-```
-ch4_154_169.json          ← оригинальный перевод агента
-ch4_all_fixed.json        ← ручные правки (перезаписывает)
-ch4_autofix.json          ← автоматические правки (перезаписывает)
-```
-
-Поздние файлы перезаписывают ранние по ключу страницы.
-
-### diagram_extract.py — извлечение и анализ схем
-
-Вырезает фигуры из PDF, определяет тип (схема/таблица/фото/код), находит примитивы и их координаты.
-
-```bash
-# Анализ одной фигуры с debug-картинками:
-python3 src/diagram_extract.py -i book.pdf --page 174 --figure 4.10 --debug
-
-# Анализ всех фигур главы:
-python3 src/diagram_extract.py -i book.pdf -c 4 -s 154 -e 217 --debug
-```
-
-**Пайплайн:**
-1. **crop** — вырезка по caption + горизонтальным разделителям
-2. **classify** — diagram/table/photo/code по гистограмме, линиям, плотности текста
-3. **detect** — примитивы через adaptive threshold + контуры + HoughLinesP
-4. **measure** — bbox, center, размеры в pt для каждого примитива
-5. **topology** — кто с кем соединён (endpoints стрелок → ближайшие rect'ы)
-6. **review** — что передать агенту (low confidence, missing arrows, overlaps)
-
-**Примитивы:** rect, line, arrow, text, ellipse, unknown
-**Debug-выход:** `debug_diagrams/fig_X_Y_crop.png`, `_annotated.png`, `_analysis.json`
+SSH-режим блокируется в CI/CD-окружении. Перед подключением проверяется доступность хоста и наличие SSH-ключей.
 
 ## Зависимости
 
 - Python 3.10+
-- PyMuPDF (`pip install pymupdf`)
-- OpenCV (`pip install opencv-python-headless`)
-- NumPy (`pip install numpy`)
-- XeLaTeX на RPi5 (192.168.88.71) с пакетами: fontspec, polyglossia, tikz, listings, mdframed
-- Шрифты: Noto Serif, Noto Sans, DejaVu Sans Mono
-
-## Компиляция
-
-LaTeX компилируется на RPi5 через SSH:
-
-```bash
-rsync -az latex_output/ alex@192.168.88.71:~/micro8086_translate/latex_output/
-rsync -az figures/ alex@192.168.88.71:~/micro8086_translate/latex_output/figures/
-ssh alex@192.168.88.71 'cd ~/micro8086_translate/latex_output && xelatex -interaction=nonstopmode book.tex'
-```
+- PyMuPDF (`pymupdf`)
+- OpenCV (`opencv-python-headless`)
+- NumPy (`numpy`)
+- PyYAML (`pyyaml`) — опционально, для `chapters.yaml`
+- Anthropic SDK (`anthropic`) — только для `TRANSLATE_MODE=api`
+- Docker — для локальной компиляции LaTeX
