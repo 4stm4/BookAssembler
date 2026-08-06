@@ -9,6 +9,8 @@ import json
 import os
 import re
 
+from book_profile import profile as book_profile
+
 MAX_LIST_ITEM_NUMBER = 99
 
 
@@ -199,10 +201,7 @@ def md_to_latex(text, chapter_num):
 
 def is_debug_session(text):
     """Check if code block is a DEBUG session."""
-    indicators = ["C:\\DOS>", "C>DEBUG", "-R", "-T", "-A", "-G", "-Q",
-                  "AX=", "BX=", "CX=", "DX=", "SP=", "IP="]
-    count = sum(1 for ind in indicators if ind in text)
-    return count >= 3
+    return book_profile.has_debug_session(text)
 
 
 def is_standalone_asm(line):
@@ -210,18 +209,10 @@ def is_standalone_asm(line):
     stripped = line.strip()
     if not stripped or len(stripped) > 80:
         return False
-    mnemonics = {"MOV", "ADD", "SUB", "MUL", "DIV", "INC", "DEC", "AND", "OR",
-                 "XOR", "NOT", "NEG", "PUSH", "POP", "XCHG", "LEA", "LDS", "LES",
-                 "CMP", "TEST", "JMP", "CALL", "RET", "INT", "SHL", "SHR", "SAL",
-                 "SAR", "ROL", "ROR", "RCL", "RCR", "ADC", "SBB", "IMUL", "IDIV",
-                 "CBW", "CWD", "XLAT", "LAHF", "SAHF", "DAA", "DAS", "AAA", "AAS",
-                 "AAM", "AAD", "LODSB", "LODSW", "STOSB", "STOSW", "MOVSB", "MOVSW"}
-    first_word = stripped.split()[0].upper().rstrip(",;:")
-    if first_word in mnemonics and len(stripped.split()) <= 4:
-        return True
-    # DEBUG commands
     if re.match(r"^[A-Z]:\\", stripped) or stripped.startswith("-"):
         return False
+    if book_profile.is_asm_line(stripped) and len(stripped.split()) <= 4:
+        return True
     return False
 
 

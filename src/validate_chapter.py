@@ -13,6 +13,8 @@ import os
 import re
 import sys
 
+from book_profile import profile as book_profile
+
 MANIFEST_VERSION = 1
 
 SEVERITY_ERROR = "error"
@@ -59,6 +61,7 @@ def check_untranslated(page, text):
         (r'(?<![A-Z])\bexecution\b', "execution not translated", SEVERITY_WARNING),
     ]
     text_no_code = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
+    text_no_code = re.sub(r'`[^`]+`', '', text_no_code)
     for pattern, msg, severity in patterns:
         matches = re.findall(pattern, text_no_code)
         if matches:
@@ -90,14 +93,7 @@ def check_problematic_unicode(page, text):
 
 def check_tables(page, text):
     issues = []
-    table_indicators = [
-        r'Mnemonic\s+Meaning\s+Format',
-        r'Мнемоника\s+Значение\s+Формат',
-        r'Destination\s+Source',
-        r'Назначение\s+Источник',
-        r'Flags\s+affected',
-        r'Затронутые\s+флаги',
-    ]
+    table_indicators = [p for p, _t in book_profile.get_table_indicator_patterns()]
     has_table = '|' in text and text.count('|') > 4
     needs_table = any(re.search(p, text) for p in table_indicators)
     if needs_table and not has_table:
@@ -161,8 +157,7 @@ def check_duplicate_content(page, text):
 def check_debug_sessions(page, text):
     issues = []
     code_block_count = text.count('```')
-    debug_indicators = ['C:\\DOS>DEBUG', 'C>DEBUG', 'C:\\>DEBUG']
-    has_debug = any(d in text for d in debug_indicators)
+    has_debug = book_profile.has_debug_session(text)
     if has_debug and code_block_count > 10:
         issues.append(_issue(page, f"DEBUG session split into {code_block_count//2} code blocks", SEVERITY_ERROR))
     if has_debug and code_block_count == 0:
@@ -172,7 +167,6 @@ def check_debug_sessions(page, text):
 
 def check_code_blocks(page, text):
     issues = []
-    asm_pattern = r'^(MOV|ADD|SUB|PUSH|POP|XCHG|LEA|LDS|LES|CMP|AND|OR|XOR|NOT|NEG|SHL|SHR|MUL|DIV|INC|DEC|ADC|SBB|IMUL|IDIV|CALL|RET|INT|JMP)\s+\S'
     lines = text.split('\n')
     in_code = False
     naked_asm = 0
@@ -180,7 +174,7 @@ def check_code_blocks(page, text):
         if line.strip().startswith('```'):
             in_code = not in_code
             continue
-        if not in_code and re.match(asm_pattern, line.strip()):
+        if not in_code and book_profile.is_asm_line(line.strip()):
             naked_asm += 1
     if naked_asm > 3:
         issues.append(_issue(page, f"{naked_asm} asm lines outside code blocks", SEVERITY_ERROR))
@@ -247,16 +241,10 @@ def check_glossary(translations):
     all_text_no_code = ""
     for page, text in translations.items():
         all_text_no_code += re.sub(r'```.*?```', '', text, flags=re.DOTALL) + "\n"
-    critical_terms = {
-        "EXAMPLE": ("ПРИМЕР", r'\bEXAMPLE\s+\d'),
-        "Solution": ("Решение", r'\bSolution\b'),
-        "Figure": ("Рисунок", r'\bFigure\s+\d'),
-        "Table": ("Таблица", r'\bTable\s+\d'),
-    }
-    for en, (ru, pattern) in critical_terms.items():
+    for pattern, msg in CRITICAL_UNTRANSLATED:
         matches = re.findall(pattern, all_text_no_code)
         if matches:
-            issues.append(_issue(None, f"glossary: '{en}' not translated as '{ru}' ({len(matches)}x)", SEVERITY_ERROR))
+            issues.append(_issue(None, f"glossary: {msg} ({len(matches)}x)", SEVERITY_ERROR))
     return issues
 
 

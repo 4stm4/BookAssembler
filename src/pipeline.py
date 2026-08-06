@@ -2,8 +2,9 @@
 """
 Automated book translation pipeline.
 
-Single entry point for translating any chapter of the 8088/8086 book.
+Single entry point for translating any chapter of a technical book.
 Orchestrates: extract -> manifest -> figures -> translate -> autofix -> validate -> build -> compile.
+Book-specific settings (assembly mnemonics, debug indicators, etc.) come from book_profile.
 
 Usage:
     # Full pipeline for chapter 5:
@@ -46,6 +47,7 @@ import shutil
 import subprocess
 import sys
 
+from book_profile import profile as book_profile
 from state import PipelineState, validate_stage_output
 from translator import TranslatorClient, TranslationRequest, Glossary
 
@@ -61,38 +63,26 @@ SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SRC_DIR)
 os.chdir(PROJECT_ROOT)
 
-_FALLBACK_CHAPTERS = {
-    1: (14, 30, "Introduction to Microprocessors"),
-    2: (31, 88, "Software Architecture"),
-    3: (89, 153, "DEBUG Program"),
-    4: (154, 217, "8088/8086 Programming 1"),
-    5: (218, 300, "8088/8086 Programming 2"),
-    6: (301, 368, "8088/8086 Programming 3"),
-    7: (369, 428, "Memory and I/O Interface"),
-    8: (429, 502, "Interrupt Interface"),
-    9: (503, 576, "Coprocessor and Multiprocessor"),
-    10: (577, 640, "DMA and Bus Control"),
-    11: (641, 712, "Serial I/O"),
-    12: (713, 776, "Disk Subsystem"),
-    13: (777, 836, "Display Subsystem"),
-    14: (837, 918, "Advanced Processors"),
-}
-
-
 def _load_book_config(path="chapters.yaml"):
-    """Load book structure from YAML config, fall back to built-in."""
+    """Load book structure from YAML config. Requires chapters.yaml."""
     config_path = os.path.join(PROJECT_ROOT, path)
     if not os.path.exists(config_path):
-        return "80888086micropro0000trie_2.pdf", _FALLBACK_CHAPTERS
+        log.error("chapters.yaml не найден. Создайте файл конфигурации книги.")
+        log.error("Пример: https://github.com/... (см. README)")
+        return "", {}
     try:
         import yaml
     except ImportError:
-        return "80888086micropro0000trie_2.pdf", _FALLBACK_CHAPTERS
+        log.error("pip install pyyaml — требуется для загрузки chapters.yaml")
+        return "", {}
 
     with open(config_path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
-    pdf = cfg.get("book", {}).get("pdf", "80888086micropro0000trie_2.pdf")
+    pdf = cfg.get("book", {}).get("pdf", "")
+    if not pdf:
+        log.error("chapters.yaml: отсутствует book.pdf")
+        return "", {}
     chapters = {}
     for ch_num, ch_data in cfg.get("chapters", {}).items():
         pages = ch_data["pages"]
@@ -411,11 +401,10 @@ def _load_translations(ch, start, end, translations_dir="claude_translations"):
 
 def _has_code_indicators(text):
     """Check if text likely contains unwrapped code (DEBUG prompts or multiple ASM-like lines)."""
-    debug_starts = ['C:\\DOS>DEBUG', 'C>DEBUG', 'C:\\>DEBUG']
-    if any(d in text for d in debug_starts):
+    if book_profile.has_debug_session(text):
         return True
-    asm_pattern = re.compile(r'^(MOV|ADD|SUB|PUSH|POP|XCHG|LEA|CMP|AND|OR|XOR|NOT|NEG|SHL|SHR|MUL|DIV|INC|DEC|CALL|RET|INT|JMP)\s+\S', re.MULTILINE)
-    return len(asm_pattern.findall(text)) >= 2
+    asm_count = sum(1 for line in text.split('\n') if book_profile.is_asm_line(line))
+    return asm_count >= 2
 
 
 def stage_autofix(ch, start, end):
@@ -464,8 +453,7 @@ def stage_autofix(ch, start, end):
 def merge_debug_sessions(text):
     """Merge split DEBUG code blocks into one."""
     lines = text.split('\n')
-    debug_indicators = ['C:\\DOS>DEBUG', 'C>DEBUG', 'C:\\>DEBUG']
-    has_debug = any(d in text for d in debug_indicators)
+    has_debug = book_profile.has_debug_session(text)
     code_block_count = text.count('```')
 
     if not has_debug or code_block_count <= 4:
@@ -501,7 +489,7 @@ def merge_debug_sessions(text):
             continue
 
         if in_code:
-            if any(d in line for d in debug_indicators):
+            if book_profile.has_debug_session(line):
                 in_debug = True
                 debug_lines = []
             code_lines.append(line)
@@ -530,7 +518,6 @@ def merge_debug_sessions(text):
 
 def wrap_naked_asm(text):
     """Wrap standalone assembly instructions in code blocks."""
-    asm_pattern = r'^(MOV|ADD|SUB|PUSH|POP|XCHG|LEA|LDS|LES|CMP|AND|OR|XOR|NOT|NEG|SHL|SHR|MUL|DIV|INC|DEC|ADC|SBB|IMUL|IDIV|CALL|RET|INT|JMP)\s+\S'
     lines = text.split('\n')
     result = []
     in_code = False
@@ -552,7 +539,7 @@ def wrap_naked_asm(text):
             result.append(line)
             continue
 
-        if re.match(asm_pattern, stripped):
+        if book_profile.is_asm_line(stripped):
             asm_block.append(line)
         else:
             if asm_block:
@@ -577,41 +564,52 @@ def wrap_naked_asm(text):
 
 
 def remove_duplicate_tables(text, chapter_num):
-    """Remove markdown tables that duplicate existing TikZ figures."""
-    fig_refs = re.findall(r'(?:Рисунок|рис\.)\s*(\d+\.\d+)', text)
-    for ref in fig_refs:
+    """Remove markdown tables that are adjacent to a figure reference with an existing TikZ file."""
+    tikz_refs = set()
+    for ref in re.findall(r'(?:Рисунок|рис\.)\s*(\d+\.\d+)', text):
         fig_file = f"figures/fig_{ref.replace('.', '_')}.tex"
         if os.path.exists(fig_file):
-            lines = text.split('\n')
-            table_start = None
-            new_lines = []
-            in_table = False
-            for i, line in enumerate(lines):
-                stripped = line.strip()
-                if stripped.startswith('|') and stripped.endswith('|'):
-                    if not in_table:
-                        table_start = len(new_lines)
-                        in_table = True
-                    new_lines.append(line)
+            tikz_refs.add(ref)
+
+    if not tikz_refs:
+        return text
+
+    lines = text.split('\n')
+    result = []
+    table_buf = []
+    pre_table_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('|') and stripped.endswith('|'):
+            if not table_buf:
+                pre_table_lines = result[-3:] if len(result) >= 3 else result[:]
+            table_buf.append(line)
+        else:
+            if table_buf:
+                context = '\n'.join(pre_table_lines)
+                near_tikz_fig = any(ref in context for ref in tikz_refs)
+                if len(table_buf) > 3 and near_tikz_fig:
+                    log.debug("Удалена таблица-дубликат (%d строк) рядом с TikZ фигурой", len(table_buf))
                 else:
-                    if in_table:
-                        table_line_count = len(new_lines) - table_start
-                        if table_line_count > 3:
-                            new_lines = new_lines[:table_start]
-                        in_table = False
-                    new_lines.append(line)
-            if in_table:
-                table_line_count = len(new_lines) - table_start
-                if table_line_count > 3:
-                    new_lines = new_lines[:table_start]
-            text = '\n'.join(new_lines)
-    return text
+                    result.extend(table_buf)
+                table_buf = []
+            result.append(line)
+
+    if table_buf:
+        context = '\n'.join(pre_table_lines)
+        near_tikz_fig = any(ref in context for ref in tikz_refs)
+        if len(table_buf) > 3 and near_tikz_fig:
+            log.debug("Удалена таблица-дубликат (%d строк) рядом с TikZ фигурой", len(table_buf))
+        else:
+            result.extend(table_buf)
+
+    return '\n'.join(result)
 
 
 def wrap_naked_debug(text):
     """Wrap DEBUG session output that's not inside code blocks."""
-    debug_starts = ['C:\\DOS>DEBUG', 'C>DEBUG', 'C:\\>DEBUG']
-    if not any(d in text for d in debug_starts):
+    if not book_profile.has_debug_session(text):
         return text
 
     lines = text.split('\n')
@@ -633,31 +631,13 @@ def wrap_naked_debug(text):
             i += 1
             continue
 
-        if any(d in stripped for d in debug_starts):
+        if book_profile.has_debug_session(stripped):
             debug_block = []
             while i < len(lines):
                 l = lines[i].strip()
                 if l.startswith('```'):
                     break
-                asm_mnemonics = {'MOV','ADD','SUB','MUL','DIV','INC','DEC','AND','OR','XOR','NOT','NEG',
-                                 'SHL','SHR','SAL','SAR','ROL','ROR','RCL','RCR','PUSH','POP','XCHG',
-                                 'LEA','LDS','LES','CMP','TEST','JMP','CALL','RET','INT','ADC','SBB',
-                                 'IMUL','IDIV','CBW','CWD','XLAT','NOP','HLT'}
-                first_word = l.split()[0].upper() if l.split() else ''
-                is_debug_line = (
-                    any(d in l for d in debug_starts) or
-                    l.startswith('-') or
-                    l.startswith('\u2014') or
-                    re.match(r'^[A-Z]{2}=', l) or
-                    re.match(r'^[0-9A-F]{4}:', l) or
-                    l.startswith('C:\\DOS>') or
-                    l.startswith('C:\\>') or
-                    l in ('', 'NV UP EI PL NZ NA PO NC', 'OV UP EI PL NZ NA PO NC') or
-                    re.match(r'^[A-Z]{2}\s+[0-9A-F]{4}', l) or
-                    l.startswith(':') or
-                    first_word in asm_mnemonics
-                )
-                if is_debug_line or not l:
+                if book_profile.is_debug_line(l) or not l:
                     debug_block.append(lines[i])
                     i += 1
                 else:
@@ -679,11 +659,8 @@ def wrap_naked_debug(text):
 
 
 def fix_subscripts(text):
-    """Ensure _16, _2, _10 are proper Unicode subscripts."""
-    text = re.sub(r'(?<!\w)_16\b', '\u2081\u2086', text)
-    text = re.sub(r'(?<!\w)_10\b', '\u2081\u2080', text)
-    text = re.sub(r'(?<!\w)_2\b', '\u2082', text)
-    return text
+    """Ensure numeric subscripts like _16, _2, _10 are proper Unicode."""
+    return book_profile.fix_subscripts(text)
 
 
 def stage_validate(ch, start, end):

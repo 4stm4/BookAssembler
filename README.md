@@ -1,7 +1,7 @@
 # BookAssembler — автоматический перевод технических книг
 
 Пайплайн для перевода отсканированных PDF-книг в печатный LaTeX на русском языке.
-Разработан для *"The 8088 and 8086 Microprocessors"* (Triebel & Singh), но архитектура универсальна.
+Поддерживает любые технические книги — настройки конкретной книги (ассемблерные мнемоники, паттерны кода, классификация фигур) задаются через `book_profile.yaml`.
 
 ## Быстрый старт
 
@@ -45,6 +45,7 @@ PDF (скан) → extract → manifest → figures → translate → autofix �
 | Файл | Что настраивает |
 |------|----------------|
 | `chapters.yaml` | Структура книги: главы, диапазоны страниц, PDF-файл |
+| `book_profile.yaml` | Профиль книги: мнемоники, паттерны кода, классификация фигур, промпт перевода |
 | `.env` | Режим перевода, режим компиляции, ключи API |
 | `glossary.json` | Словарь терминов (EN→RU), keep-as-is списки, правила форматирования |
 
@@ -56,6 +57,55 @@ COMPILE_MODE=docker         # "docker" (локально) или "ssh" (удал
 COMPILE_HOST=user@host      # только для COMPILE_MODE=ssh
 COMPILE_DIR=~/path/to/dir   # только для COMPILE_MODE=ssh
 ```
+
+### Настройка для новой книги
+
+1. Создайте `chapters.yaml` со структурой книги:
+
+```yaml
+book:
+  title: "My Technical Book"
+  pdf: "my_book.pdf"
+  target_lang: ru
+
+chapters:
+  1:
+    pages: [10, 45]
+    title: "Introduction"
+  2:
+    pages: [46, 120]
+    title: "Core Concepts"
+```
+
+2. (Опционально) Создайте `book_profile.yaml` для книг с кодом:
+
+```yaml
+book_description: "учебник по Python"
+translation_prompt_intro: "Переведи текст из учебника по Python на русский язык.\n"
+
+asm_mnemonics: []  # пусто, если в книге нет ассемблера
+debug_indicators: []
+debug_line_patterns: []
+debug_flag_strings: []
+
+section_pattern: '(\d+\.\d+)\s+(.+)'
+section_flags: 0
+
+subscript_bases: [2, 10, 16]
+
+table_indicators:
+  - pattern: 'Method\s+Description'
+    type: method_table
+  - pattern: 'Parameter\s+Type'
+    type: parameter_table
+
+figure_categories:
+  screenshot: ["screenshot", "output"]
+  diagram: ["diagram", "architecture", "flow"]
+  code_listing: ["listing", "source code"]
+```
+
+Без `book_profile.yaml` используется встроенный профиль для x86 ассемблера.
 
 ## Стадии пайплайна
 
@@ -118,6 +168,7 @@ ch4_all_fixed.json    ← 3. ручные правки (высший приор�
 
 | Скрипт | Назначение |
 |--------|-----------|
+| `book_profile.py` | Профиль книги: загрузка и предоставление book-specific констант |
 | `pipeline.py` | Главный вход — оркестрация всех стадий |
 | `translator.py` | Абстракция перевода: `TranslatorClient`, контракты данных, валидация |
 | `state.py` | State management: чекпоинты, зависимости, resume |
@@ -133,6 +184,7 @@ ch4_all_fixed.json    ← 3. ручные правки (высший приор�
 | Путь | Содержимое | В Git? |
 |------|-----------|--------|
 | `chapters.yaml` | Структура книги | Да |
+| `book_profile.yaml` | Профиль книги (опционально) | Да |
 | `glossary.json` | Словарь терминов | Да |
 | `src/` | Скрипты | Да |
 | `cache/text/` | Извлечённый текст | Нет |
@@ -194,7 +246,7 @@ python3 src/pipeline.py --chapter 5 --jobs-status
 - PyMuPDF (`pymupdf`)
 - OpenCV (`opencv-python-headless`)
 - NumPy (`numpy`)
-- PyYAML (`pyyaml`) — опционально, для `chapters.yaml`
+- PyYAML (`pyyaml`) — для `chapters.yaml` и `book_profile.yaml`
 - pyjobkit[sqlite] (`pyjobkit`) — очередь задач с SQLite-бэкендом
 - Anthropic SDK (`anthropic`) — только для `TRANSLATE_MODE=api`
 - Docker — для локальной компиляции LaTeX

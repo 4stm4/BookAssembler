@@ -19,6 +19,8 @@ import os
 import re
 import sys
 
+from book_profile import profile as book_profile
+
 try:
     import fitz
 except ImportError:
@@ -48,7 +50,7 @@ def extract_manifest(pdf_path, start, end, chapter_num):
         text = doc[i].get_text()
 
         # Sections
-        for m in re.finditer(r'▲?\s*(\d+\.\d+)\s+([A-Z][A-Z\s/]+(?:INSTRUCTIONS?|SET|OPERATIONS?))', text):
+        for m in book_profile.find_sections(text):
             manifest["sections"].append({
                 "page": i,
                 "number": m.group(1),
@@ -97,22 +99,19 @@ def extract_manifest(pdf_path, start, end, chapter_num):
                 })
 
         # DEBUG sessions
-        if 'C:\\DOS>DEBUG' in text or 'C>DEBUG' in text or 'C:\\>DEBUG' in text:
+        if book_profile.has_debug_session(text):
             manifest["debug_sessions"].append({
                 "page": i,
             })
 
-        # Instruction tables (Mnemonic | Meaning | Format pattern)
-        if re.search(r'Mnemonic\s+Meaning\s+Format', text):
-            manifest["tables"].append({
-                "page": i,
-                "type": "instruction_summary",
-            })
-        elif re.search(r'Destination\s+Source', text):
-            manifest["tables"].append({
-                "page": i,
-                "type": "operand_table",
-            })
+        # Tables detected via book profile patterns
+        for pattern, table_type in book_profile.get_table_indicator_patterns():
+            if re.search(pattern, text):
+                manifest["tables"].append({
+                    "page": i,
+                    "type": table_type,
+                })
+                break
 
         # Build element order for this page
         page_elements = []
@@ -147,22 +146,7 @@ def extract_manifest(pdf_path, start, end, chapter_num):
 
 
 def classify_figure(caption):
-    cap = caption.lower()
-    if cap.startswith("display") or "debug" in cap:
-        return "debug_session"
-    if "source program" in cap or "source listing" in cap or "source\nprogram" in cap:
-        return "source_listing"
-    if "block diagram" in cap or "architecture" in cap:
-        return "block_diagram"
-    if "result" in cap:
-        return "results_table"
-    if any(w in cap for w in ["shift", "rotate", "logic", "arithmetic"]):
-        return "instruction_diagram"
-    if "instruction" in cap and ("before" in cap or "after" in cap):
-        return "register_diagram"
-    if "exchange" in cap or "transfer" in cap:
-        return "data_flow"
-    return "general_diagram"
+    return book_profile.classify_figure(caption)
 
 
 def print_manifest(manifest):

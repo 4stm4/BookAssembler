@@ -23,6 +23,8 @@ import os
 import re
 import sys
 
+from book_profile import profile as book_profile
+
 try:
     import fitz
 except ImportError:
@@ -58,22 +60,7 @@ def find_figures(pdf_path, start, end):
 
 def classify_figure(description):
     """Classify figure type from its caption."""
-    desc_lower = description.lower()
-    if "display sequence" in desc_lower or "debug" in desc_lower:
-        return "debug_session"
-    if "instruction" in desc_lower and ("before" in desc_lower or "after" in desc_lower or "fetch" in desc_lower):
-        return "register_diagram"
-    if any(w in desc_lower for w in ["block diagram", "architecture", "bus", "system"]):
-        return "block_diagram"
-    if "result" in desc_lower:
-        return "results_table"
-    if any(w in desc_lower for w in ["shift", "rotate", "logic", "arithmetic"]):
-        return "instruction_diagram"
-    if "exchange" in desc_lower or "transfer" in desc_lower or "move" in desc_lower:
-        return "data_flow"
-    if "continued" in desc_lower:
-        return "continuation"
-    return "general_diagram"
+    return book_profile.classify_figure(description)
 
 
 def render_figure_pages(pdf_path, figures, output_dir):

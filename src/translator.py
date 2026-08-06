@@ -19,6 +19,8 @@ import re
 import time
 from dataclasses import dataclass, field
 
+from book_profile import profile as book_profile
+
 log = logging.getLogger("bookassembler")
 
 
@@ -339,7 +341,9 @@ class APIBackend(TranslatorBackend):
         min_interval = float(os.environ.get("TRANSLATE_MIN_INTERVAL", "1.0"))
         last_call = 0.0
 
-        for page in request.pages:
+        total = len(request.pages)
+        for idx, page in enumerate(request.pages, 1):
+            log.info("Перевод стр.%s (%d/%d)", page.page_number, idx, total)
             prompt = self._build_prompt(page, request)
             translated_text = ""
 
@@ -377,10 +381,7 @@ class APIBackend(TranslatorBackend):
 
     def _build_prompt(self, page: PageContent,
                       request: TranslationRequest) -> str:
-        parts = [
-            "Переведи следующий текст из технической книги по микропроцессорам "
-            "8088/8086 на русский язык.\n"
-        ]
+        parts = [book_profile.translation_prompt_intro]
 
         if request.glossary:
             parts.append(request.glossary.to_prompt())
@@ -478,11 +479,8 @@ class TranslatorClient:
 def _classify_page(page_num: int, text: str,
                    manifest: dict | None = None) -> PageContent:
     """Analyze raw page text to detect structural elements."""
-    debug_indicators = ['C:\\DOS>DEBUG', 'C>DEBUG', 'C:\\>DEBUG']
-    asm_pattern = r'^(MOV|ADD|SUB|PUSH|POP|XCHG|LEA|CMP|AND|OR|XOR|CALL|RET|INT|JMP)\s+\S'
-
-    has_code = bool(re.search(asm_pattern, text, re.MULTILINE))
-    has_debug = any(d in text for d in debug_indicators)
+    has_code = any(book_profile.is_asm_line(line) for line in text.split('\n'))
+    has_debug = book_profile.has_debug_session(text)
     has_table = '|' in text and text.count('|') > 6
 
     fig_match = re.search(r'Figure\s+(\d+\.\d+)', text)
