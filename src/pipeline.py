@@ -16,6 +16,15 @@ Usage:
 
     # Custom page range (not in CHAPTERS table):
     python3 pipeline.py --pages 300-350 --chapter 6
+
+    # Resume after failure:
+    python3 pipeline.py --chapter 5 --resume
+
+    # Check status:
+    python3 pipeline.py --chapter 5 --status
+
+    # Reset a stage to re-run it:
+    python3 pipeline.py --chapter 5 --reset-stage translate
 """
 
 import argparse
@@ -24,6 +33,8 @@ import os
 import re
 import subprocess
 import sys
+
+from state import PipelineState, validate_stage_output
 
 try:
     import fitz
@@ -675,8 +686,23 @@ def _compile_ssh(ch):
                 print(f"    {e}")
 
 
-def run_pipeline(ch, start, end, stage=None):
-    """Run the full pipeline or a specific stage."""
+STAGE_FUNCS = {
+    "extract": stage_extract,
+    "manifest": stage_manifest,
+    "figures": stage_figures,
+    "translate": stage_translate,
+    "agents": stage_agents,
+    "autofix": stage_autofix,
+    "validate": stage_validate,
+    "build": stage_build,
+    "compile": stage_compile,
+}
+
+
+def run_pipeline(ch, start, end, stage=None, resume=False):
+    """Run the full pipeline or a specific stage, with state tracking."""
+    state = PipelineState(ch)
+
     print(f"{'='*60}")
     print(f"PIPELINE: Глава {ch} (стр. {start}-{end})")
     print(f"{'='*60}")
@@ -687,28 +713,51 @@ def run_pipeline(ch, start, end, stage=None):
 
     if stage:
         stages = [stage]
+    elif resume:
+        resume_from = state.get_resume_stage(STAGES)
+        if resume_from is None:
+            print("\n  Все этапы завершены.")
+            print(state.summary())
+            return
+        stages = STAGES[STAGES.index(resume_from):]
+        print(f"\n  Продолжение с этапа: {resume_from}")
     else:
         stages = STAGES
 
+    print(f"\n{state.summary()}\n")
+
     for s in stages:
-        if s == "extract":
-            stage_extract(ch, start, end)
-        elif s == "manifest":
-            stage_manifest(ch, start, end)
-        elif s == "figures":
-            stage_figures(ch, start, end)
-        elif s == "translate":
-            stage_translate(ch, start, end)
-        elif s == "agents":
-            stage_agents(ch, start, end)
-        elif s == "autofix":
-            stage_autofix(ch, start, end)
-        elif s == "validate":
-            stage_validate(ch, start, end)
-        elif s == "build":
-            stage_build(ch, start, end)
-        elif s == "compile":
-            stage_compile(ch, start, end)
+        missing_deps = state.check_dependencies(s)
+        if missing_deps and s != stage:
+            print(f"\n  Пропуск {s}: не завершены зависимости {missing_deps}")
+            continue
+
+        if not stage and state.is_done(s):
+            print(f"\n  [{s}] уже завершён, пропуск")
+            continue
+
+        func = STAGE_FUNCS.get(s)
+        if not func:
+            continue
+
+        state.mark_running(s)
+        try:
+            func(ch, start, end)
+            ok, err = validate_stage_output(s, ch, start, end)
+            if not ok:
+                state.mark_failed(s, err)
+                print(f"\n  Контракт нарушен для {s}: {err}")
+                print("  Используйте --resume для продолжения после исправления")
+                break
+            state.mark_done(s)
+        except Exception as e:
+            state.mark_failed(s, str(e))
+            print(f"\n  ОШИБКА на этапе {s}: {e}")
+            print("  Используйте --resume для продолжения после исправления")
+            break
+
+    print(f"\n{'='*60}")
+    print(state.summary())
 
 
 def main():
@@ -717,6 +766,9 @@ def main():
     parser.add_argument("--pages", "-p", help="Page range (e.g. 154-217)")
     parser.add_argument("--stage", "-s", choices=STAGES, help="Run specific stage")
     parser.add_argument("--list", "-l", action="store_true", help="List chapters")
+    parser.add_argument("--resume", "-r", action="store_true", help="Resume from last failed/incomplete stage")
+    parser.add_argument("--status", action="store_true", help="Show pipeline state for chapter")
+    parser.add_argument("--reset-stage", help="Reset a stage to re-run it")
     args = parser.parse_args()
 
     if args.list:
@@ -724,6 +776,17 @@ def main():
         print("-" * 60)
         for ch, (start, end, title) in sorted(CHAPTERS.items()):
             print(f"{ch:>3}  {start:>4}-{end:<4}  {end-start+1:>5}  {title}")
+        return
+
+    if args.status and args.chapter:
+        st = PipelineState(args.chapter)
+        print(st.summary())
+        return
+
+    if args.reset_stage and args.chapter:
+        st = PipelineState(args.chapter)
+        st.reset_stage(args.reset_stage)
+        print(f"Этап {args.reset_stage} сброшен для главы {args.chapter}")
         return
 
     if args.chapter is None and args.pages is None:
@@ -742,7 +805,7 @@ def main():
         print("Use --list to see available chapters")
         sys.exit(1)
 
-    run_pipeline(ch, start, end, args.stage)
+    run_pipeline(ch, start, end, args.stage, args.resume)
 
 
 if __name__ == "__main__":
