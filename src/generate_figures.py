@@ -7,7 +7,7 @@ For each page that contains a figure:
 2. Identifies what type of figure it is
 3. Generates TikZ code to recreate it
 
-This script produces figure .tex files that can be \input{} in the main document.
+This script produces figure .tex files that can be \\input{} in the main document.
 Designed to be run with Claude Code agents for image analysis.
 
 Usage:

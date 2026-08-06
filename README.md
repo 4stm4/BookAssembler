@@ -6,8 +6,9 @@
 ## Быстрый старт
 
 ```bash
-# Зависимости
-pip install pymupdf opencv-python-headless numpy pyyaml
+# Python >= 3.13 обязателен (зависимость pyjobkit)
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[api,dev]"
 
 # Скопировать конфиг
 cp .env.example .env
@@ -23,6 +24,12 @@ python3 src/pipeline.py --chapter 5 --resume
 
 # Проверить статус
 python3 src/pipeline.py --chapter 5 --status
+
+# pyjobkit — очередь задач
+python3 src/pipeline.py --chapter 5 --enqueue        # поставить в очередь
+python3 src/pipeline.py --work-once                   # выполнить и выйти
+python3 src/pipeline.py --work                        # worker (long-running)
+python3 src/pipeline.py --chapter 5 --jobs-status     # статус задач
 ```
 
 ## Архитектура
@@ -159,12 +166,35 @@ COMPILE_DIR=~/path/to/latex
 
 SSH-режим блокируется в CI/CD-окружении. Перед подключением проверяется доступность хоста и наличие SSH-ключей.
 
+## pyjobkit — очередь задач
+
+Тяжёлые стадии (translate, figures, build, compile) можно выполнять через очередь `pyjobkit` с SQLite-бэкендом:
+
+```bash
+# Поставить задачи для главы 5 в очередь
+python3 src/pipeline.py --chapter 5 --enqueue
+
+# Выполнить все задачи в очереди и завершиться
+python3 src/pipeline.py --work-once
+
+# Или запустить worker для постоянной обработки
+python3 src/pipeline.py --work
+
+# Посмотреть статус задач
+python3 src/pipeline.py --chapter 5 --jobs-status
+```
+
+База задач: `cache/jobs/bookassembler.sqlite3` (переопределяется через `BOOKASSEMBLER_JOB_DSN`).
+
+Идемпотентность: повторный `--enqueue` для той же главы не дублирует задачи (ключи вида `ch5:translate:218-300`).
+
 ## Зависимости
 
-- Python 3.10+
+- Python >= 3.13
 - PyMuPDF (`pymupdf`)
 - OpenCV (`opencv-python-headless`)
 - NumPy (`numpy`)
 - PyYAML (`pyyaml`) — опционально, для `chapters.yaml`
+- pyjobkit[sqlite] (`pyjobkit`) — очередь задач с SQLite-бэкендом
 - Anthropic SDK (`anthropic`) — только для `TRANSLATE_MODE=api`
 - Docker — для локальной компиляции LaTeX

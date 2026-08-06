@@ -39,7 +39,7 @@ CONTRACTS = {
     },
     "compile": {
         "requires": ["build"],
-        "outputs": [],
+        "outputs": ["ch{ch}_compiled.pdf"],
     },
 }
 
