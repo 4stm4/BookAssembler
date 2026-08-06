@@ -13,10 +13,13 @@ the actual translation (Claude API, Claude Code agents, manual).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
 from dataclasses import dataclass, field
+
+log = logging.getLogger("bookassembler")
 
 
 # ---------------------------------------------------------------------------
@@ -152,16 +155,10 @@ class Glossary:
 
     def check_compliance(self, text: str) -> list[str]:
         """Check that critical terms are translated per glossary."""
+        from validate_chapter import CRITICAL_UNTRANSLATED
         issues = []
         text_no_code = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
-
-        critical = {
-            "EXAMPLE": (r'\bEXAMPLE\s+\d', "EXAMPLE → ПРИМЕР"),
-            "Solution": (r'\bSolution\b', "Solution → Решение"),
-            "Figure": (r'\bFigure\s+\d', "Figure → Рисунок"),
-            "Table": (r'\bTable\s+\d', "Table → Таблица"),
-        }
-        for _en, (pattern, msg) in critical.items():
+        for pattern, msg in CRITICAL_UNTRANSLATED:
             if re.search(pattern, text_no_code):
                 issues.append(msg)
         return issues
@@ -330,9 +327,16 @@ class APIBackend(TranslatorBackend):
         glossary = request.glossary
         max_retries = int(os.environ.get("TRANSLATE_MAX_RETRIES", "3"))
 
+        min_interval = float(os.environ.get("TRANSLATE_MIN_INTERVAL", "1.0"))
+        last_call = 0.0
+
         for page in request.pages:
             prompt = self._build_prompt(page, request)
             translated_text = ""
+
+            elapsed = time.time() - last_call
+            if elapsed < min_interval:
+                time.sleep(min_interval - elapsed)
 
             for attempt in range(max_retries):
                 try:
@@ -342,11 +346,12 @@ class APIBackend(TranslatorBackend):
                         messages=[{"role": "user", "content": prompt}],
                     )
                     translated_text = message.content[0].text
+                    last_call = time.time()
                     break
                 except Exception as e:
                     wait = 2 ** attempt
-                    print(f"  Стр.{page.page_number}: ошибка API ({e}), "
-                          f"повтор через {wait}с ({attempt+1}/{max_retries})")
+                    log.warning("Стр.%s: ошибка API (%s), повтор через %sс (%s/%s)",
+                                page.page_number, e, wait, attempt + 1, max_retries)
                     if attempt < max_retries - 1:
                         time.sleep(wait)
                     else:

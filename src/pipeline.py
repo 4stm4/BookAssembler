@@ -41,6 +41,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -110,7 +111,8 @@ STAGES = ["extract", "manifest", "figures", "translate", "autofix", "validate", 
 
 def run_cmd(cmd, check=True, capture=False):
     log.debug("$ %s", cmd)
-    r = subprocess.run(cmd, shell=True, capture_output=capture, text=True)
+    args = shlex.split(cmd) if isinstance(cmd, str) else cmd
+    r = subprocess.run(args, capture_output=capture, text=True)
     if check and r.returncode != 0:
         if capture:
             log.warning("STDERR: %s", r.stderr[:500])
@@ -407,6 +409,15 @@ def _load_translations(ch, start, end, translations_dir="claude_translations"):
     return filtered, orig_filtered
 
 
+def _has_code_indicators(text):
+    """Check if text likely contains unwrapped code (DEBUG prompts or multiple ASM-like lines)."""
+    debug_starts = ['C:\\DOS>DEBUG', 'C>DEBUG', 'C:\\>DEBUG']
+    if any(d in text for d in debug_starts):
+        return True
+    asm_pattern = re.compile(r'^(MOV|ADD|SUB|PUSH|POP|XCHG|LEA|CMP|AND|OR|XOR|NOT|NEG|SHL|SHR|MUL|DIV|INC|DEC|CALL|RET|INT|JMP)\s+\S', re.MULTILINE)
+    return len(asm_pattern.findall(text)) >= 2
+
+
 def stage_autofix(ch, start, end):
     """Auto-fix common translation issues. Writes only a diff layer."""
     log.info("AUTOFIX — автоматическое исправление")
@@ -426,9 +437,9 @@ def stage_autofix(ch, start, end):
 
         fixed_text = text
 
-        if '```' not in fixed_text:
+        if '```' not in fixed_text and _has_code_indicators(fixed_text):
             fixed_text = wrap_naked_debug(fixed_text)
-        if '```' not in fixed_text:
+        if '```' not in fixed_text and _has_code_indicators(fixed_text):
             fixed_text = wrap_naked_asm(fixed_text)
         fixed_text = remove_duplicate_tables(fixed_text, ch)
         fixed_text = fix_subscripts(fixed_text)
@@ -464,6 +475,7 @@ def merge_debug_sessions(text):
     in_code = False
     in_debug = False
     debug_lines = []
+    code_lines = []
 
     for line in lines:
         stripped = line.strip()
@@ -489,14 +501,10 @@ def merge_debug_sessions(text):
             continue
 
         if in_code:
-            if not hasattr(merge_debug_sessions, '_cl'):
-                merge_debug_sessions._cl = []
-            code_lines = getattr(merge_debug_sessions, '_cl', [])
             if any(d in line for d in debug_indicators):
                 in_debug = True
                 debug_lines = []
             code_lines.append(line)
-            merge_debug_sessions._cl = code_lines
             continue
 
         if in_debug and not in_code:

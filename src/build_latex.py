@@ -9,6 +9,8 @@ import json
 import os
 import re
 
+MAX_LIST_ITEM_NUMBER = 99
+
 
 def md_to_latex(text, chapter_num):
     """Convert markdown-formatted translation to LaTeX."""
@@ -17,6 +19,9 @@ def md_to_latex(text, chapter_num):
     in_code = False
     in_list = False
     in_example = False
+    in_table = False
+    table_rows = []
+    table_ncols = 0
     code_lines = []
     code_lang = ""
 
@@ -134,7 +139,7 @@ def md_to_latex(text, chapter_num):
 
         # Numbered list
         m = re.match(r"^(\d+)\.\s+(.+)$", stripped)
-        if m and int(m.group(1)) < 100:
+        if m and int(m.group(1)) <= MAX_LIST_ITEM_NUMBER:
             if not in_list:
                 result.append("\\begin{enumerate}")
                 in_list = "enumerate"
@@ -159,38 +164,31 @@ def md_to_latex(text, chapter_num):
 
         # Markdown table row
         if stripped.startswith("|") and stripped.endswith("|"):
-            if not hasattr(md_to_latex, '_in_table'):
-                md_to_latex._in_table = False
-                md_to_latex._table_rows = []
-                md_to_latex._table_ncols = 0
             if stripped.replace("|", "").replace("-", "").replace(" ", "").replace(":", "") == "":
                 continue  # separator row
             cells = [c.strip().replace("<br>", " ").replace("<BR>", " ") for c in stripped.split("|")[1:-1]]
-            if not md_to_latex._in_table:
-                md_to_latex._table_ncols = len(cells)
-                md_to_latex._table_rows = [cells]
-                md_to_latex._in_table = True
+            if not in_table:
+                table_ncols = len(cells)
+                table_rows = [cells]
+                in_table = True
             else:
-                # Pad/trim to match header column count
-                while len(cells) < md_to_latex._table_ncols:
+                while len(cells) < table_ncols:
                     cells.append("")
-                cells = cells[:md_to_latex._table_ncols]
-                md_to_latex._table_rows.append(cells)
+                cells = cells[:table_ncols]
+                table_rows.append(cells)
             continue
-        elif hasattr(md_to_latex, '_in_table') and md_to_latex._in_table:
-            # Flush table
-            flush_table(result, md_to_latex._table_rows, md_to_latex._table_ncols)
-            md_to_latex._in_table = False
-            md_to_latex._table_rows = []
+        elif in_table:
+            flush_table(result, table_rows, table_ncols)
+            in_table = False
+            table_rows = []
 
         # Regular paragraph
         converted = convert_inline(stripped)
         result.append(converted)
 
     # Close any open environments
-    if hasattr(md_to_latex, '_in_table') and md_to_latex._in_table:
-        flush_table(result, md_to_latex._table_rows, md_to_latex._table_ncols)
-        md_to_latex._in_table = False
+    if in_table:
+        flush_table(result, table_rows, table_ncols)
     if in_list:
         close_list_if_needed(result, in_list)
     if in_example:

@@ -19,6 +19,14 @@ SEVERITY_ERROR = "error"
 SEVERITY_WARNING = "warning"
 
 
+CRITICAL_UNTRANSLATED = [
+    (r'\bEXAMPLE\s+\d', "EXAMPLE → ПРИМЕР"),
+    (r'\bSolution\b', "Solution → Решение"),
+    (r'\bFigure\s+\d', "Figure → Рисунок"),
+    (r'\bTable\s+\d', "Table → Таблица"),
+]
+
+
 def _issue(page, msg, severity=SEVERITY_ERROR):
     return {"page": page, "message": msg, "severity": severity}
 
@@ -37,10 +45,8 @@ def load_translations(chapter_prefix, translations_dir="claude_translations"):
 def check_untranslated(page, text):
     issues = []
     patterns = [
-        (r'\bEXAMPLE\s+\d', "EXAMPLE not translated", SEVERITY_ERROR),
-        (r'\bSolution\b', "Solution not translated", SEVERITY_ERROR),
-        (r'\bFigure\s+\d', "Figure not translated", SEVERITY_ERROR),
-        (r'\bTable\s+\d', "Table not translated", SEVERITY_ERROR),
+        (pat, msg, SEVERITY_ERROR) for pat, msg in CRITICAL_UNTRANSLATED
+    ] + [
         (r'\bSection\s+\d', "Section not translated", SEVERITY_WARNING),
         (r'\bChapter\s+\d', "Chapter not translated", SEVERITY_WARNING),
         (r'\bNote that\b', "Note that not translated", SEVERITY_WARNING),
