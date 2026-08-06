@@ -35,6 +35,7 @@ import subprocess
 import sys
 
 from state import PipelineState, validate_stage_output
+from translator import TranslatorClient, TranslationRequest, Glossary
 
 try:
     import fitz
@@ -191,7 +192,7 @@ def stage_figures(ch, start, end):
 
 
 def stage_translate(ch, start, end):
-    """Generate translation prompts or run translation."""
+    """Translate pages via TranslatorClient."""
     print("\n[4] TRANSLATE — перевод")
     translations_dir = "claude_translations"
     os.makedirs(translations_dir, exist_ok=True)
@@ -207,80 +208,45 @@ def stage_translate(ch, start, end):
     missing = sorted(all_pages - translated)
 
     if not missing:
-        print(f"  ✅ Все {len(all_pages)} страниц переведены")
+        print(f"  Все {len(all_pages)} страниц переведены")
         return
 
     print(f"  Переведено: {len(translated)}/{len(all_pages)}")
     print(f"  Осталось: {len(missing)} страниц")
 
-    glossary = load_glossary_text()
+    source_json = f"cache/text/pages_{start}_{end}.json"
     manifest_file = f"ch{ch}_manifest.json"
-    manifest_context = ""
+    manifest = None
     if os.path.exists(manifest_file):
         with open(manifest_file) as f:
             manifest = json.load(f)
-        manifest_context = format_manifest_for_prompt(manifest, missing)
 
-    batch_size = 16
-    tasks = []
-    for i in range(0, len(missing), batch_size):
-        batch = missing[i:i + batch_size]
-        tasks.append({
-            "type": "translate",
-            "pages": batch,
-            "input": f"cache/text/pages_{start}_{end}.json",
-            "output": f"{translations_dir}/ch{ch}_{batch[0]}_{batch[-1]}.json",
-            "glossary": glossary,
-            "manifest_context": manifest_context,
-        })
+    glossary = Glossary.load()
 
-    tasks_file = f"ch{ch}_tasks.json"
-    existing_tasks = []
-    if os.path.exists(tasks_file):
-        with open(tasks_file) as f:
-            existing_tasks = [t for t in json.load(f) if t["type"] != "translate"]
-    with open(tasks_file, "w") as f:
-        json.dump(existing_tasks + tasks, f, ensure_ascii=False, indent=2)
-    print(f"  Записано {len(tasks)} задач для перевода → {tasks_file}")
+    mode = os.environ.get("TRANSLATE_MODE", "agent")
+    client = TranslatorClient.create(mode)
 
+    request = TranslationRequest.from_extracted_json(
+        source_json, ch,
+        page_range=(start, end),
+        glossary=glossary,
+        manifest=manifest,
+    )
+    request.pages = [p for p in request.pages if p.page_number in missing]
 
-def load_glossary_text():
-    """Load glossary as text for agent prompts."""
-    if not os.path.exists("glossary.json"):
-        return ""
-    with open("glossary.json") as f:
-        g = json.load(f)
-    lines = ["СЛОВАРЬ ТЕРМИНОВ (обязательно использовать):"]
-    for en, info in g.get("terms", {}).items():
-        if isinstance(info, dict):
-            lines.append(f"  {en} → {info['ru']} ({info.get('context', '')})")
-    lines.append("\nНЕ ПЕРЕВОДИТЬ (оставить как есть):")
-    keep = g.get("keep_as_is", {})
-    for cat, vals in keep.items():
-        if isinstance(vals, list):
-            lines.append(f"  {cat}: {', '.join(vals[:20])}")
-    lines.append("\nПРАВИЛА ФОРМАТИРОВАНИЯ:")
-    for rule, desc in g.get("formatting_rules", {}).items():
-        lines.append(f"  {rule}: {desc}")
-    return "\n".join(lines)
+    result = client.translate(request)
 
+    if result.pages:
+        output = f"{translations_dir}/ch{ch}_{missing[0]}_{missing[-1]}.json"
+        result.save(output)
+        print(f"  Переведено {result.valid_count}/{len(result.pages)} страниц → {output}")
+        if result.failed_pages:
+            print(f"  Проблемы с {len(result.failed_pages)} страницами:")
+            for p in result.failed_pages[:5]:
+                print(f"    Стр.{p.page_number}: {'; '.join(p.issues)}")
+    else:
+        print(f"  Задачи для агентов записаны в ch{ch}_tasks.json")
 
-def format_manifest_for_prompt(manifest, pages):
-    """Format manifest info relevant to pages being translated."""
-    lines = []
-    page_set = set(str(p) for p in pages)
-
-    order = manifest.get("element_order", {})
-    for p in sorted(pages):
-        sp = str(p)
-        if sp in order:
-            elems = order[sp]
-            desc = ", ".join(f"{e['type']}:{e['id']}" for e in elems)
-            lines.append(f"  Стр.{p}: {desc}")
-
-    if lines:
-        return "Порядок элементов на страницах:\n" + "\n".join(lines)
-    return ""
 
 
 def stage_agents(ch, start, end):
@@ -659,11 +625,40 @@ def _compile_docker(ch):
                 print(f"    {e}")
 
 
+def _validate_ssh_config():
+    """Validate SSH settings before use. Returns error message or None."""
+    if not COMPILE_HOST or not COMPILE_DIR:
+        return "Установите COMPILE_HOST и COMPILE_DIR в .env"
+
+    if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+        return ("SSH-компиляция отключена в CI/CD. "
+                "Используйте COMPILE_MODE=docker или настройте "
+                "GitHub Actions с Docker-контейнером")
+
+    if "@" not in COMPILE_HOST:
+        return f"COMPILE_HOST должен быть в формате user@host, получено: {COMPILE_HOST}"
+
+    host = COMPILE_HOST.split("@", 1)[1]
+    r = subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+         COMPILE_HOST, "echo ok"],
+        capture_output=True, text=True
+    )
+    if r.returncode != 0:
+        return (f"Не удалось подключиться к {host}. "
+                f"Проверьте SSH-ключи (ssh-copy-id {COMPILE_HOST}) "
+                f"и доступность хоста")
+
+    return None
+
+
 def _compile_ssh(ch):
     """Compile LaTeX on a remote host via SSH."""
     print("\n[8] COMPILE — компиляция XeLaTeX (SSH)")
-    if not COMPILE_HOST or not COMPILE_DIR:
-        print("  Ошибка: установите COMPILE_HOST и COMPILE_DIR в .env")
+
+    err = _validate_ssh_config()
+    if err:
+        print(f"  Ошибка: {err}")
         return
 
     print("  Синхронизация файлов...")
