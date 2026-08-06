@@ -54,8 +54,9 @@ CHAPTERS = {
     14: (837, 918, "Advanced Processors"),
 }
 
-COMPILE_HOST = "alex@192.168.88.71"
-COMPILE_DIR = "~/micro8086_translate/latex_output"
+COMPILE_HOST = os.environ.get("COMPILE_HOST", "")
+COMPILE_DIR = os.environ.get("COMPILE_DIR", "")
+COMPILE_MODE = os.environ.get("COMPILE_MODE", "docker")
 
 STAGES = ["extract", "manifest", "figures", "translate", "agents", "autofix", "validate", "build", "compile"]
 
@@ -610,8 +611,49 @@ def stage_build(ch, start, end):
 
 
 def stage_compile(ch, start, end):
-    """Compile LaTeX on RPi5."""
-    print("\n[8] COMPILE — компиляция XeLaTeX на RPi5")
+    """Compile LaTeX via Docker (default) or remote SSH."""
+    if COMPILE_MODE == "ssh":
+        _compile_ssh(ch)
+    else:
+        _compile_docker(ch)
+
+
+def _compile_docker(ch):
+    """Compile LaTeX locally using Docker."""
+    print("\n[8] COMPILE — компиляция XeLaTeX (Docker)")
+    latex_dir = os.path.abspath("latex_output")
+    figures_dir = os.path.abspath("figures")
+
+    docker_cmd = (
+        f"docker run --rm "
+        f"-v {latex_dir}:/work "
+        f"-v {figures_dir}:/work/figures "
+        f"-w /work "
+        f"bookassembler-xelatex "
+        f"xelatex -interaction=nonstopmode book.tex"
+    )
+    r = run(docker_cmd, capture=True, check=False)
+
+    pdf_src = os.path.join(latex_dir, "book.pdf")
+    pdf_name = f"ch{ch}_compiled.pdf"
+    if r and r.returncode == 0 and os.path.exists(pdf_src):
+        import shutil
+        shutil.copy2(pdf_src, pdf_name)
+        print(f"  Скомпилировано → {pdf_name}")
+    else:
+        print("  Ошибка компиляции")
+        if r and r.stdout:
+            errors = [l for l in r.stdout.split('\n') if l.startswith('!')]
+            for e in errors[:5]:
+                print(f"    {e}")
+
+
+def _compile_ssh(ch):
+    """Compile LaTeX on a remote host via SSH."""
+    print("\n[8] COMPILE — компиляция XeLaTeX (SSH)")
+    if not COMPILE_HOST or not COMPILE_DIR:
+        print("  Ошибка: установите COMPILE_HOST и COMPILE_DIR в .env")
+        return
 
     print("  Синхронизация файлов...")
     run(f"rsync -az --delete latex_output/ {COMPILE_HOST}:{COMPILE_DIR}/")
@@ -624,9 +666,9 @@ def stage_compile(ch, start, end):
     if r and r.returncode == 0:
         pdf_name = f"ch{ch}_compiled.pdf"
         run(f"scp {COMPILE_HOST}:{COMPILE_DIR}/book.pdf {pdf_name}")
-        print(f"  ✅ Скомпилировано → {pdf_name}")
+        print(f"  Скомпилировано → {pdf_name}")
     else:
-        print("  ❌ Ошибка компиляции")
+        print("  Ошибка компиляции")
         if r and r.stdout:
             errors = [l for l in r.stdout.split('\n') if l.startswith('!')]
             for e in errors[:5]:

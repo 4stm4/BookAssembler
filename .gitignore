@@ -1,0 +1,21 @@
+# Секреты
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Данные — PDF-книги, извлечённый текст, изображения, переводы, LaTeX-выход
+*.pdf
+data/
+cache/
+claude_translations/
+latex_output/
+figures/
+ch*_manifest.json
+ch*_tasks.json
+ch*_figures/
+ch*_compiled.pdf
