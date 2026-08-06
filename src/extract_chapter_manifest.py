@@ -29,6 +29,7 @@ except ImportError:
 def extract_manifest(pdf_path, start, end, chapter_num):
     doc = fitz.open(pdf_path)
     manifest = {
+        "manifest_version": 1,
         "chapter": chapter_num,
         "pages": {"start": start, "end": end, "count": end - start + 1},
         "sections": [],

@@ -36,7 +36,9 @@ Usage:
 
 import argparse
 import asyncio
+import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -51,6 +53,8 @@ try:
 except ImportError:
     print("ERROR: pip install pymupdf")
     sys.exit(1)
+
+log = logging.getLogger("bookassembler")
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SRC_DIR)
@@ -105,11 +109,11 @@ STAGES = ["extract", "manifest", "figures", "translate", "autofix", "validate", 
 
 
 def run_cmd(cmd, check=True, capture=False):
-    print(f"  $ {cmd}")
+    log.debug("$ %s", cmd)
     r = subprocess.run(cmd, shell=True, capture_output=capture, text=True)
     if check and r.returncode != 0:
         if capture:
-            print(f"  STDERR: {r.stderr[:500]}")
+            log.warning("STDERR: %s", r.stderr[:500])
         return None
     return r
 
@@ -118,13 +122,31 @@ def run_cmd(cmd, check=True, capture=False):
 # Stages
 # ---------------------------------------------------------------------------
 
+def _pdf_hash(path, chunk_size=65536):
+    """Fast hash of PDF file for cache invalidation."""
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
+            h.update(chunk)
+    return h.hexdigest()[:16]
+
+
 def stage_extract(ch, start, end):
-    """Extract text from PDF pages."""
-    print("\n[1] EXTRACT — извлечение текста из PDF")
+    """Extract text from PDF pages, with cache invalidation on PDF change."""
+    log.info("EXTRACT — извлечение текста из PDF")
     cache_file = f"cache/text/pages_{start}_{end}.json"
+    hash_file = f"cache/text/pages_{start}_{end}.pdfhash"
+
     if os.path.exists(cache_file):
-        print(f"  [cached] {cache_file}")
-        return cache_file
+        current_hash = _pdf_hash(PDF_FILE) if os.path.exists(PDF_FILE) else ""
+        cached_hash = ""
+        if os.path.exists(hash_file):
+            cached_hash = open(hash_file).read().strip()
+        if current_hash == cached_hash:
+            log.info("cached: %s", cache_file)
+            return cache_file
+        else:
+            log.warning("PDF изменился, перечитываю (old=%s new=%s)", cached_hash[:8], current_hash[:8])
 
     os.makedirs("cache/text", exist_ok=True)
     doc = fitz.open(PDF_FILE)
@@ -137,13 +159,18 @@ def stage_extract(ch, start, end):
 
     with open(cache_file, "w", encoding="utf-8") as f:
         json.dump(texts, f, ensure_ascii=False, indent=2)
-    print(f"  Извлечено {len(texts)} страниц -> {cache_file}")
+
+    if os.path.exists(PDF_FILE):
+        with open(hash_file, "w") as f:
+            f.write(_pdf_hash(PDF_FILE))
+
+    log.info("Извлечено %d страниц -> %s", len(texts), cache_file)
     return cache_file
 
 
 def stage_manifest(ch, start, end):
     """Build chapter manifest — ground truth for validation."""
-    print("\n[2] MANIFEST — инвентаризация элементов главы")
+    log.info("MANIFEST — инвентаризация элементов главы")
     manifest_file = f"ch{ch}_manifest.json"
     run_cmd(f"python3 src/extract_chapter_manifest.py -i {PDF_FILE} -c {ch} -s {start} -e {end} -j {manifest_file}")
     return manifest_file
@@ -151,7 +178,7 @@ def stage_manifest(ch, start, end):
 
 def stage_figures(ch, start, end):
     """Render figure pages and generate TikZ prompts."""
-    print("\n[3] FIGURES — рендер страниц с фигурами + промпты для TikZ")
+    log.info("FIGURES — рендер страниц с фигурами + промпты для TikZ")
     manifest_file = f"ch{ch}_manifest.json"
     if not os.path.exists(manifest_file):
         stage_manifest(ch, start, end)
@@ -166,10 +193,10 @@ def stage_figures(ch, start, end):
     missing = [fig for fig in need_tikz if fig not in have_tikz]
 
     if not missing:
-        print(f"  Все {len(need_tikz)} TikZ-фигур готовы")
+        log.info("Все %d TikZ-фигур готовы", len(need_tikz))
         return
 
-    print(f"  Нужно нарисовать: {len(missing)} фигур")
+    log.info("Нужно нарисовать: %d фигур", len(missing))
 
     images_dir = f"ch{ch}_figures"
     os.makedirs(images_dir, exist_ok=True)
@@ -184,7 +211,7 @@ def stage_figures(ch, start, end):
             pix.save(os.path.join(images_dir, f"page_{pg}.png"))
             rendered.add(pg)
     doc.close()
-    print(f"  Отрендерено {len(rendered)} страниц")
+    log.info("Отрендерено %d страниц", len(rendered))
 
     sys.path.insert(0, SRC_DIR)
     from diagram_extract import analyze_figure
@@ -205,7 +232,7 @@ def stage_figures(ch, start, end):
             with open(cache_path, "w", encoding="utf-8") as f:
                 json.dump(result, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"  Ошибка анализа Figure {fig['number']}: {e}")
+            log.error("Ошибка анализа Figure %s: %s", fig['number'], e)
 
     tasks = []
     for fig in missing:
@@ -233,7 +260,7 @@ def stage_figures(ch, start, end):
             existing_tasks = [t for t in json.load(f) if t["type"] != "figure"]
     with open(tasks_file, "w") as f:
         json.dump(existing_tasks + tasks, f, ensure_ascii=False, indent=2)
-    print(f"  Записано {len(tasks)} задач для фигур -> {tasks_file}")
+    log.info("Записано %d задач для фигур -> %s", len(tasks), tasks_file)
 
 
 def _count_translated_pages(ch, start, end):
@@ -255,7 +282,7 @@ def stage_translate(ch, start, end):
     In agent mode, marks the stage as 'pending' (not done) since
     translations are produced externally by agents.
     """
-    print("\n[4] TRANSLATE — перевод")
+    log.info("TRANSLATE — перевод")
     translations_dir = "claude_translations"
     os.makedirs(translations_dir, exist_ok=True)
 
@@ -270,11 +297,11 @@ def stage_translate(ch, start, end):
     missing = sorted(all_pages - translated)
 
     if not missing:
-        print(f"  Все {len(all_pages)} страниц переведены")
+        log.info("Все %d страниц переведены", len(all_pages))
         return
 
-    print(f"  Переведено: {len(translated)}/{len(all_pages)}")
-    print(f"  Осталось: {len(missing)} страниц")
+    log.info("Переведено: %d/%d", len(translated), len(all_pages))
+    log.info("Осталось: %d страниц", len(missing))
 
     source_json = f"cache/text/pages_{start}_{end}.json"
     manifest_file = f"ch{ch}_manifest.json"
@@ -301,14 +328,13 @@ def stage_translate(ch, start, end):
     if result.pages:
         output = f"{translations_dir}/ch{ch}_{missing[0]}_{missing[-1]}.json"
         result.save(output)
-        print(f"  Переведено {result.valid_count}/{len(result.pages)} страниц -> {output}")
+        log.info("Переведено %d/%d страниц -> %s", result.valid_count, len(result.pages), output)
         if result.failed_pages:
-            print(f"  Проблемы с {len(result.failed_pages)} страницами:")
+            log.warning("Проблемы с %d страницами:", len(result.failed_pages))
             for p in result.failed_pages[:5]:
-                print(f"    Стр.{p.page_number}: {'; '.join(p.issues)}")
+                log.warning("  Стр.%d: %s", p.page_number, '; '.join(p.issues))
     else:
-        # Agent mode: tasks written but no actual translations yet
-        print(f"  Задачи для агентов записаны в ch{ch}_tasks.json")
+        log.info("Задачи для агентов записаны в ch%d_tasks.json", ch)
         if mode == "agent":
             raise _AgentModePending(
                 f"Переводы не готовы: создано задач, но фактических переводов нет. "
@@ -322,38 +348,35 @@ class _AgentModePending(RuntimeError):
 
 def stage_agents(ch, start, end):
     """Print agent tasks for Claude Code to execute."""
-    print("\n[5] AGENTS — задачи для Claude Code агентов")
+    log.info("AGENTS — задачи для Claude Code агентов")
     tasks_file = f"ch{ch}_tasks.json"
     if not os.path.exists(tasks_file):
-        print("  Нет задач — всё готово")
+        log.info("Нет задач — всё готово")
         return
 
     with open(tasks_file) as f:
         tasks = json.load(f)
 
     if not tasks:
-        print("  Нет задач — всё готово")
+        log.info("Нет задач — всё готово")
         return
 
     translate_tasks = [t for t in tasks if t["type"] == "translate"]
     figure_tasks = [t for t in tasks if t["type"] == "figure"]
 
-    print(f"  Перевод: {len(translate_tasks)} батчей")
-    print(f"  Фигуры: {len(figure_tasks)} TikZ")
+    log.info("Перевод: %d батчей, Фигуры: %d TikZ", len(translate_tasks), len(figure_tasks))
 
     for i, t in enumerate(translate_tasks):
         pages = t.get("pages", [])
         if pages:
-            print(f"\n  [translate-{i+1}] Страницы {pages[0]}-{pages[-1]} ({len(pages)} стр.)")
+            log.info("[translate-%d] Страницы %d-%d (%d стр.)", i+1, pages[0], pages[-1], len(pages))
         else:
-            print(f"\n  [translate-{i+1}] Глава {t.get('chapter', '?')}")
+            log.info("[translate-%d] Глава %s", i+1, t.get('chapter', '?'))
 
     for i, t in enumerate(figure_tasks):
-        print(f"\n  [figure-{i+1}] Figure {t['figure']} (стр. {t['page']}, {t['fig_type']})")
-        print(f"    Изображение: {t.get('image', 'N/A')}")
-        print(f"    Выход: {t.get('output', 'N/A')}")
+        log.info("[figure-%d] Figure %s (стр. %d, %s)", i+1, t['figure'], t['page'], t['fig_type'])
 
-    print(f"\n  Файл задач: {tasks_file}")
+    log.info("Файл задач: %s", tasks_file)
 
 
 def _load_translations(ch, start, end, translations_dir="claude_translations"):
@@ -386,13 +409,13 @@ def _load_translations(ch, start, end, translations_dir="claude_translations"):
 
 def stage_autofix(ch, start, end):
     """Auto-fix common translation issues. Writes only a diff layer."""
-    print("\n[5] AUTOFIX — автоматическое исправление")
+    log.info("AUTOFIX — автоматическое исправление")
     translations_dir = "claude_translations"
 
     merged, originals = _load_translations(ch, start, end, translations_dir)
 
     if not originals:
-        print("  Нет переводов для исправления")
+        log.info("Нет переводов для исправления")
         return
 
     fixes = {}
@@ -422,9 +445,9 @@ def stage_autofix(ch, start, end):
         existing_fixes.update(fixes)
         with open(fix_file, "w", encoding="utf-8") as f:
             json.dump(existing_fixes, f, ensure_ascii=False, indent=2)
-        print(f"  Исправлено {len(fixes)} страниц -> {fix_file}")
+        log.info("Исправлено %d страниц -> %s", len(fixes), fix_file)
     else:
-        print("  Нечего исправлять")
+        log.info("Нечего исправлять")
 
 
 def merge_debug_sessions(text):
@@ -657,7 +680,7 @@ def fix_subscripts(text):
 
 def stage_validate(ch, start, end):
     """Validate translation quality. Raises on errors to block build."""
-    print("\n[6] VALIDATE — проверка качества перевода")
+    log.info("VALIDATE — проверка качества перевода")
 
     # Check that translations actually exist
     translated_count = _count_translated_pages(ch, start, end)
@@ -670,7 +693,7 @@ def stage_validate(ch, start, end):
 
     missing_count = total_pages - translated_count
     if missing_count > 0:
-        print(f"  ВНИМАНИЕ: отсутствуют переводы для {missing_count}/{total_pages} страниц")
+        log.warning("Отсутствуют переводы для %d/%d страниц", missing_count, total_pages)
 
     manifest_file = f"ch{ch}_manifest.json"
     manifest_arg = f"-m {manifest_file}" if os.path.exists(manifest_file) else ""
@@ -693,7 +716,7 @@ def stage_validate(ch, start, end):
 
 def stage_build(ch, start, end):
     """Build LaTeX from translations."""
-    print("\n[7] BUILD — сборка LaTeX")
+    log.info("BUILD — сборка LaTeX")
     run_cmd(f"python3 src/build_latex.py -c {ch} -s {start} -e {end}")
 
     book_tex = "latex_output/book.tex"
@@ -705,7 +728,7 @@ def stage_build(ch, start, end):
             content = content.replace("\\end{document}", f"{ch_input}\n\n\\end{{document}}")
             with open(book_tex, "w", encoding="utf-8") as f:
                 f.write(content)
-            print(f"  Добавлено {ch_input} в book.tex")
+            log.info("Добавлено %s в book.tex", ch_input)
 
 
 def stage_compile(ch, start, end):
@@ -718,7 +741,7 @@ def stage_compile(ch, start, end):
 
 def _compile_docker(ch):
     """Compile LaTeX locally using Docker."""
-    print("\n[8] COMPILE — компиляция XeLaTeX (Docker)")
+    log.info("COMPILE — компиляция XeLaTeX (Docker)")
     latex_dir = os.path.abspath("latex_output")
     figures_dir = os.path.abspath("figures")
 
@@ -736,7 +759,7 @@ def _compile_docker(ch):
     pdf_name = f"ch{ch}_compiled.pdf"
     if r and r.returncode == 0 and os.path.exists(pdf_src):
         shutil.copy2(pdf_src, pdf_name)
-        print(f"  Скомпилировано -> {pdf_name}")
+        log.info("Скомпилировано -> %s", pdf_name)
     else:
         errors_text = ""
         if r and r.stdout:
@@ -774,24 +797,24 @@ def _validate_ssh_config():
 
 def _compile_ssh(ch):
     """Compile LaTeX on a remote host via SSH."""
-    print("\n[8] COMPILE — компиляция XeLaTeX (SSH)")
+    log.info("COMPILE — компиляция XeLaTeX (SSH)")
 
     err = _validate_ssh_config()
     if err:
         raise RuntimeError(f"SSH compile: {err}")
 
-    print("  Синхронизация файлов...")
+    log.info("Синхронизация файлов...")
     run_cmd(f"rsync -az --delete latex_output/ {COMPILE_HOST}:{COMPILE_DIR}/")
     run_cmd(f"rsync -az figures/ {COMPILE_HOST}:{COMPILE_DIR}/figures/")
 
-    print("  Компиляция...")
+    log.info("Компиляция...")
     r = run_cmd(f"ssh {COMPILE_HOST} 'cd {COMPILE_DIR} && xelatex -interaction=nonstopmode book.tex'",
                 capture=True)
 
     if r and r.returncode == 0:
         pdf_name = f"ch{ch}_compiled.pdf"
         run_cmd(f"scp {COMPILE_HOST}:{COMPILE_DIR}/book.pdf {pdf_name}")
-        print(f"  Скомпилировано -> {pdf_name}")
+        log.info("Скомпилировано -> %s", pdf_name)
     else:
         errors_text = ""
         if r and r.stdout:
@@ -821,12 +844,12 @@ def run_pipeline(ch, start, end, stage=None, resume=False):
     """Run the full pipeline or a specific stage, with state tracking."""
     state = PipelineState(ch)
 
-    print(f"{'='*60}")
-    print(f"PIPELINE: Глава {ch} (стр. {start}-{end})")
-    print(f"{'='*60}")
+    log.info("=" * 60)
+    log.info("PIPELINE: Глава %d (стр. %d-%d)", ch, start, end)
+    log.info("=" * 60)
 
     if not os.path.exists(PDF_FILE):
-        print(f"ERROR: PDF не найден: {PDF_FILE}")
+        log.error("PDF не найден: %s", PDF_FILE)
         sys.exit(1)
 
     if stage:
@@ -834,25 +857,25 @@ def run_pipeline(ch, start, end, stage=None, resume=False):
     elif resume:
         resume_from = state.get_resume_stage(STAGES)
         if resume_from is None:
-            print("\n  Все этапы завершены.")
-            print(state.summary())
+            log.info("Все этапы завершены.")
+            log.info(state.summary())
             return
         stages = STAGES[STAGES.index(resume_from):]
-        print(f"\n  Продолжение с этапа: {resume_from}")
+        log.info("Продолжение с этапа: %s", resume_from)
     else:
         stages = STAGES
 
-    print(f"\n{state.summary()}\n")
+    log.info("\n%s", state.summary())
 
     exit_code = 0
     for s in stages:
         missing_deps = state.check_dependencies(s)
         if missing_deps and s != stage:
-            print(f"\n  Пропуск {s}: не завершены зависимости {missing_deps}")
+            log.info("Пропуск %s: не завершены зависимости %s", s, missing_deps)
             continue
 
         if not stage and state.is_done(s):
-            print(f"\n  [{s}] уже завершён, пропуск")
+            log.debug("[%s] уже завершён, пропуск", s)
             continue
 
         func = STAGE_FUNCS.get(s)
@@ -865,25 +888,25 @@ def run_pipeline(ch, start, end, stage=None, resume=False):
             ok, err = validate_stage_output(s, ch, start, end)
             if not ok:
                 state.mark_failed(s, err)
-                print(f"\n  Контракт нарушен для {s}: {err}")
-                print("  Используйте --resume для продолжения после исправления")
+                log.error("Контракт нарушен для %s: %s", s, err)
+                log.info("Используйте --resume для продолжения после исправления")
                 exit_code = 1
                 break
             state.mark_done(s)
         except _AgentModePending as e:
             state.mark_failed(s, str(e))
-            print(f"\n  ОЖИДАНИЕ: {e}")
+            log.warning("ОЖИДАНИЕ: %s", e)
             exit_code = 1
             break
         except Exception as e:
             state.mark_failed(s, str(e))
-            print(f"\n  ОШИБКА на этапе {s}: {e}")
-            print("  Используйте --resume для продолжения после исправления")
+            log.error("ОШИБКА на этапе %s: %s", s, e)
+            log.info("Используйте --resume для продолжения после исправления")
             exit_code = 1
             break
 
-    print(f"\n{'='*60}")
-    print(state.summary())
+    log.info("=" * 60)
+    log.info("\n%s", state.summary())
     return exit_code
 
 
@@ -907,9 +930,9 @@ def _enqueue_chapter(ch, start, end):
             ]:
                 job_id = await coro
                 if job_id is None:
-                    print(f"  {label}: уже в очереди (пропуск)")
+                    log.info("%s: уже в очереди (пропуск)", label)
                 else:
-                    print(f"  {label}: {job_id}")
+                    log.info("%s: %s", label, job_id)
 
     asyncio.run(_run())
 
@@ -926,15 +949,15 @@ def _show_jobs_status(ch=None):
 
     async def _run():
         status = await get_jobs_status(ch)
-        print(f"\nJobs total: {status['total']}")
+        log.info("Jobs total: %d", status['total'])
         for s, count in sorted(status['by_status'].items()):
-            print(f"  {s}: {count}")
+            log.info("  %s: %d", s, count)
         if status['jobs']:
-            print(f"\nПоследние задачи:")
+            log.info("Последние задачи:")
             for job in status['jobs'][-10:]:
                 key = job.get('idempotency_key', '')
                 st = job.get('status', '?')
-                print(f"  [{st}] {key} ({job.get('kind', '')})")
+                log.info("  [%s] %s (%s)", st, key, job.get('kind', ''))
 
     asyncio.run(_run())
 
@@ -1001,8 +1024,7 @@ def main():
         start, end = int(parts[0]), int(parts[1])
         ch = args.chapter or 0
     else:
-        print(f"ERROR: Unknown chapter {args.chapter}")
-        print("Use --list to see available chapters")
+        log.error("Unknown chapter %s. Use --list to see available chapters", args.chapter)
         return 1
 
     if args.enqueue:
@@ -1015,5 +1037,15 @@ def main():
     return exit_code
 
 
+def _setup_logging(verbose=False):
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+
 if __name__ == "__main__":
+    _setup_logging()
     sys.exit(main() or 0)

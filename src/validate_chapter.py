@@ -3,12 +3,24 @@
 Validate translated chapter quality.
 Checks: untranslated text, tables, examples, code blocks, symbols, formatting,
 numbered lists, duplicate tables, broken tables, problematic Unicode.
+
+Each check returns issues with a severity: "error" or "warning".
+Exit code is nonzero only when errors exist; warnings are informational.
 """
 
 import json
 import os
 import re
 import sys
+
+MANIFEST_VERSION = 1
+
+SEVERITY_ERROR = "error"
+SEVERITY_WARNING = "warning"
+
+
+def _issue(page, msg, severity=SEVERITY_ERROR):
+    return {"page": page, "message": msg, "severity": severity}
 
 
 def load_translations(chapter_prefix, translations_dir="claude_translations"):
@@ -25,50 +37,48 @@ def load_translations(chapter_prefix, translations_dir="claude_translations"):
 def check_untranslated(page, text):
     issues = []
     patterns = [
-        (r'\bEXAMPLE\s+\d', "EXAMPLE не переведён → ПРИМЕР"),
-        (r'\bSolution\b', "Solution не переведён → Решение"),
-        (r'\bFigure\s+\d', "Figure не переведён → Рисунок"),
-        (r'\bTable\s+\d', "Table не переведён → Таблица"),
-        (r'\bSection\s+\d', "Section не переведён → Раздел"),
-        (r'\bChapter\s+\d', "Chapter не переведён → Глава"),
-        (r'\bNote that\b', "Note that не переведено"),
-        (r'\bFor example\b', "For example не переведено"),
-        (r'\bTherefore\b', "Therefore не переведено"),
-        (r'\bHowever\b', "However не переведено"),
-        (r'\binstruction\b', "instruction не переведено"),
-        (r'\b[Rr]egister\b(?!\s+[A-Z])', "register не переведено"),
-        (r'(?<![A-Z])\bmemory\b(?!\s+(location|address|content))', "memory не переведено"),
-        (r'(?<![A-Z])\bexecution\b', "execution не переведено"),
+        (r'\bEXAMPLE\s+\d', "EXAMPLE not translated", SEVERITY_ERROR),
+        (r'\bSolution\b', "Solution not translated", SEVERITY_ERROR),
+        (r'\bFigure\s+\d', "Figure not translated", SEVERITY_ERROR),
+        (r'\bTable\s+\d', "Table not translated", SEVERITY_ERROR),
+        (r'\bSection\s+\d', "Section not translated", SEVERITY_WARNING),
+        (r'\bChapter\s+\d', "Chapter not translated", SEVERITY_WARNING),
+        (r'\bNote that\b', "Note that not translated", SEVERITY_WARNING),
+        (r'\bFor example\b', "For example not translated", SEVERITY_WARNING),
+        (r'\bTherefore\b', "Therefore not translated", SEVERITY_WARNING),
+        (r'\bHowever\b', "However not translated", SEVERITY_WARNING),
+        (r'\binstruction\b', "instruction not translated", SEVERITY_WARNING),
+        (r'(?<![A-Z])\b[Rr]egister\b(?!\s+[A-Z])', "register not translated", SEVERITY_WARNING),
+        (r'(?<![A-Z])\bmemory\b(?!\s+(location|address|content))', "memory not translated", SEVERITY_WARNING),
+        (r'(?<![A-Z])\bexecution\b', "execution not translated", SEVERITY_WARNING),
     ]
-    # Filter out text inside code blocks
     text_no_code = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
-    for pattern, msg in patterns:
+    for pattern, msg, severity in patterns:
         matches = re.findall(pattern, text_no_code)
         if matches:
-            issues.append(f"  Стр.{page}: {msg} ({len(matches)}x)")
+            issues.append(_issue(page, f"{msg} ({len(matches)}x)", severity))
     return issues
 
 
 def check_broken_text(page, text):
     issues = []
     if re.search(r'of\d{3}\s+[A-Z][a-z]', text):
-        issues.append(f"  Стр.{page}: мусор в тексте (of003 Ai)")
+        issues.append(_issue(page, "garbage text (of003 Ai)", SEVERITY_ERROR))
     if '_16' in text and '₁₆' not in text and '$' not in text:
         count = text.count('_16')
-        issues.append(f"  Стр.{page}: _16 без форматирования ({count}x)")
+        issues.append(_issue(page, f"_16 without formatting ({count}x)", SEVERITY_WARNING))
     if '⊠' in text or '✕' in text:
-        issues.append(f"  Стр.{page}: ⊠/✕ вместо → или ↔")
+        issues.append(_issue(page, "⊠/✕ instead of → or ↔", SEVERITY_WARNING))
     return issues
 
 
 def check_problematic_unicode(page, text):
-    """Check for Unicode characters that fonts may not render."""
     issues = []
     safe_unicode = set("→←↔↵₀₁₂₃₄₅₆₇₈₉—–«»…·×÷±≤≥≠⊕∧∨¬°′″")
     for i, ch in enumerate(text):
         if ord(ch) > 0x2000 and ch not in safe_unicode:
             context = text[max(0,i-10):i+10]
-            issues.append(f"  Стр.{page}: U+{ord(ch):04X} '{ch}' может не отрисоваться: ...{context}...")
+            issues.append(_issue(page, f"U+{ord(ch):04X} '{ch}' may not render: ...{context}...", SEVERITY_WARNING))
             break
     return issues
 
@@ -86,38 +96,33 @@ def check_tables(page, text):
     has_table = '|' in text and text.count('|') > 4
     needs_table = any(re.search(p, text) for p in table_indicators)
     if needs_table and not has_table:
-        issues.append(f"  Стр.{page}: нужна таблица но нет markdown-таблицы")
+        issues.append(_issue(page, "table expected but no markdown table found", SEVERITY_ERROR))
     return issues
 
 
 def check_broken_tables(page, text):
-    """Check for tables with empty cells or wrong column headers."""
     issues = []
     lines = text.split('\n')
     table_lines = [l.strip() for l in lines if l.strip().startswith('|') and l.strip().endswith('|')]
     if not table_lines:
         return issues
-
     for tl in table_lines:
         if tl.replace('|', '').replace('-', '').replace(' ', '').replace(':', '') == '':
             continue
         cells = [c.strip() for c in tl.split('|')[1:-1]]
         empty = sum(1 for c in cells if not c)
         if empty > len(cells) // 2 and len(cells) > 2:
-            issues.append(f"  Стр.{page}: таблица с {empty}/{len(cells)} пустыми ячейками")
+            issues.append(_issue(page, f"table with {empty}/{len(cells)} empty cells", SEVERITY_ERROR))
             break
-
-    # Wrong column names
     for tl in table_lines[:2]:
         if 'Описание' in tl and ('Источник' not in tl and 'Source' not in tl):
             if 'Назначение' in tl or 'Источник/Назначение' in tl:
-                issues.append(f"  Стр.{page}: таблица операндов с неправильными заголовками (Описание вместо Источник)")
+                issues.append(_issue(page, "operand table with wrong headers", SEVERITY_WARNING))
                 break
     return issues
 
 
 def check_numbered_lists(page, text):
-    """Check if a numbered list in original was converted to bullets."""
     issues = []
     lines = text.split('\n')
     bullet_sequence = 0
@@ -130,13 +135,12 @@ def check_numbered_lists(page, text):
                 has_numbers = any(re.match(r'- \d+\.', c) for c in context)
                 if not has_numbers:
                     first_items = context[:3]
-                    issues.append(f"  Стр.{page}: {bullet_sequence} буллетов подряд — возможно должен быть нумерованный список: {first_items[0][:40]}...")
+                    issues.append(_issue(page, f"{bullet_sequence} bullets in sequence — maybe numbered list: {first_items[0][:40]}...", SEVERITY_WARNING))
             bullet_sequence = 0
     return issues
 
 
 def check_duplicate_content(page, text):
-    """Check if translation contains tables/diagrams that are already in TikZ files."""
     issues = []
     fig_refs = re.findall(r'(?:Рисунок|рис\.)\s*(\d+\.\d+)', text)
     for ref in fig_refs:
@@ -144,24 +148,20 @@ def check_duplicate_content(page, text):
         if os.path.exists(fig_file):
             table_lines = [l for l in text.split('\n') if l.strip().startswith('|') and l.strip().endswith('|')]
             if len(table_lines) > 3:
-                issues.append(f"  Стр.{page}: markdown-таблица дублирует TikZ fig_{ref.replace('.','_')}.tex")
+                issues.append(_issue(page, f"markdown table duplicates TikZ fig_{ref.replace('.','_')}.tex", SEVERITY_WARNING))
                 break
     return issues
 
 
 def check_debug_sessions(page, text):
-    """Check that DEBUG sessions are in single code blocks, not split."""
     issues = []
-    lines = text.split('\n')
     code_block_count = text.count('```')
     debug_indicators = ['C:\\DOS>DEBUG', 'C>DEBUG', 'C:\\>DEBUG']
     has_debug = any(d in text for d in debug_indicators)
-
     if has_debug and code_block_count > 10:
-        issues.append(f"  Стр.{page}: DEBUG-сессия разбита на {code_block_count//2} блоков кода")
-
+        issues.append(_issue(page, f"DEBUG session split into {code_block_count//2} code blocks", SEVERITY_ERROR))
     if has_debug and code_block_count == 0:
-        issues.append(f"  Стр.{page}: DEBUG-сессия без блока кода")
+        issues.append(_issue(page, "DEBUG session without code block", SEVERITY_ERROR))
     return issues
 
 
@@ -178,7 +178,7 @@ def check_code_blocks(page, text):
         if not in_code and re.match(asm_pattern, line.strip()):
             naked_asm += 1
     if naked_asm > 3:
-        issues.append(f"  Стр.{page}: {naked_asm} строк asm вне блоков кода")
+        issues.append(_issue(page, f"{naked_asm} asm lines outside code blocks", SEVERITY_ERROR))
     return issues
 
 
@@ -187,7 +187,7 @@ def check_examples(page, text):
     example_matches = re.findall(r'(?:ПРИМЕР|Пример|EXAMPLE|Example)\s+(\d+\.\d+)', text)
     for ex in example_matches:
         if 'EXAMPLE' in text.split(ex)[0][-20:]:
-            issues.append(f"  Стр.{page}: Пример {ex} не переведён (EXAMPLE)")
+            issues.append(_issue(page, f"Example {ex} not translated (EXAMPLE)", SEVERITY_ERROR))
     return issues
 
 
@@ -195,7 +195,7 @@ def check_formatting(page, text):
     issues = []
     for line in text.split('\n'):
         if len(line) > 500 and not line.startswith('|'):
-            issues.append(f"  Стр.{page}: очень длинная строка ({len(line)} символов)")
+            issues.append(_issue(page, f"very long line ({len(line)} chars)", SEVERITY_WARNING))
             break
     return issues
 
@@ -206,7 +206,6 @@ def check_figure_files(translations, chapter_prefix, manifest_path=None):
     if not ch_num:
         return issues
     ch = ch_num.group()
-
     code_figures = set()
     if manifest_path and os.path.exists(manifest_path):
         with open(manifest_path) as f:
@@ -229,26 +228,20 @@ def check_figure_files(translations, chapter_prefix, manifest_path=None):
         if not os.path.exists(fig_file):
             missing.append(ref)
     if missing:
-        issues.append(f"  Нет TikZ-файлов для фигур: {', '.join(missing)}")
-    else:
-        if referenced:
-            print(f"  ✅ Все {len(referenced)} фигур имеют .tex файлы")
+        issues.append(_issue(None, f"missing TikZ files for figures: {', '.join(missing)}", SEVERITY_ERROR))
     return issues
 
 
 def check_glossary(translations):
-    """Check that glossary terms are translated consistently."""
     issues = []
     glossary_path = "glossary.json"
     if not os.path.exists(glossary_path):
         return issues
     with open(glossary_path) as f:
         g = json.load(f)
-
     all_text_no_code = ""
     for page, text in translations.items():
         all_text_no_code += re.sub(r'```.*?```', '', text, flags=re.DOTALL) + "\n"
-
     critical_terms = {
         "EXAMPLE": ("ПРИМЕР", r'\bEXAMPLE\s+\d'),
         "Solution": ("Решение", r'\bSolution\b'),
@@ -258,67 +251,65 @@ def check_glossary(translations):
     for en, (ru, pattern) in critical_terms.items():
         matches = re.findall(pattern, all_text_no_code)
         if matches:
-            issues.append(f"  Глоссарий: '{en}' не переведён как '{ru}' ({len(matches)}x)")
-
+            issues.append(_issue(None, f"glossary: '{en}' not translated as '{ru}' ({len(matches)}x)", SEVERITY_ERROR))
     return issues
 
 
 def check_manifest(translations, manifest_path):
-    """Validate translation against chapter manifest (ground truth)."""
     issues = []
     if not manifest_path or not os.path.exists(manifest_path):
         return issues
-
     with open(manifest_path) as f:
         manifest = json.load(f)
 
-    # Check examples exist somewhere in the translation (not per-page, pages shift)
+    version = manifest.get("manifest_version", 0)
+    if version < MANIFEST_VERSION:
+        issues.append(_issue(None, f"manifest version {version} is outdated (current: {MANIFEST_VERSION}), regenerate with extract_chapter_manifest.py", SEVERITY_WARNING))
+
     all_text = "\n".join(translations.values())
     expected_examples = set()
     for ex in manifest.get("examples", []):
         expected_examples.add(ex["number"])
     for num in sorted(expected_examples, key=float):
         if not re.search(rf'(?:ПРИМЕР|Пример)\s+{re.escape(num)}', all_text):
-            issues.append(f"  Пример {num} не найден нигде в переводе")
+            issues.append(_issue(None, f"Example {num} not found anywhere in translation", SEVERITY_ERROR))
 
-    # Check figures that need TikZ
     for fig in manifest.get("figures", []):
         if fig["type"] in ("debug_session", "source_listing"):
             continue
         fig_file = f"figures/fig_{fig['number'].replace('.', '_')}.tex"
         if not os.path.exists(fig_file):
-            issues.append(f"  Figure {fig['number']}: нет TikZ-файла (тип: {fig['type']})")
+            issues.append(_issue(None, f"Figure {fig['number']}: no TikZ file (type: {fig['type']})", SEVERITY_ERROR))
 
-    # Check DEBUG sessions are in code blocks
     for ds in manifest.get("debug_sessions", []):
         page = str(ds["page"])
         text = translations.get(page, "")
         if text and '```' not in text:
-            issues.append(f"  Стр.{page}: DEBUG-сессия без блока кода")
+            issues.append(_issue(page, "DEBUG session without code block (manifest)", SEVERITY_ERROR))
 
     return issues
 
 
-def validate(chapter_prefix, start, end, manifest_path=None):
+def validate(chapter_prefix, start, end, manifest_path=None, report_path=None):
     translations = load_translations(chapter_prefix)
 
     if not translations:
         print(f"ERROR: No translations found with prefix '{chapter_prefix}'")
-        return
+        return -1
 
     print(f"{'='*60}")
     print(f"ВАЛИДАЦИЯ: {chapter_prefix} (стр. {start}-{end})")
     print(f"{'='*60}")
     print(f"Найдено страниц: {len(translations)}")
     expected = set(str(i) for i in range(start, end + 1))
-    missing = expected - set(translations.keys())
-    if missing:
-        print(f"\n❌ ПРОПУЩЕННЫЕ СТРАНИЦЫ: {sorted(missing, key=int)}")
+    missing_pages = expected - set(translations.keys())
+    if missing_pages:
+        print(f"\n❌ ПРОПУЩЕННЫЕ СТРАНИЦЫ: {sorted(missing_pages, key=int)}")
 
     fig_issues = check_figure_files(translations, chapter_prefix, manifest_path)
     manifest_issues = check_manifest(translations, manifest_path)
 
-    all_issues = {
+    categories = {
         "Непереведённый текст": [],
         "Мусор/артефакты": [],
         "Проблемные символы Unicode": [],
@@ -337,33 +328,49 @@ def validate(chapter_prefix, start, end, manifest_path=None):
 
     for page in sorted(translations.keys(), key=int):
         text = translations[page]
-        all_issues["Непереведённый текст"].extend(check_untranslated(page, text))
-        all_issues["Мусор/артефакты"].extend(check_broken_text(page, text))
-        all_issues["Проблемные символы Unicode"].extend(check_problematic_unicode(page, text))
-        all_issues["Отсутствующие таблицы"].extend(check_tables(page, text))
-        all_issues["Кривые таблицы"].extend(check_broken_tables(page, text))
-        all_issues["Дублирование с TikZ"].extend(check_duplicate_content(page, text))
-        all_issues["Нумерованные списки"].extend(check_numbered_lists(page, text))
-        all_issues["Код без форматирования"].extend(check_code_blocks(page, text))
-        all_issues["DEBUG-сессии"].extend(check_debug_sessions(page, text))
-        all_issues["Примеры"].extend(check_examples(page, text))
-        all_issues["Форматирование"].extend(check_formatting(page, text))
+        categories["Непереведённый текст"].extend(check_untranslated(page, text))
+        categories["Мусор/артефакты"].extend(check_broken_text(page, text))
+        categories["Проблемные символы Unicode"].extend(check_problematic_unicode(page, text))
+        categories["Отсутствующие таблицы"].extend(check_tables(page, text))
+        categories["Кривые таблицы"].extend(check_broken_tables(page, text))
+        categories["Дублирование с TikZ"].extend(check_duplicate_content(page, text))
+        categories["Нумерованные списки"].extend(check_numbered_lists(page, text))
+        categories["Код без форматирования"].extend(check_code_blocks(page, text))
+        categories["DEBUG-сессии"].extend(check_debug_sessions(page, text))
+        categories["Примеры"].extend(check_examples(page, text))
+        categories["Форматирование"].extend(check_formatting(page, text))
 
-    total = 0
-    for category, issues in all_issues.items():
-        if issues:
-            print(f"\n❌ {category} ({len(issues)}):")
-            for issue in issues[:15]:
-                print(issue)
-            if len(issues) > 15:
-                print(f"  ... и ещё {len(issues)-15}")
-            total += len(issues)
+    error_count = 0
+    warning_count = 0
+    for category, issues in categories.items():
+        if not issues:
+            continue
+        errors = [i for i in issues if i["severity"] == SEVERITY_ERROR]
+        warnings = [i for i in issues if i["severity"] == SEVERITY_WARNING]
+        error_count += len(errors)
+        warning_count += len(warnings)
 
-    if total == 0:
+        label_parts = []
+        if errors:
+            label_parts.append(f"{len(errors)} errors")
+        if warnings:
+            label_parts.append(f"{len(warnings)} warnings")
+        severity_icon = "❌" if errors else "⚠️"
+        print(f"\n{severity_icon} {category} ({', '.join(label_parts)}):")
+        for issue in (errors + warnings)[:15]:
+            icon = "  ❌" if issue["severity"] == SEVERITY_ERROR else "  ⚠️"
+            pg = f"Стр.{issue['page']}: " if issue["page"] else "  "
+            print(f"{icon} {pg}{issue['message']}")
+        if len(issues) > 15:
+            print(f"  ... и ещё {len(issues)-15}")
+
+    if error_count == 0 and warning_count == 0:
         print("\n✅ Все проверки пройдены!")
     else:
         print(f"\n{'='*60}")
-        print(f"ИТОГО: {total} проблем")
+        print(f"ИТОГО: {error_count} ошибок, {warning_count} предупреждений")
+        if error_count == 0:
+            print("Только предупреждения — сборка разрешена.")
     print()
 
     total_chars_ru = 0
@@ -377,7 +384,25 @@ def validate(chapter_prefix, start, end, manifest_path=None):
     pct_ru = total_chars_ru / max(total_chars_ru + total_chars_en, 1) * 100
     print(f"Русский текст: {pct_ru:.1f}%")
     print(f"Английский текст: {100-pct_ru:.1f}%")
-    return total
+
+    # JSON report
+    if report_path:
+        report = {
+            "chapter": chapter_prefix,
+            "pages": {"start": start, "end": end, "found": len(translations), "missing": sorted(missing_pages, key=int)},
+            "errors": error_count,
+            "warnings": warning_count,
+            "categories": {},
+            "russian_pct": round(pct_ru, 1),
+        }
+        for cat, issues in categories.items():
+            if issues:
+                report["categories"][cat] = issues
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+        print(f"Отчёт: {report_path}")
+
+    return error_count
 
 
 if __name__ == "__main__":
@@ -387,6 +412,7 @@ if __name__ == "__main__":
     parser.add_argument("--start", "-s", type=int, required=True)
     parser.add_argument("--end", "-e", type=int, required=True)
     parser.add_argument("--manifest", "-m", help="Path to chapter manifest JSON")
+    parser.add_argument("--report", "-r", help="Save JSON report to file")
     args = parser.parse_args()
-    issues = validate(args.prefix, args.start, args.end, args.manifest)
+    issues = validate(args.prefix, args.start, args.end, args.manifest, args.report)
     sys.exit(1 if issues else 0)
