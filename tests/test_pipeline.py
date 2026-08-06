@@ -1,5 +1,6 @@
 """Tests for pipeline stage contracts and pyjobkit integration."""
 
+import asyncio
 import json
 import os
 import sys
@@ -80,16 +81,52 @@ class TestCompileContract(unittest.TestCase):
         self.assertIn("ch{ch}_compiled.pdf", CONTRACTS["compile"]["outputs"])
 
 
-class TestIdempotencyKeys(unittest.TestCase):
-    """Job enqueue idempotency keys follow expected format."""
+class TestIdempotencyEnqueue(unittest.TestCase):
+    """Repeated enqueue with same key returns None instead of crashing."""
 
-    def test_translate_key_format(self):
-        key = f"ch5:translate:218-300"
-        self.assertTrue(key.startswith("ch5:translate:"))
+    def test_double_enqueue_returns_none(self):
+        from jobs import create_engine, enqueue_translate
 
-    def test_build_key_format(self):
-        key = f"ch5:build"
-        self.assertEqual(key, "ch5:build")
+        async def _test():
+            with tempfile.TemporaryDirectory() as td:
+                db = os.path.join(td, "test.sqlite3")
+                with patch.dict(os.environ, {"BOOKASSEMBLER_JOB_DSN": f"sqlite+aiosqlite:///{db}"}):
+                    engine = await create_engine()
+                    async with engine:
+                        first = await enqueue_translate(engine, 99, 9000, 9010)
+                        self.assertIsNotNone(first)
+                        second = await enqueue_translate(engine, 99, 9000, 9010)
+                        self.assertIsNone(second)
+
+        asyncio.run(_test())
+
+
+class TestWorkerExitCode(unittest.TestCase):
+    """run_worker(once=True) returns nonzero when jobs fail."""
+
+    @unittest.skipIf(
+        not os.environ.get("RUN_SLOW_TESTS"),
+        "Slow test (1.1s sleep for SQLite workaround); set RUN_SLOW_TESTS=1",
+    )
+    def test_worker_returns_nonzero_on_failure(self):
+        from jobs import create_engine, run_worker, _safe_enqueue
+
+        async def _test():
+            with tempfile.TemporaryDirectory() as td:
+                db = os.path.join(td, "test.sqlite3")
+                with patch.dict(os.environ, {"BOOKASSEMBLER_JOB_DSN": f"sqlite+aiosqlite:///{db}"}):
+                    engine = await create_engine()
+                    async with engine:
+                        await _safe_enqueue(
+                            engine,
+                            kind="translate-batch",
+                            payload={"chapter": 99, "start": 9000, "end": 9010},
+                            idempotency_key="ch99:translate:9000-9010",
+                        )
+                    code = await run_worker(once=True)
+                    self.assertNotEqual(code, 0)
+
+        asyncio.run(_test())
 
 
 if __name__ == "__main__":

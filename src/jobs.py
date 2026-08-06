@@ -15,6 +15,7 @@ from pyjobkit.engine import Engine
 from pyjobkit.worker import Worker
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -245,12 +246,21 @@ async def create_engine() -> Engine:
     return Engine(backend=backend, executors=ALL_EXECUTORS)
 
 
+async def _safe_enqueue(engine: Engine, **kwargs) -> UUID | None:
+    """Enqueue with idempotency: return None if job already exists."""
+    try:
+        return await engine.enqueue(**kwargs)
+    except IntegrityError:
+        return None
+
+
 async def enqueue_translate(engine: Engine, ch: int, start: int, end: int,
-                            pages: list[int] | None = None) -> UUID:
+                            pages: list[int] | None = None) -> UUID | None:
     key = f"ch{ch}:translate:{start}-{end}"
     if pages:
         key += f":{pages[0]}-{pages[-1]}"
-    return await engine.enqueue(
+    return await _safe_enqueue(
+        engine,
         kind="translate-batch",
         payload={"chapter": ch, "start": start, "end": end, "pages": pages},
         idempotency_key=key,
@@ -258,8 +268,9 @@ async def enqueue_translate(engine: Engine, ch: int, start: int, end: int,
 
 
 async def enqueue_figure_render(engine: Engine, ch: int, page: int,
-                                pdf_file: str) -> UUID:
-    return await engine.enqueue(
+                                pdf_file: str) -> UUID | None:
+    return await _safe_enqueue(
+        engine,
         kind="render-figure-page",
         payload={"chapter": ch, "page": page, "pdf_file": pdf_file},
         idempotency_key=f"ch{ch}:figure-render:{page}",
@@ -267,35 +278,56 @@ async def enqueue_figure_render(engine: Engine, ch: int, page: int,
 
 
 async def enqueue_figure_analyze(engine: Engine, ch: int, fig_number: str,
-                                 page: int, pdf_file: str) -> UUID:
-    return await engine.enqueue(
+                                 page: int, pdf_file: str) -> UUID | None:
+    return await _safe_enqueue(
+        engine,
         kind="analyze-figure",
         payload={"figure_number": fig_number, "page": page, "pdf_file": pdf_file},
         idempotency_key=f"ch{ch}:figure-analyze:{fig_number}",
     )
 
 
-async def enqueue_build(engine: Engine, ch: int, start: int, end: int) -> UUID:
-    return await engine.enqueue(
+async def enqueue_build(engine: Engine, ch: int, start: int, end: int) -> UUID | None:
+    return await _safe_enqueue(
+        engine,
         kind="build-chapter",
         payload={"chapter": ch, "start": start, "end": end},
         idempotency_key=f"ch{ch}:build",
     )
 
 
-async def enqueue_compile(engine: Engine, ch: int) -> UUID:
-    return await engine.enqueue(
+async def enqueue_compile(engine: Engine, ch: int) -> UUID | None:
+    return await _safe_enqueue(
+        engine,
         kind="compile-book",
         payload={"chapter": ch},
         idempotency_key=f"ch{ch}:compile",
     )
 
 
-async def run_worker(*, once: bool = False) -> None:
+async def run_worker(*, once: bool = False) -> int:
+    """Run worker. Returns nonzero if any jobs failed or got stuck.
+
+    SQLite CURRENT_TIMESTAMP lacks sub-second precision, so a job
+    enqueued in the same second may not be claimable immediately.
+    For once=True we retry claim after a short sleep to work around this.
+    """
     engine = await create_engine()
+    if once:
+        # SQLite timing workaround: wait 1.1s so scheduled_for <= CURRENT_TIMESTAMP
+        await asyncio.sleep(1.1)
     async with engine:
         worker = Worker(engine, max_concurrency=4)
         await worker.run(once=once)
+
+    if once:
+        status = await get_jobs_status()
+        failed = status["by_status"].get("failed", 0)
+        running = status["by_status"].get("running", 0)
+        if failed or running:
+            print(f"  Jobs: {failed} failed, {running} stuck in running")
+            return 1
+    return 0
 
 
 async def get_jobs_status(ch: int | None = None) -> dict:

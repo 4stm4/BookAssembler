@@ -900,20 +900,24 @@ def _enqueue_chapter(ch, start, end):
     async def _run():
         engine = await create_engine()
         async with engine:
-            job_id = await enqueue_translate(engine, ch, start, end)
-            print(f"  Enqueued translate: {job_id}")
-            job_id = await enqueue_build(engine, ch, start, end)
-            print(f"  Enqueued build: {job_id}")
-            job_id = await enqueue_compile(engine, ch)
-            print(f"  Enqueued compile: {job_id}")
+            for label, coro in [
+                ("translate", enqueue_translate(engine, ch, start, end)),
+                ("build", enqueue_build(engine, ch, start, end)),
+                ("compile", enqueue_compile(engine, ch)),
+            ]:
+                job_id = await coro
+                if job_id is None:
+                    print(f"  {label}: уже в очереди (пропуск)")
+                else:
+                    print(f"  {label}: {job_id}")
 
     asyncio.run(_run())
 
 
 def _run_worker(once=False):
-    """Start pyjobkit worker."""
+    """Start pyjobkit worker. Returns exit code."""
     from jobs import run_worker
-    asyncio.run(run_worker(once=once))
+    return asyncio.run(run_worker(once=once))
 
 
 def _show_jobs_status(ch=None):
@@ -965,12 +969,10 @@ def main():
         return 0
 
     if args.work:
-        _run_worker(once=False)
-        return 0
+        return _run_worker(once=False)
 
     if args.work_once and not args.chapter and not args.enqueue:
-        _run_worker(once=True)
-        return 0
+        return _run_worker(once=True)
 
     if args.jobs_status:
         _show_jobs_status(args.chapter)
@@ -1006,7 +1008,7 @@ def main():
     if args.enqueue:
         _enqueue_chapter(ch, start, end)
         if args.work_once:
-            _run_worker(once=True)
+            return _run_worker(once=True)
         return 0
 
     exit_code = run_pipeline(ch, start, end, args.stage, args.resume) or 0
