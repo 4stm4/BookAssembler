@@ -1,7 +1,7 @@
 # BookAssembler — автоматический перевод технических книг
 
 Пайплайн для перевода отсканированных PDF-книг в печатный LaTeX на русском языке.
-Поддерживает любые технические книги — настройки конкретной книги (ассемблерные мнемоники, паттерны кода, классификация фигур) задаются через `book_profile.yaml`.
+Поддерживает любые технические книги. Все данные конкретной книги хранятся в папке `project/` — конфиги, кэш, переводы, результаты.
 
 ## Быстрый старт
 
@@ -10,8 +10,9 @@
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[api,dev]"
 
-# Скопировать конфиг
+# Скопировать конфиги
 cp .env.example .env
+cp -r project.example project
 
 # Собрать Docker-образ для компиляции LaTeX
 docker build -t bookassembler-xelatex .
@@ -44,15 +45,18 @@ PDF (скан) → extract → manifest → figures → translate → autofix �
 
 | Файл | Что настраивает |
 |------|----------------|
-| `chapters.yaml` | Структура книги: главы, диапазоны страниц, PDF-файл |
-| `book_profile.yaml` | Профиль книги: мнемоники, паттерны кода, классификация фигур, промпт перевода |
+| `project/chapters.yaml` | Структура книги: главы, диапазоны страниц, PDF-файл |
+| `project/book_profile.yaml` | Профиль книги: мнемоники, паттерны кода, классификация фигур, промпт перевода |
 | `.env` | Режим перевода, режим компиляции, ключи API |
-| `glossary.json` | Словарь терминов (EN→RU), keep-as-is списки, правила форматирования |
+| `project/glossary.json` | Словарь терминов (EN→RU), keep-as-is списки, правила форматирования |
 
 ```bash
 # .env
 TRANSLATE_MODE=api          # "api" (автоматический) или "agent" (задачи для Claude Code)
-ANTHROPIC_API_KEY=sk-...    # только для TRANSLATE_MODE=api
+AI_PROVIDER=openai          # "anthropic", "openai", или любой OpenAI-совместимый
+AI_API_KEY=sk-...           # ключ API выбранного провайдера
+AI_MODEL=gpt-4o             # модель (опционально, есть дефолты для каждого провайдера)
+AI_BASE_URL=                # только для OpenAI-совместимых (Groq, Together, Ollama и т.д.)
 COMPILE_MODE=docker         # "docker" (локально) или "ssh" (удалённый хост)
 COMPILE_HOST=user@host      # только для COMPILE_MODE=ssh
 COMPILE_DIR=~/path/to/dir   # только для COMPILE_MODE=ssh
@@ -60,7 +64,7 @@ COMPILE_DIR=~/path/to/dir   # только для COMPILE_MODE=ssh
 
 ### Настройка для новой книги
 
-1. Создайте `chapters.yaml` со структурой книги:
+1. Скопируйте шаблон и отредактируйте `project/chapters.yaml`:
 
 ```yaml
 book:
@@ -77,7 +81,7 @@ chapters:
     title: "Core Concepts"
 ```
 
-2. (Опционально) Создайте `book_profile.yaml` для книг с кодом:
+2. (Опционально) Создайте `project/book_profile.yaml` для книг с кодом:
 
 ```yaml
 book_description: "учебник по Python"
@@ -105,7 +109,9 @@ figure_categories:
   code_listing: ["listing", "source code"]
 ```
 
-Без `book_profile.yaml` используется встроенный профиль для x86 ассемблера.
+Без `book_profile.yaml` профиль определяется автоматически из текста книги при первом запуске `extract`.
+
+PDF книги тоже кладётся в `project/`. Путь к другой рабочей папке можно задать через `BOOKASSEMBLER_PROJECT_DIR`.
 
 ## Стадии пайплайна
 
@@ -162,7 +168,7 @@ ch4_all_fixed.json    ← 3. ручные правки (высший приор�
 
 ### Живой глоссарий
 
-При валидации перевода система автоматически находит технические термины, отсутствующие в `glossary.json`, и записывает их в `glossary_suggestions.json` с счётчиком упоминаний. Разбор предложений — вручную.
+При валидации перевода система автоматически находит технические термины, отсутствующие в глоссарии, и записывает их в `glossary_suggestions.json` с счётчиком упоминаний. Разбор предложений — вручную.
 
 ## Скрипты
 
@@ -183,17 +189,15 @@ ch4_all_fixed.json    ← 3. ручные правки (высший приор�
 
 | Путь | Содержимое | В Git? |
 |------|-----------|--------|
-| `chapters.yaml` | Структура книги | Да |
-| `book_profile.yaml` | Профиль книги (опционально) | Да |
-| `glossary.json` | Словарь терминов | Да |
 | `src/` | Скрипты | Да |
-| `cache/text/` | Извлечённый текст | Нет |
-| `cache/state/` | Состояние пайплайна | Нет |
-| `cache/diagram_analysis/` | Кеш анализа фигур | Нет |
-| `claude_translations/` | JSON с переводами | Нет |
-| `figures/` | TikZ `.tex` файлы | Нет |
-| `latex_output/` | Готовые `.tex` для компиляции | Нет |
-| `glossary_suggestions.json` | Предложения для глоссария | Нет |
+| `project.example/` | Шаблон рабочей папки | Да |
+| `project/` | Рабочая папка (данные книги) | Нет |
+| `project/chapters.yaml` | Структура книги | Нет |
+| `project/book_profile.yaml` | Профиль книги (авто) | Нет |
+| `project/glossary.json` | Словарь терминов | Нет |
+| `project/cache/` | Кэш и состояние | Нет |
+| `project/claude_translations/` | JSON с переводами | Нет |
+| `project/latex_output/` | Готовые `.tex` для компиляции | Нет |
 
 ## Компиляция LaTeX
 
@@ -217,6 +221,36 @@ COMPILE_DIR=~/path/to/latex
 ```
 
 SSH-режим блокируется в CI/CD-окружении. Перед подключением проверяется доступность хоста и наличие SSH-ключей.
+
+## Google Colab — полный пайплайн с GPU
+
+Notebook `colab/bookassembler_agent.ipynb` запускает весь BookAssembler на Colab с GPU-ускорением.
+
+```
+1. Установка Ollama + модель на T4 GPU
+2. Клонирование BookAssembler (из GitHub или Google Drive)
+3. Загрузка PDF (Google Drive / URL / upload)
+4. Запуск пайплайна: extract → translate → build
+5. Экспорт результатов (Google Drive или скачивание)
+```
+
+Все файлы хранятся на Google Drive — PDF, переводы, кэш, результаты. При перезапуске Colab прогресс не теряется (`--resume`).
+
+```
+Google Drive/BookAssembler/    ← BOOKASSEMBLER_PROJECT_DIR
+  mybook.pdf                   ← PDF книги
+  chapters.yaml                ← структура книги
+  claude_translations/         ← переводы
+  latex_output/                ← готовые .tex файлы
+  cache/                       ← кэш и состояние пайплайна
+```
+
+Порядок работы:
+1. Положите PDF в `Google Drive/BookAssembler/`
+2. Откройте notebook в Colab, выберите **T4 GPU** runtime
+3. Выберите модель (рекомендуется `gemma3:12b` для T4 с 16GB)
+4. Отредактируйте `chapters.yaml` с диапазонами страниц
+5. Запустите пайплайн — на T4 GPU ~30-50 tok/s (vs ~5 tok/s на ARM CPU)
 
 ## pyjobkit — очередь задач
 
@@ -248,5 +282,6 @@ python3 src/pipeline.py --chapter 5 --jobs-status
 - NumPy (`numpy`)
 - PyYAML (`pyyaml`) — для `chapters.yaml` и `book_profile.yaml`
 - pyjobkit[sqlite] (`pyjobkit`) — очередь задач с SQLite-бэкендом
-- Anthropic SDK (`anthropic`) — только для `TRANSLATE_MODE=api`
+- Anthropic SDK (`anthropic`) — только для `AI_PROVIDER=anthropic`
+- OpenAI SDK (`openai`) — для OpenAI и OpenAI-совместимых провайдеров (Ollama, Groq, Together)
 - Docker — для локальной компиляции LaTeX

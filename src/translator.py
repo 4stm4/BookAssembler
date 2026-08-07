@@ -320,20 +320,66 @@ class AgentBackend(TranslatorBackend):
 
 
 class APIBackend(TranslatorBackend):
-    """Direct Claude API calls."""
+    """LLM API calls — supports Anthropic, OpenAI, and OpenAI-compatible providers."""
 
     def __init__(self):
-        self.api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not self.api_key:
-            raise ValueError("ANTHROPIC_API_KEY не задан")
+        self.provider = os.environ.get("AI_PROVIDER", "").lower()
+        self.api_key = os.environ.get("AI_API_KEY", "")
+        self.base_url = os.environ.get("AI_BASE_URL", "")
+        self.model = os.environ.get("AI_MODEL", "")
 
-    def translate_batch(self, request: TranslationRequest) -> TranslationResult:
+        if not self.api_key:
+            self.api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            if self.api_key:
+                self.provider = "anthropic"
+
+        if not self.api_key:
+            raise ValueError(
+                "AI_API_KEY не задан. Установите AI_PROVIDER + AI_API_KEY "
+                "(или ANTHROPIC_API_KEY для обратной совместимости)"
+            )
+
+        if not self.provider:
+            self.provider = "openai"
+
+        if not self.model:
+            self.model = _default_model(self.provider)
+
+    def _call_anthropic(self, prompt: str) -> str:
         try:
             import anthropic
         except ImportError:
             raise ImportError("pip install anthropic")
-
         client = anthropic.Anthropic(api_key=self.api_key)
+        message = client.messages.create(
+            model=self.model,
+            max_tokens=8192,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return message.content[0].text
+
+    def _call_openai(self, prompt: str) -> str:
+        try:
+            import openai
+        except ImportError:
+            raise ImportError("pip install openai")
+        kwargs = {"api_key": self.api_key}
+        if self.base_url:
+            kwargs["base_url"] = self.base_url
+        client = openai.OpenAI(**kwargs)
+        response = client.chat.completions.create(
+            model=self.model,
+            max_tokens=8192,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.choices[0].message.content
+
+    def _call_llm(self, prompt: str) -> str:
+        if self.provider == "anthropic":
+            return self._call_anthropic(prompt)
+        return self._call_openai(prompt)
+
+    def translate_batch(self, request: TranslationRequest) -> TranslationResult:
         results = []
         glossary = request.glossary
         max_retries = int(os.environ.get("TRANSLATE_MAX_RETRIES", "3"))
@@ -343,7 +389,8 @@ class APIBackend(TranslatorBackend):
 
         total = len(request.pages)
         for idx, page in enumerate(request.pages, 1):
-            log.info("Перевод стр.%s (%d/%d)", page.page_number, idx, total)
+            log.info("Перевод стр.%s (%d/%d) [%s/%s]",
+                     page.page_number, idx, total, self.provider, self.model)
             prompt = self._build_prompt(page, request)
             translated_text = ""
 
@@ -353,12 +400,7 @@ class APIBackend(TranslatorBackend):
 
             for attempt in range(max_retries):
                 try:
-                    message = client.messages.create(
-                        model=os.environ.get("TRANSLATE_MODEL", "claude-sonnet-4-20250514"),
-                        max_tokens=8192,
-                        messages=[{"role": "user", "content": prompt}],
-                    )
-                    translated_text = message.content[0].text
+                    translated_text = self._call_llm(prompt)
                     last_call = time.time()
                     break
                 except Exception as e:
@@ -413,6 +455,15 @@ class APIBackend(TranslatorBackend):
 # ---------------------------------------------------------------------------
 # Client factory
 # ---------------------------------------------------------------------------
+
+def _default_model(provider: str) -> str:
+    defaults = {
+        "anthropic": "claude-sonnet-4-20250514",
+        "openai": "gpt-4o",
+        "google": "gemini-2.5-flash",
+    }
+    return defaults.get(provider, "gpt-4o")
+
 
 class TranslatorClient:
     """Main entry point for translations."""

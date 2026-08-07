@@ -61,11 +61,13 @@ log = logging.getLogger("bookassembler")
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SRC_DIR)
-os.chdir(PROJECT_ROOT)
+PROJECT_DIR = os.environ.get("BOOKASSEMBLER_PROJECT_DIR",
+                             os.path.join(PROJECT_ROOT, "project"))
+os.chdir(PROJECT_DIR)
 
 def _load_book_config(path="chapters.yaml"):
     """Load book structure from YAML config. Requires chapters.yaml."""
-    config_path = os.path.join(PROJECT_ROOT, path)
+    config_path = os.path.join(PROJECT_DIR, path)
     if not os.path.exists(config_path):
         log.error("chapters.yaml не найден. Создайте файл конфигурации книги.")
         log.error("Пример: https://github.com/... (см. README)")
@@ -96,7 +98,7 @@ COMPILE_HOST = os.environ.get("COMPILE_HOST", "")
 COMPILE_DIR = os.environ.get("COMPILE_DIR", "")
 COMPILE_MODE = os.environ.get("COMPILE_MODE", "docker")
 
-STAGES = ["extract", "manifest", "figures", "translate", "autofix", "validate", "build", "compile"]
+STAGES = ["extract", "detect", "manifest", "figures", "translate", "autofix", "validate", "build", "compile"]
 
 
 def run_cmd(cmd, check=True, capture=False):
@@ -123,8 +125,247 @@ def _pdf_hash(path, chunk_size=65536):
     return h.hexdigest()[:16]
 
 
+def _extract_page_blocks(page) -> list[dict]:
+    """Extract structured blocks from a PDF page using get_text('dict').
+
+    Returns list of dicts with keys: text, x0, y0, x1, y1, font_size, is_bold, is_mono, block_type.
+    block_type: 'text' or 'image'.
+    """
+    data = page.get_text("dict")
+    page_height = data["height"]
+    page_width = data["width"]
+    results = []
+
+    for block in data["blocks"]:
+        if block["type"] == 1:
+            results.append({
+                "text": "",
+                "x0": block["bbox"][0], "y0": block["bbox"][1],
+                "x1": block["bbox"][2], "y1": block["bbox"][3],
+                "font_size": 0, "is_bold": False, "is_mono": False,
+                "block_type": "image",
+            })
+            continue
+
+        lines_text = []
+        sizes = []
+        bold_count = 0
+        mono_count = 0
+        span_count = 0
+
+        for line in block["lines"]:
+            spans_text = []
+            for span in line["spans"]:
+                spans_text.append(span["text"])
+                if span["text"].strip():
+                    sizes.append(span["size"])
+                    span_count += 1
+                    if span["flags"] & 16:
+                        bold_count += 1
+                    if span["flags"] & 8:
+                        mono_count += 1
+            lines_text.append("".join(spans_text))
+
+        text = "\n".join(lines_text)
+        if not text.strip():
+            continue
+
+        avg_size = sum(sizes) / len(sizes) if sizes else 0
+        results.append({
+            "text": text,
+            "x0": block["bbox"][0], "y0": block["bbox"][1],
+            "x1": block["bbox"][2], "y1": block["bbox"][3],
+            "font_size": avg_size,
+            "is_bold": bold_count > span_count / 2 if span_count else False,
+            "is_mono": mono_count > span_count / 2 if span_count else False,
+            "block_type": "text",
+            "page_height": page_height,
+            "page_width": page_width,
+        })
+
+    return results
+
+
+def _detect_body_font_size(all_blocks: list[dict]) -> float:
+    """Find the most common font size across all pages — this is body text."""
+    from collections import Counter
+    size_counts = Counter()
+    for b in all_blocks:
+        if b["block_type"] != "text":
+            continue
+        char_count = len(b["text"].strip())
+        size_counts[round(b["font_size"])] += char_count
+    if not size_counts:
+        return 0
+    return size_counts.most_common(1)[0][0]
+
+
+def _detect_headers_footers(all_blocks: list[dict], page_count: int) -> tuple[set[str], list[re.Pattern]]:
+    """Detect repeating header/footer text and patterns across pages.
+
+    Uses block position (top/bottom 12% of page) and repetition.
+    Returns (exact_texts_to_remove, regex_patterns_to_remove).
+    """
+    if page_count < 3:
+        return set(), []
+
+    from collections import Counter
+
+    top_texts = Counter()
+    bottom_texts = Counter()
+
+    for b in all_blocks:
+        if b["block_type"] != "text":
+            continue
+        text = b["text"].strip()
+        if not text or len(text) > 80:
+            continue
+        page_h = b.get("page_height", 0)
+        if not page_h:
+            continue
+
+        rel_y = b["y0"] / page_h
+        if rel_y < 0.12:
+            top_texts[text] += 1
+        elif rel_y > 0.88:
+            bottom_texts[text] += 1
+
+    threshold = max(3, page_count * 0.3)
+    hf_texts = set()
+
+    for text, count in list(top_texts.items()) + list(bottom_texts.items()):
+        if count >= threshold and not re.match(r"^[a-z]{1,4}$", text, re.IGNORECASE):
+            hf_texts.add(text)
+
+    # Auto-detect regex patterns for variable headers/footers
+    # e.g. "Sec. 1-2 Title 45" or "Chap. 1 Title 23"
+    hf_patterns = []
+    _CANDIDATE_PATTERNS = [
+        r"^Sec\.\s+\d",
+        r"^Chap\.\s+\d",
+        r"^Chapter\s+\d",
+        r"^Section\s+\d",
+    ]
+    for pat_str in _CANDIDATE_PATTERNS:
+        pat = re.compile(pat_str, re.IGNORECASE)
+        match_count = sum(1 for t in list(top_texts) + list(bottom_texts) if pat.search(t))
+        if match_count >= threshold:
+            hf_patterns.append(pat)
+
+    return hf_texts, hf_patterns
+
+
+def _classify_block(block: dict, body_size: float) -> str:
+    """Classify a text block: heading, body, code, caption, page_number."""
+    text = block["text"].strip()
+
+    if re.match(r"^\d{1,4}$", text):
+        return "page_number"
+
+    if block["is_mono"]:
+        return "code"
+
+    if body_size > 0:
+        ratio = block["font_size"] / body_size
+        if ratio > 1.15:
+            return "heading"
+
+    if re.match(r"^(Figure|Fig\.|Table|Example|FIGURE|TABLE|EXAMPLE)\s+\d", text):
+        return "caption"
+
+    return "body"
+
+
+def _build_page_text(blocks: list[dict], body_size: float,
+                     hf_texts: set[str], hf_patterns: list[re.Pattern] = None) -> str:
+    """Build clean text from structured blocks for a single page."""
+    parts = []
+
+    for b in blocks:
+        if b["block_type"] == "image":
+            continue
+
+        text = b["text"].strip()
+        if not text:
+            continue
+
+        if text in hf_texts:
+            continue
+
+        page_h = b.get("page_height", 0)
+        if page_h:
+            rel_y = b["y0"] / page_h
+            in_margin = rel_y < 0.10 or rel_y > 0.90
+            if in_margin:
+                if hf_patterns and any(p.search(text) for p in hf_patterns):
+                    continue
+                if re.match(r"^\d{1,4}$", text):
+                    continue
+                # Short blocks in margins with mixed content (page nums, section refs)
+                if len(text) < 80 and re.search(r"(Sec\.|Chap\.|Chapter|Section)\s*\d", text, re.IGNORECASE):
+                    continue
+
+        btype = _classify_block(b, body_size)
+
+        if btype == "page_number":
+            continue
+
+        if btype == "heading":
+            parts.append(f"\n## {text}\n")
+        elif btype == "code":
+            parts.append(f"\n```\n{text}\n```\n")
+        elif btype == "caption":
+            parts.append(f"\n**{text}**\n")
+        else:
+            parts.append(text)
+
+    raw = "\n".join(parts)
+
+    # Fix hyphenated word breaks: "proc-\nessing" → "processing"
+    raw = re.sub(r"(\w)-\n(\w)", r"\1\2", raw)
+
+    # Fix dangling punctuation
+    raw = re.sub(r"\n([,;:])", r" \1", raw)
+
+    # Join broken lines within paragraphs (not inside code blocks)
+    sections = re.split(r"(```.*?```)", raw, flags=re.DOTALL)
+    result_parts = []
+    for i, section in enumerate(sections):
+        if section.startswith("```"):
+            result_parts.append(section)
+            continue
+        lines = section.split("\n")
+        merged = []
+        j = 0
+        while j < len(lines):
+            line = lines[j]
+            while (j + 1 < len(lines)
+                   and line.rstrip()
+                   and not line.strip().startswith("##")
+                   and not line.strip().startswith("**")
+                   and lines[j + 1].strip()
+                   and not lines[j + 1].strip().startswith("##")
+                   and not lines[j + 1].strip().startswith("**")
+                   and (re.match(r"^[a-z,;(]", lines[j + 1].strip())
+                        or re.search(r"[,;]\s*$", line.rstrip())
+                        or re.search(r"\b(the|a|an|of|in|to|for|and|or|is|are|by|on|with|from|that|which|as|but|not|if|at|be|has|have|this|than|may|can|also|when|each|into|between|all|more|both|they|their|these|it|such)\s*$", line.rstrip(), re.IGNORECASE))):
+                next_line = lines[j + 1].strip()
+                line = line.rstrip() + " " + next_line
+                j += 1
+            merged.append(line)
+            j += 1
+        result_parts.append("\n".join(merged))
+
+    raw = "".join(result_parts)
+
+    # Collapse multiple blank lines
+    raw = re.sub(r"\n{3,}", "\n\n", raw)
+
+    return raw.strip()
+
+
 def stage_extract(ch, start, end):
-    """Extract text from PDF pages, with cache invalidation on PDF change."""
+    """Extract text from PDF pages using structured block analysis."""
     log.info("EXTRACT — извлечение текста из PDF")
     cache_file = f"cache/text/pages_{start}_{end}.json"
     hash_file = f"cache/text/pages_{start}_{end}.pdfhash"
@@ -142,12 +383,31 @@ def stage_extract(ch, start, end):
 
     os.makedirs("cache/text", exist_ok=True)
     doc = fitz.open(PDF_FILE)
-    texts = {}
+
+    # Pass 1: extract all blocks with metadata
+    page_blocks = {}
+    all_blocks = []
     for i in range(start, end + 1):
         if i >= len(doc):
             break
-        texts[str(i)] = doc[i].get_text()
+        blocks = _extract_page_blocks(doc[i])
+        page_blocks[str(i)] = blocks
+        all_blocks.extend(blocks)
     doc.close()
+
+    # Pass 2: detect body font size and header/footer patterns
+    body_size = _detect_body_font_size(all_blocks)
+    if body_size:
+        log.info("Размер основного шрифта: %d pt", body_size)
+
+    hf_texts, hf_patterns = _detect_headers_footers(all_blocks, len(page_blocks))
+    if hf_texts or hf_patterns:
+        log.info("Колонтитулы: %d точных, %d паттернов", len(hf_texts), len(hf_patterns))
+
+    # Pass 3: build clean text per page
+    texts = {}
+    for pg, blocks in page_blocks.items():
+        texts[pg] = _build_page_text(blocks, body_size, hf_texts, hf_patterns)
 
     with open(cache_file, "w", encoding="utf-8") as f:
         json.dump(texts, f, ensure_ascii=False, indent=2)
@@ -160,11 +420,56 @@ def stage_extract(ch, start, end):
     return cache_file
 
 
+def stage_detect(ch, start, end):
+    """Auto-detect book profile from extracted text if not already configured."""
+    from book_profile import detect_profile, save_profile, reload_profile, _load_profile
+
+    if _load_profile() is not None:
+        log.info("DETECT — профиль книги уже существует (book_profile.yaml)")
+        return
+
+    log.info("DETECT — автоматическое определение профиля книги")
+
+    # Load all extracted texts across all chapters for better detection
+    all_texts = {}
+    for ch_num, (s, e, _title) in CHAPTERS.items():
+        cache_file = f"cache/text/pages_{s}_{e}.json"
+        if os.path.exists(cache_file):
+            with open(cache_file, encoding="utf-8") as f:
+                all_texts.update(json.load(f))
+
+    if not all_texts:
+        cache_file = f"cache/text/pages_{start}_{end}.json"
+        if os.path.exists(cache_file):
+            with open(cache_file, encoding="utf-8") as f:
+                all_texts = json.load(f)
+
+    if not all_texts:
+        log.warning("Нет извлечённого текста — пропуск detect")
+        return
+
+    book_title = ""
+    try:
+        import yaml
+        config_path = os.path.join(PROJECT_DIR, "chapters.yaml")
+        if os.path.exists(config_path):
+            with open(config_path, encoding="utf-8") as f:
+                cfg = yaml.safe_load(f)
+            book_title = cfg.get("book", {}).get("title", "")
+    except ImportError:
+        pass
+
+    detected = detect_profile(all_texts, book_title)
+    save_profile(detected)
+    reload_profile()
+
+
 def stage_manifest(ch, start, end):
     """Build chapter manifest — ground truth for validation."""
     log.info("MANIFEST — инвентаризация элементов главы")
     manifest_file = f"ch{ch}_manifest.json"
-    run_cmd(f"python3 src/extract_chapter_manifest.py -i {PDF_FILE} -c {ch} -s {start} -e {end} -j {manifest_file}")
+    script = os.path.join(PROJECT_ROOT, "src", "extract_chapter_manifest.py")
+    run_cmd(f"python3 {script} -i {PDF_FILE} -c {ch} -s {start} -e {end} -j {manifest_file}")
     return manifest_file
 
 
@@ -682,7 +987,8 @@ def stage_validate(ch, start, end):
 
     manifest_file = f"ch{ch}_manifest.json"
     manifest_arg = f"-m {manifest_file}" if os.path.exists(manifest_file) else ""
-    r = run_cmd(f"python3 src/validate_chapter.py -p ch{ch} -s {start} -e {end} {manifest_arg}", check=False)
+    script = os.path.join(PROJECT_ROOT, "src", "validate_chapter.py")
+    r = run_cmd(f"python3 {script} -p ch{ch} -s {start} -e {end} {manifest_arg}", check=False)
     passed = r.returncode == 0 if r else False
 
     if missing_count > 0:
@@ -702,7 +1008,8 @@ def stage_validate(ch, start, end):
 def stage_build(ch, start, end):
     """Build LaTeX from translations."""
     log.info("BUILD — сборка LaTeX")
-    run_cmd(f"python3 src/build_latex.py -c {ch} -s {start} -e {end}")
+    script = os.path.join(PROJECT_ROOT, "src", "build_latex.py")
+    run_cmd(f"python3 {script} -c {ch} -s {start} -e {end}")
 
     book_tex = "latex_output/book.tex"
     if os.path.exists(book_tex):
@@ -814,6 +1121,7 @@ def _compile_ssh(ch):
 
 STAGE_FUNCS = {
     "extract": stage_extract,
+    "detect": stage_detect,
     "manifest": stage_manifest,
     "figures": stage_figures,
     "translate": stage_translate,
@@ -951,7 +1259,21 @@ def _show_jobs_status(ch=None):
 # CLI
 # ---------------------------------------------------------------------------
 
+def _load_dotenv():
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
+    if not os.path.exists(env_path):
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            os.environ.setdefault(key.strip(), val.strip())
+
+
 def main():
+    _load_dotenv()
     parser = argparse.ArgumentParser(description="Book translation pipeline")
     parser.add_argument("--chapter", "-c", type=int, help="Chapter number")
     parser.add_argument("--pages", "-p", help="Page range (e.g. 154-217)")

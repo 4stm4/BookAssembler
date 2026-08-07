@@ -216,15 +216,6 @@ def print_agent_commands(start, end, chapter_num, batch_size=16):
         print()
 
 
-# Chapter boundaries for "The 8088 and 8086 Microprocessors"
-CHAPTERS_8086 = {
-    0: (0, 13, "Front Matter"),
-    1: (14, 30, "Introduction to Microprocessors"),
-    2: (31, 88, "Software Architecture"),
-    3: (89, 153, "DEBUG Program"),
-    4: (154, 217, "8088/8086 Programming 1"),
-    5: (218, 300, "8088/8086 Programming 2"),
-}
 
 
 def main():
@@ -246,10 +237,7 @@ def main():
 
     ensure_dirs()
 
-    if args.chapter is not None and args.chapter in CHAPTERS_8086:
-        start, end, name = CHAPTERS_8086[args.chapter]
-        print(f"Chapter {args.chapter}: {name} (pages {start}-{end})")
-    elif args.pages:
+    if args.pages:
         parts = args.pages.split("-")
         start, end = int(parts[0]), int(parts[1])
         name = f"pages_{start}_{end}"

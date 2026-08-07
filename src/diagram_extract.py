@@ -1202,11 +1202,9 @@ def ocr_primitives(img: np.ndarray, pdf_path: str, page_num: int,
     _, otsu = cv2.threshold(big, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     data = pytesseract.image_to_data(otsu, config='--psm 11',
                                       output_type=pytesseract.Output.DICT)
-    # Common OCR corrections for 8086 diagrams
+    # Common OCR corrections
     ocr_fixes = {
-        "oP": "SP", "Sl": "SI", "Dl": "DI", "Cl": "CI",
-        "KX": "XX", "BxX": "BX", "AX,BxX": "AX,BX",
-        "DABC": "0ABC", "dss": "", "(al": "(a)",
+        "(al": "(a)",
     }
 
     ocr_items = []
@@ -1809,7 +1807,7 @@ def analyze_chapter(pdf_path: str, chapter: int, start: int, end: int,
 
 def main():
     parser = argparse.ArgumentParser(description="Diagram extraction and analysis")
-    parser.add_argument("--input", "-i", default="80888086micropro0000trie_2.pdf")
+    parser.add_argument("--input", "-i", required=True, help="Input PDF file")
     parser.add_argument("--chapter", "-c", type=int)
     parser.add_argument("--start", "-s", type=int)
     parser.add_argument("--end", "-e", type=int)

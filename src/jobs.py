@@ -19,8 +19,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_DIR = Path(os.environ.get("BOOKASSEMBLER_PROJECT_DIR",
+                                  str(PROJECT_ROOT / "project")))
 
-DEFAULT_DSN = f"sqlite+aiosqlite:///{PROJECT_ROOT / 'cache' / 'jobs' / 'bookassembler.sqlite3'}"
+DEFAULT_DSN = f"sqlite+aiosqlite:///{PROJECT_DIR / 'cache' / 'jobs' / 'bookassembler.sqlite3'}"
 
 
 def _get_dsn() -> str:
@@ -57,17 +59,17 @@ class TranslateBatchExecutor(Executor):
         sys.path.insert(0, str(PROJECT_ROOT / "src"))
         from translator import TranslatorClient, TranslationRequest, Glossary
 
-        translations_dir = PROJECT_ROOT / "claude_translations"
+        translations_dir = PROJECT_DIR / "claude_translations"
         translations_dir.mkdir(exist_ok=True)
 
-        source_json = PROJECT_ROOT / "cache" / "text" / f"pages_{start}_{end}.json"
-        manifest_file = PROJECT_ROOT / f"ch{ch}_manifest.json"
+        source_json = PROJECT_DIR / "cache" / "text" / f"pages_{start}_{end}.json"
+        manifest_file = PROJECT_DIR / f"ch{ch}_manifest.json"
         manifest_data = None
         if manifest_file.exists():
             manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
 
-        glossary = Glossary.load(str(PROJECT_ROOT / "glossary.json"))
-        client = TranslatorClient.create("api", str(PROJECT_ROOT / "glossary.json"))
+        glossary = Glossary.load(str(PROJECT_DIR / "glossary.json"))
+        client = TranslatorClient.create("api", str(PROJECT_DIR / "glossary.json"))
 
         request = TranslationRequest.from_extracted_json(
             str(source_json), ch,
@@ -118,7 +120,7 @@ class AnalyzeFigureExecutor(Executor):
         pdf_file = payload.get("pdf_file", "")
 
         cache_key = f"fig_{fig_number.replace('.', '_')}.json"
-        cache_dir = PROJECT_ROOT / "cache" / "diagram_analysis"
+        cache_dir = PROJECT_DIR / "cache" / "diagram_analysis"
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_path = cache_dir / cache_key
 
@@ -131,7 +133,7 @@ class AnalyzeFigureExecutor(Executor):
         sys.path.insert(0, str(PROJECT_ROOT / "src"))
         from diagram_extract import analyze_figure
 
-        pdf_path = str(PROJECT_ROOT / pdf_file) if pdf_file else ""
+        pdf_path = str(PROJECT_DIR / pdf_file) if pdf_file else ""
 
         loop = asyncio.get_event_loop()
         analysis = await loop.run_in_executor(
@@ -155,7 +157,7 @@ class RenderFigurePageExecutor(Executor):
         chapter = payload["chapter"]
         pdf_file = payload.get("pdf_file", "")
 
-        images_dir = PROJECT_ROOT / f"ch{chapter}_figures"
+        images_dir = PROJECT_DIR / f"ch{chapter}_figures"
         images_dir.mkdir(exist_ok=True)
         output_path = images_dir / f"page_{page}.png"
 
@@ -166,7 +168,7 @@ class RenderFigurePageExecutor(Executor):
         await ctx.log(f"Рендер страницы {page}")
 
         import fitz
-        pdf_path = str(PROJECT_ROOT / pdf_file) if pdf_file else ""
+        pdf_path = str(PROJECT_DIR / pdf_file) if pdf_file else ""
         loop = asyncio.get_event_loop()
 
         def _render():
@@ -198,7 +200,7 @@ class BuildChapterExecutor(Executor):
             None, lambda: build_chapter(ch, start, end)
         )
 
-        output_path = PROJECT_ROOT / "latex_output" / f"ch{ch:02d}.tex"
+        output_path = PROJECT_DIR / "latex_output" / f"ch{ch:02d}.tex"
         if not output_path.exists():
             raise RuntimeError(f"build не создал {output_path}")
 
@@ -214,14 +216,14 @@ class CompileBookExecutor(Executor):
         await ctx.log(f"Компиляция главы {ch}")
 
         sys.path.insert(0, str(PROJECT_ROOT / "src"))
-        os.chdir(PROJECT_ROOT)
+        os.chdir(PROJECT_DIR)
 
         from pipeline import stage_compile
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, lambda: stage_compile(ch, 0, 0))
 
-        pdf_name = PROJECT_ROOT / f"ch{ch}_compiled.pdf"
-        book_pdf = PROJECT_ROOT / "latex_output" / "book.pdf"
+        pdf_name = PROJECT_DIR / f"ch{ch}_compiled.pdf"
+        book_pdf = PROJECT_DIR / "latex_output" / "book.pdf"
         if not pdf_name.exists() and not book_pdf.exists():
             raise RuntimeError("Компиляция не создала PDF")
 

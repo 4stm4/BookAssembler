@@ -4,15 +4,19 @@
 # Python
 __pycache__/
 *.pyc
+*.egg-info/
+.venv/
 
 # macOS
 .DS_Store
 
-# Данные — PDF-книги, извлечённый текст, изображения, переводы, LaTeX-выход
+# Рабочая папка проекта (данные конкретной книги)
+project/
+
+# Всё что не код — данные, кэш, результаты
 *.pdf
-data/
 cache/
-*.pdfhash
+data/
 claude_translations/
 latex_output/
 figures/
@@ -21,3 +25,4 @@ ch*_tasks.json
 ch*_figures/
 ch*_compiled.pdf
 glossary_suggestions.json
+*.pdfhash

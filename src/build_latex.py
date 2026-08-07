@@ -199,6 +199,44 @@ def md_to_latex(text, chapter_num):
     return "\n".join(result)
 
 
+def _chapter_preamble(chapter_num: int) -> str:
+    return (
+        f"% Chapter {chapter_num} - auto-generated\n"
+        "\\documentclass[12pt,a4paper]{report}\n"
+        "\\usepackage[utf8]{inputenc}\n"
+        "\\usepackage[T2A]{fontenc}\n"
+        "\\usepackage[russian]{babel}\n"
+        "\\usepackage{listings}\n"
+        "\\usepackage{graphicx}\n"
+        "\\usepackage{amsmath}\n"
+        "\\usepackage{geometry}\n"
+        "\\geometry{margin=2.5cm}\n"
+        "\\lstset{basicstyle=\\ttfamily\\small, breaklines=true, frame=single}\n"
+        "\\lstdefinestyle{debug}{basicstyle=\\ttfamily\\small, frame=single}\n"
+        "\\newenvironment{examplebox}{\\begin{quote}\\itshape}{\\end{quote}}\n"
+        "\\begin{document}\n"
+    )
+
+
+def _strip_llm_latex_artifacts(text: str) -> str:
+    """Remove raw LaTeX commands that LLMs sometimes inject into translations."""
+    drop_patterns = [
+        r"\\begin\{document\}",
+        r"\\end\{document\}",
+        r"\\documentclass[^}]*\}",
+        r"\\usepackage[^}]*\}",
+        r"\\normalsize\b",
+        r"\\begin\{enumerate\}",
+        r"\\end\{enumerate\}",
+        r"\\begin\{itemize\}",
+        r"\\end\{itemize\}",
+        r"\\item\b",
+    ]
+    for pat in drop_patterns:
+        text = re.sub(pat, "", text)
+    return text
+
+
 def is_debug_session(text):
     """Check if code block is a DEBUG session."""
     return book_profile.has_debug_session(text)
@@ -290,6 +328,10 @@ def convert_inline(text):
         digits = m.group(0).translate(sub_map)
         return f"$_{{{digits}}}$"
     text = re.sub(r"[₀₁₂₃₄₅₆₇₈₉]+", sub_repl, text)
+
+    # Escape bare ^ and _ outside math/code (must be after subscript handling)
+    text = re.sub(r'(?<!\$)(?<!\\)\^', r'\\textasciicircum{}', text)
+    text = re.sub(r'(?<!\$)(?<!\\)_(?!\{)', r'\\_', text)
 
     # Special Unicode symbols
     text = text.replace("↵", "$\\hookleftarrow$")
@@ -456,6 +498,7 @@ def build_chapter(chapter_num, start, end, translations_dir="claude_translations
             parts.append(text)
 
     full_md = "\n\n".join(parts)
+    full_md = _strip_llm_latex_artifacts(full_md)
     latex_content = md_to_latex(full_md, chapter_num)
 
     # Insert figure \input{} commands where figures are referenced
@@ -470,8 +513,9 @@ def build_chapter(chapter_num, start, end, translations_dir="claude_translations
 
     out_path = os.path.join("latex_output", f"ch{chapter_num:02d}.tex")
     with open(out_path, "w", encoding="utf-8") as f:
-        f.write(f"% Chapter {chapter_num} - auto-generated\n")
+        f.write(_chapter_preamble(chapter_num))
         f.write(latex_content)
+        f.write("\n\\end{document}\n")
 
     print(f"Written: {out_path} ({len(latex_content)//1024} KB)")
     return out_path
