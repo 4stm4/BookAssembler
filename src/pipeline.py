@@ -84,16 +84,17 @@ def _load_book_config(path="chapters.yaml"):
     pdf = book.get("pdf", "")
     if not pdf:
         log.error("chapters.yaml: отсутствует book.pdf")
-        return "", {}, "en"
+        return "", {}, "en", "en"
     target_lang = book.get("target_lang", "en")
+    source_lang = book.get("source_lang", "en")
     chapters = {}
     for ch_num, ch_data in cfg.get("chapters", {}).items():
         pages = ch_data["pages"]
         chapters[int(ch_num)] = (pages[0], pages[1], ch_data["title"])
-    return pdf, chapters, target_lang
+    return pdf, chapters, target_lang, source_lang
 
 
-PDF_FILE, CHAPTERS, TARGET_LANG = _load_book_config()
+PDF_FILE, CHAPTERS, TARGET_LANG, SOURCE_LANG = _load_book_config()
 
 COMPILE_HOST = os.environ.get("COMPILE_HOST", "")
 COMPILE_DIR = os.environ.get("COMPILE_DIR", "")
@@ -122,7 +123,7 @@ def stage_extract(ch, start, end):
     from extract import BookExtractor
 
     log.info("EXTRACT — извлечение текста из PDF")
-    extractor = BookExtractor(PDF_FILE)
+    extractor = BookExtractor(PDF_FILE, source_lang=SOURCE_LANG)
     return extractor.extract(start, end)
 
 

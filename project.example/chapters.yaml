@@ -1,7 +1,8 @@
 book:
   title: "My Technical Book"
   pdf: "my_book.pdf"
-  target_lang: ru  # ru, en, de, fr, es, zh, ja, ko, ar, hi, uk, pl, ...
+  source_lang: en  # язык оригинала: en, ru, de, fr, es, ...
+  target_lang: ru  # язык перевода: ru, en, de, fr, es, zh, ja, ko, ar, hi, uk, pl, ...
 
 chapters:
   1:
