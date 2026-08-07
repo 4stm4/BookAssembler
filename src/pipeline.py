@@ -80,18 +80,20 @@ def _load_book_config(path="chapters.yaml"):
     with open(config_path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
-    pdf = cfg.get("book", {}).get("pdf", "")
+    book = cfg.get("book", {})
+    pdf = book.get("pdf", "")
     if not pdf:
         log.error("chapters.yaml: отсутствует book.pdf")
-        return "", {}
+        return "", {}, "en"
+    target_lang = book.get("target_lang", "en")
     chapters = {}
     for ch_num, ch_data in cfg.get("chapters", {}).items():
         pages = ch_data["pages"]
         chapters[int(ch_num)] = (pages[0], pages[1], ch_data["title"])
-    return pdf, chapters
+    return pdf, chapters, target_lang
 
 
-PDF_FILE, CHAPTERS = _load_book_config()
+PDF_FILE, CHAPTERS, TARGET_LANG = _load_book_config()
 
 COMPILE_HOST = os.environ.get("COMPILE_HOST", "")
 COMPILE_DIR = os.environ.get("COMPILE_DIR", "")
@@ -322,6 +324,7 @@ def stage_translate(ch, start, end):
         glossary=glossary,
         manifest=manifest,
     )
+    request.target_lang = TARGET_LANG
     request.pages = [p for p in request.pages if p.page_number in missing]
 
     result = client.translate(request)

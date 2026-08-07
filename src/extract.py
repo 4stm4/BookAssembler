@@ -20,9 +20,11 @@ log = logging.getLogger("bookassembler")
 class BookExtractor:
     """Extracts and cleans text from PDF pages."""
 
-    def __init__(self, pdf_path: str, cache_dir: str = "cache/text"):
+    def __init__(self, pdf_path: str, cache_dir: str = "cache/text",
+                 images_dir: str = "cache/images"):
         self.pdf_path = pdf_path
         self.cache_dir = cache_dir
+        self.images_dir = images_dir
 
     def extract(self, start: int, end: int) -> str:
         """Extract pages [start, end] to JSON cache. Returns cache file path."""
@@ -44,16 +46,39 @@ class BookExtractor:
         os.makedirs(self.cache_dir, exist_ok=True)
         doc = fitz.open(self.pdf_path)
 
-        # Pass 1: extract all blocks with metadata
+        # Pass 1: extract all blocks with metadata + save images
         page_blocks: dict[str, list[dict]] = {}
         all_blocks: list[dict] = []
+        img_dir = os.path.join(self.images_dir, f"pages_{start}_{end}")
+        os.makedirs(img_dir, exist_ok=True)
+        img_count = 0
         for i in range(start, end + 1):
             if i >= len(doc):
                 break
-            blocks = self._extract_page_blocks(doc[i])
+            page = doc[i]
+            blocks = self._extract_page_blocks(page)
+            # Save embedded images
+            for j, img_info in enumerate(page.get_images(full=True)):
+                xref = img_info[0]
+                try:
+                    pix = fitz.Pixmap(doc, xref)
+                    if pix.n > 4:
+                        pix = fitz.Pixmap(fitz.csRGB, pix)
+                    if pix.width >= 50 and pix.height >= 50:
+                        fname = f"page_{i}_img_{j}.png"
+                        pix.save(os.path.join(img_dir, fname))
+                        img_count += 1
+                        for b in blocks:
+                            if b["block_type"] == "image":
+                                b["image_file"] = fname
+                                break
+                except Exception:
+                    pass
             page_blocks[str(i)] = blocks
             all_blocks.extend(blocks)
         doc.close()
+        if img_count:
+            log.info("Сохранено %d изображений -> %s", img_count, img_dir)
 
         # Pass 2: detect body font size and header/footer patterns
         body_size = self._detect_body_font_size(all_blocks)
@@ -149,6 +174,47 @@ class BookExtractor:
             })
 
         return results
+
+    # ------------------------------------------------------------------
+    # Column detection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _detect_columns(blocks: list[dict]) -> int:
+        """Detect if the page uses a multi-column layout.
+
+        Returns the number of columns (1 or 2). Looks for a bimodal
+        distribution of block x-starts with a clear gap in the middle.
+        """
+        text_blocks = [b for b in blocks if b["block_type"] == "text"
+                       and len(b["text"].strip()) > 20]
+        if len(text_blocks) < 4:
+            return 1
+
+        page_w = text_blocks[0].get("page_width", 0)
+        if not page_w:
+            return 1
+
+        mid = page_w / 2
+        left = [b for b in text_blocks if b["x1"] < mid * 1.1]
+        right = [b for b in text_blocks if b["x0"] > mid * 0.9]
+
+        if len(left) >= 3 and len(right) >= 3:
+            return 2
+        return 1
+
+    @staticmethod
+    def _sort_blocks_by_columns(blocks: list[dict], num_columns: int) -> list[dict]:
+        """Sort blocks in reading order: column by column, top to bottom."""
+        if num_columns <= 1:
+            return sorted(blocks, key=lambda b: (b["y0"], b["x0"]))
+
+        page_w = blocks[0].get("page_width", 0) if blocks else 0
+        mid = page_w / 2 if page_w else 0
+
+        left = sorted([b for b in blocks if b["x0"] < mid], key=lambda b: b["y0"])
+        right = sorted([b for b in blocks if b["x0"] >= mid], key=lambda b: b["y0"])
+        return left + right
 
     # ------------------------------------------------------------------
     # Analysis
@@ -254,10 +320,17 @@ class BookExtractor:
                          hf_texts: set[str],
                          hf_patterns: list[re.Pattern] | None = None) -> str:
         """Build clean text from structured blocks for a single page."""
+        # Sort blocks in reading order (handles multi-column layouts)
+        num_cols = cls._detect_columns(blocks)
+        blocks = cls._sort_blocks_by_columns(blocks, num_cols)
+
         parts = []
 
         for b in blocks:
             if b["block_type"] == "image":
+                img_file = b.get("image_file")
+                if img_file:
+                    parts.append(f"\n![image]({img_file})\n")
                 continue
 
             text = b["text"].strip()

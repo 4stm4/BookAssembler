@@ -1,7 +1,7 @@
 book:
   title: "My Technical Book"
   pdf: "my_book.pdf"
-  target_lang: ru
+  target_lang: ru  # ru, en, de, fr, es, zh, ja, ko, ar, hi, uk, pl, ...
 
 chapters:
   1:

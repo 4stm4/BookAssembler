@@ -284,7 +284,7 @@ def detect_profile(texts: dict[str, str], book_title: str = "") -> BookProfile:
 
     # 8. Build description and prompt intro from book title
     desc = book_title if book_title else "техническая книга"
-    prompt_intro = f"Переведи следующий текст из книги «{desc}» на русский язык.\n"
+    prompt_intro = ""
 
     detected = BookProfile(
         asm_mnemonics=asm_mnemonics,

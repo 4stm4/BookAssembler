@@ -180,16 +180,17 @@ def load_glossary():
         return ""
     with open(glossary_path) as f:
         g = json.load(f)
-    lines = ["СЛОВАРЬ ТЕРМИНОВ (обязательно использовать):"]
+    lines = ["GLOSSARY (must use these translations):"]
     for en, info in g.get("terms", {}).items():
         if isinstance(info, dict):
-            lines.append(f"  {en} → {info['ru']} ({info.get('context', '')})")
-    lines.append("\nНЕ ПЕРЕВОДИТЬ (оставить на английском):")
+            translation = info.get("translation", info.get("ru", ""))
+            lines.append(f"  {en} → {translation} ({info.get('context', '')})")
+    lines.append("\nDO NOT TRANSLATE (keep as-is):")
     keep = g.get("keep_as_is", {})
     for cat, vals in keep.items():
         if isinstance(vals, list):
             lines.append(f"  {cat}: {', '.join(vals[:15])}{'...' if len(vals) > 15 else ''}")
-    lines.append("\nПРАВИЛА ФОРМАТИРОВАНИЯ:")
+    lines.append("\nFORMATTING RULES:")
     for rule, desc in g.get("formatting_rules", {}).items():
         lines.append(f"  {rule}: {desc}")
     return "\n".join(lines)

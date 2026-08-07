@@ -142,15 +142,16 @@ class Glossary:
         )
 
     def to_prompt(self) -> str:
-        lines = ["СЛОВАРЬ ТЕРМИНОВ (обязательно использовать):"]
+        lines = ["GLOSSARY (must use these translations):"]
         for en, info in self.terms.items():
             if isinstance(info, dict):
-                lines.append(f"  {en} → {info['ru']} ({info.get('context', '')})")
-        lines.append("\nНЕ ПЕРЕВОДИТЬ (оставить как есть):")
+                translation = info.get("translation", info.get("ru", ""))
+                lines.append(f"  {en} → {translation} ({info.get('context', '')})")
+        lines.append("\nDO NOT TRANSLATE (keep as-is):")
         for cat, vals in self.keep_as_is.items():
             if isinstance(vals, list):
                 lines.append(f"  {cat}: {', '.join(vals[:20])}")
-        lines.append("\nПРАВИЛА ФОРМАТИРОВАНИЯ:")
+        lines.append("\nFORMATTING RULES:")
         for rule, desc in self.formatting_rules.items():
             lines.append(f"  {rule}: {desc}")
         return "\n".join(lines)
@@ -218,29 +219,42 @@ class Glossary:
 # Validators (replace regex autofix with structured checks)
 # ---------------------------------------------------------------------------
 
+_LANG_CHAR_RANGES = {
+    "ru": ('\u0400', '\u04ff'),
+    "uk": ('\u0400', '\u04ff'),
+    "zh": ('\u4e00', '\u9fff'),
+    "ja": ('\u3040', '\u30ff'),
+    "ko": ('\uac00', '\ud7af'),
+    "ar": ('\u0600', '\u06ff'),
+    "hi": ('\u0900', '\u097f'),
+}
+
+
 def validate_translation(page: PageContent, translated_text: str,
-                         glossary: Glossary | None = None) -> list[str]:
+                         glossary: Glossary | None = None,
+                         target_lang: str = "ru") -> list[str]:
     """Validate a single page translation. Returns list of issues."""
     issues = []
 
     if not translated_text or not translated_text.strip():
-        issues.append("Пустой перевод")
+        issues.append("Empty translation")
         return issues
 
-    # 1. Ratio check: translation should be mostly Russian
-    ru_chars = sum(1 for c in translated_text if '\u0400' <= c <= '\u04ff')
-    en_chars = sum(1 for c in translated_text if 'a' <= c.lower() <= 'z')
-    text_no_code = re.sub(r'```.*?```', '', translated_text, flags=re.DOTALL)
-    ru_nc = sum(1 for c in text_no_code if '\u0400' <= c <= '\u04ff')
-    en_nc = sum(1 for c in text_no_code if 'a' <= c.lower() <= 'z')
-    total_nc = ru_nc + en_nc
-    if total_nc > 50 and ru_nc / total_nc < 0.4:
-        issues.append(f"Мало русского текста ({ru_nc}/{total_nc} = {ru_nc/total_nc:.0%})")
+    # 1. Ratio check: translation should contain target language characters
+    char_range = _LANG_CHAR_RANGES.get(target_lang)
+    if char_range:
+        lo, hi = char_range
+        text_no_code = re.sub(r'```.*?```', '', translated_text, flags=re.DOTALL)
+        target_chars = sum(1 for c in text_no_code if lo <= c <= hi)
+        en_chars = sum(1 for c in text_no_code if 'a' <= c.lower() <= 'z')
+        total = target_chars + en_chars
+        if total > 50 and target_chars / total < 0.4:
+            issues.append(f"Low target language ratio ({target_chars}/{total} = {target_chars/total:.0%})")
 
     # 2. Code blocks: if source has code, translation should have code blocks
     if page.has_code or page.has_debug_session:
         if '```' not in translated_text:
-            issues.append("Исходник содержит код, но в переводе нет блоков кода")
+            issues.append("Source has code but translation has no code blocks")
 
     # 3. Glossary compliance + auto-suggest
     if glossary:
@@ -412,7 +426,7 @@ class APIBackend(TranslatorBackend):
                     else:
                         translated_text = ""
 
-            issues = validate_translation(page, translated_text, glossary)
+            issues = validate_translation(page, translated_text, glossary, request.target_lang)
             results.append(TranslatedPage(
                 page_number=page.page_number,
                 text=translated_text,
@@ -421,9 +435,21 @@ class APIBackend(TranslatorBackend):
 
         return TranslationResult(pages=results, chapter=request.chapter)
 
+    _LANG_NAMES = {
+        "ru": "Russian", "en": "English", "de": "German", "fr": "French",
+        "es": "Spanish", "it": "Italian", "pt": "Portuguese", "zh": "Chinese",
+        "ja": "Japanese", "ko": "Korean", "ar": "Arabic", "hi": "Hindi",
+        "uk": "Ukrainian", "pl": "Polish", "cs": "Czech", "tr": "Turkish",
+        "nl": "Dutch", "sv": "Swedish", "da": "Danish", "fi": "Finnish",
+    }
+
     def _build_prompt(self, page: PageContent,
                       request: TranslationRequest) -> str:
-        parts = [book_profile.translation_prompt_intro]
+        lang = request.target_lang
+        lang_name = self._LANG_NAMES.get(lang, lang)
+        desc = book_profile.book_description or "technical book"
+
+        parts = [f"Translate the following text from the book \"{desc}\" into {lang_name}.\n"]
 
         if request.glossary:
             parts.append(request.glossary.to_prompt())
@@ -431,22 +457,22 @@ class APIBackend(TranslatorBackend):
 
         hints = []
         if page.has_code:
-            hints.append("содержит листинг кода — сохрани в блоке ```")
+            hints.append("contains code listing — keep in ``` block")
         if page.has_debug_session:
-            hints.append("содержит DEBUG-сессию — весь вывод в одном блоке ```")
+            hints.append("contains DEBUG session — keep all output in one ``` block")
         if page.has_table:
-            hints.append("содержит таблицу — используй markdown-таблицу")
+            hints.append("contains a table — use markdown table")
         if page.has_figure_ref:
-            hints.append(f"ссылается на Рисунок {page.has_figure_ref}")
+            hints.append(f"references Figure {page.has_figure_ref}")
         if hints:
-            parts.append("Структурные подсказки: " + "; ".join(hints))
+            parts.append("Structural hints: " + "; ".join(hints))
             parts.append("")
 
         if request.manifest_context:
             parts.append(request.manifest_context)
             parts.append("")
 
-        parts.append("--- ТЕКСТ ДЛЯ ПЕРЕВОДА ---")
+        parts.append("--- TEXT TO TRANSLATE ---")
         parts.append(page.text)
 
         return "\n".join(parts)
@@ -513,7 +539,7 @@ class TranslatorClient:
             pg_str = str(pg)
             translated = all_translations.get(pg_str, "")
             source = source_pages.get(pg, PageContent(page_number=pg, text=""))
-            issues = validate_translation(source, translated, self.glossary) if translated else ["Нет перевода"]
+            issues = validate_translation(source, translated, self.glossary, request.target_lang) if translated else ["No translation"]
             results.append(TranslatedPage(
                 page_number=pg,
                 text=translated,
