@@ -1,10 +1,10 @@
+import os
+
 import fitz
 
 
 def save_page_images(doc, page, page_num: int,
                      blocks: list[dict], img_dir: str) -> int:
-    import os
-
     saved = 0
     image_blocks = [b for b in blocks if b["block_type"] == "image"]
 

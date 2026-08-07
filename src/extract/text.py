@@ -2,10 +2,10 @@ import re
 
 from .columns import detect_columns, sort_blocks_by_columns
 from .headings import classify_block
-from .tables import detect_table, blocks_to_markdown_table
 from .lang import get_continuation_pattern
+from .tables import blocks_to_markdown_table, detect_table
 
-LIST_BULLET_RE = re.compile(
+_LIST_BULLET_RE = re.compile(
     r"^(?:[•‣◦⁃∙•·\-\*]"
     r"|[a-z]\)"
     r"|\d{1,3}[\.\)]"
@@ -13,9 +13,9 @@ LIST_BULLET_RE = re.compile(
     re.IGNORECASE,
 )
 
-FOOTNOTE_DEF_RE = re.compile(r"^(\d+)\s+(.+)", re.MULTILINE)
+_FOOTNOTE_DEF_RE = re.compile(r"^(\d+)\s+(.+)", re.MULTILINE)
 
-XREF_RE = re.compile(
+_XREF_RE = re.compile(
     r"((?:Figure|Fig\.|Table|Example|Рис\.|Рисунок|Таблица|Пример)"
     r"\s+(\d+[\-\.]\d+|\d+))",
     re.IGNORECASE,
@@ -24,22 +24,22 @@ XREF_RE = re.compile(
 _DEFAULT_CONTINUATION_RE = get_continuation_pattern("en")
 
 
-def detect_list_item(text: str) -> tuple[str, str] | None:
-    m = LIST_BULLET_RE.match(text)
+def _detect_list_item(text: str) -> tuple[str, str] | None:
+    m = _LIST_BULLET_RE.match(text)
     if m:
         return m.group().strip(), text[m.end():]
     return None
 
 
-def add_cross_references(text: str) -> str:
+def _add_cross_references(text: str) -> str:
     def _repl(m):
         full = m.group(1)
         anchor = re.sub(r"[^a-z0-9]+", "-", full.lower()).strip("-")
         return f"[{full}](#{anchor})"
-    return XREF_RE.sub(_repl, text)
+    return _XREF_RE.sub(_repl, text)
 
 
-def join_lines(raw: str, continuation_re: re.Pattern | None) -> str:
+def _join_lines(raw: str, continuation_re: re.Pattern | None) -> str:
     sections = re.split(r"(```.*?```)", raw, flags=re.DOTALL)
     result_parts = []
 
@@ -192,7 +192,7 @@ def build_page_text(blocks: list[dict], body_size: float,
                 i += len(table_blocks)
                 continue
 
-        list_item = detect_list_item(text)
+        list_item = _detect_list_item(text)
         if list_item:
             marker, content = list_item
             if re.match(r"\d+[\.\)]", marker):
@@ -203,7 +203,7 @@ def build_page_text(blocks: list[dict], body_size: float,
             continue
 
         if page_h and b["y0"] / page_h > 0.85:
-            fn_match = FOOTNOTE_DEF_RE.match(text)
+            fn_match = _FOOTNOTE_DEF_RE.match(text)
             if fn_match:
                 fn_num = fn_match.group(1)
                 fn_text = fn_match.group(2)
@@ -217,8 +217,8 @@ def build_page_text(blocks: list[dict], body_size: float,
     raw = "\n".join(parts)
     raw = re.sub(r"(\w)-\n(\w)", r"\1\2", raw)
     raw = re.sub(r"\n([,;:])", r" \1", raw)
-    raw = add_cross_references(raw)
-    raw = join_lines(raw, _DEFAULT_CONTINUATION_RE)
+    raw = _add_cross_references(raw)
+    raw = _join_lines(raw, _DEFAULT_CONTINUATION_RE)
     raw = re.sub(r"\n{3,}", "\n\n", raw)
 
     return raw.strip()

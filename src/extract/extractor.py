@@ -6,8 +6,7 @@ import os
 import fitz
 
 from .blocks import extract_page_blocks
-from .columns import detect_columns, sort_blocks_by_columns
-from .headings import detect_body_font_size, build_heading_hierarchy
+from .headings import build_heading_hierarchy, detect_body_font_size
 from .headers_footers import detect_headers_footers
 from .images import save_page_images
 from .lang import get_continuation_pattern
