@@ -12,6 +12,7 @@ from src.jobs.manager import (
     ResourceManager,
     ResourceLimits,
 )
+from src.jobs.pyjobkit_bridge import KAEGenericExecutor, PyJobKitBridge
 
 __all__ = [
     "JobManager",
@@ -19,4 +20,6 @@ __all__ = [
     "JobStatus",
     "ResourceManager",
     "ResourceLimits",
+    "PyJobKitBridge",
+    "KAEGenericExecutor",
 ]

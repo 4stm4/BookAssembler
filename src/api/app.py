@@ -17,10 +17,22 @@ Guarantees:
 - Integrates JobManager, HITLManager, ArtifactStore, KnowledgeDocument, and SEPManager
 """
 
-from typing import Any, Dict, List, Optional
+import asyncio
+import json
+from typing import Any, AsyncGenerator, Dict, List, Optional
 from uuid import uuid4
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile, status
+from fastapi import (
+    FastAPI,
+    File,
+    HTTPException,
+    Query,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.adapters.providers import (
@@ -33,6 +45,7 @@ from src.adapters.providers import (
 from src.artifacts.store import ArtifactStore
 from src.hitl.manager import CorrectionStatus, HITLManager, HITLTaskItem
 from src.jobs.manager import JobManager, JobRecord, JobStatus
+from src.jobs.pyjobkit_bridge import PyJobKitBridge
 from src.krm.models import (
     BaseKRMNode,
     ContainerUnit,
@@ -144,6 +157,17 @@ def create_app() -> FastAPI:
     hitl_manager = HITLManager()
     artifact_store = ArtifactStore()
     sep_manager = SEPManager()
+    pyjobkit_bridge = PyJobKitBridge()
+
+    app.state.pyjobkit_bridge = pyjobkit_bridge
+
+    @app.on_event("startup")
+    async def startup_event() -> None:
+        pyjobkit_bridge.start_worker()
+
+    @app.on_event("shutdown")
+    async def shutdown_event() -> None:
+        await pyjobkit_bridge.stop_worker()
 
     # In-memory store for documents associated with jobs
     docs_store: Dict[str, KnowledgeDocument] = {}
@@ -469,6 +493,60 @@ def create_app() -> FastAPI:
             status=job.status.value,
             source_uri=job.source_uri,
         )
+
+    # --- PyJobKit Reactive SSE and WebSocket Endpoints ---
+
+    @app.get("/api/v1/jobs/stream")
+    async def stream_jobs() -> StreamingResponse:
+        """
+        Server-Sent Events (SSE) endpoint broadcasting all PyJobKit job status and progress events.
+        """
+        queue = pyjobkit_bridge.subscribe_global_events()
+
+        async def event_generator() -> AsyncGenerator[str, None]:
+            yield ": connected\n\n"
+            try:
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=0.5)
+                        yield f"data: {json.dumps(event)}\n\n"
+                    except asyncio.TimeoutError:
+                        yield ": keep-alive\n\n"
+            except (asyncio.CancelledError, GeneratorExit):
+                pass
+            finally:
+                pyjobkit_bridge.unsubscribe_global_events(queue)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.websocket("/api/v1/ws/jobs/{job_id}")
+    async def websocket_job_status(websocket: WebSocket, job_id: str) -> None:
+        """
+        WebSocket endpoint tracking real-time status and progress events for a specific PyJobKit job_id.
+        """
+        await websocket.accept()
+        queue = pyjobkit_bridge.subscribe_job_events(job_id)
+
+        try:
+            while True:
+                event = await queue.get()
+                await websocket.send_json(event)
+                if event.get("event") in ("job_completed", "job_failed"):
+                    break
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+        finally:
+            pyjobkit_bridge.unsubscribe_job_events(job_id, queue)
 
     return app
 

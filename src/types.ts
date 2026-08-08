@@ -213,3 +213,84 @@ export interface FigureDiagram {
   reviews?: string[];
   image_size?: [number, number];
 }
+
+export interface KAEJobEvent {
+  event: 'job_started' | 'job_progress' | 'job_completed' | 'job_failed';
+  job_id: string;
+  job_type: string;
+  payload?: Record<string, any>;
+  progress?: number;
+  status?: string;
+  data?: {
+    value?: number;
+    message?: string;
+  };
+  result?: Record<string, any>;
+  timestamp_utc?: string;
+  error?: string;
+}
+
+export interface HITLTask {
+  task_id: string;
+  target_krm_id: string;
+  current_confidence: number;
+  status: 'PENDING_HUMAN_REVIEW' | 'VERIFIED_CORRECT' | 'HUMAN_OVERRIDDEN' | string;
+  suggested_fix: {
+    node_type?: string;
+    original_text?: string;
+    suggested_text?: string;
+    reason?: string;
+    [key: string]: any;
+  };
+  reviewer_id?: string | null;
+}
+
+export interface SEPProvider {
+  provider_id: string;
+  name: string;
+  sep_type: 'local_nvme' | 's3_minio' | 'webdav' | 'gdrive' | string;
+  is_active: boolean;
+}
+
+export interface SEPRemoteFile {
+  file_id: string;
+  name: string;
+  is_directory: boolean;
+  size_bytes: number;
+  mime_type: string;
+  path: string;
+  modified_at_utc: string;
+}
+
+export interface KRMNode {
+  id: string;
+  type: string;
+  confidence_score: number;
+  title?: string;
+  text?: string;
+  children?: KRMNode[];
+}
+
+export interface GraphVisualizationData {
+  job_id: string;
+  knowledge_graph: {
+    nodes: Array<{ id: string; type: string; confidence: number; label?: string }>;
+    edges: Array<{ source: string; target: string; relation?: string }>;
+  };
+  reading_graph: {
+    reading_order: string[];
+    sequence: any[];
+  };
+}
+
+export interface KAEDocumentItem {
+  job_id: string;
+  title: string;
+  source_uri: string;
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'PENDING_HUMAN_REVIEW' | 'FAILED';
+  progress: number;
+  created_at: string;
+  updated_at: string;
+  node_count?: number;
+  confidence_avg?: number;
+}
