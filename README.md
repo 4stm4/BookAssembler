@@ -1,287 +1,206 @@
-# BookAssembler — автоматический перевод технических книг
+# Knowledge Assembly Engine (KAE)
 
-Пайплайн для перевода отсканированных PDF-книг в печатный LaTeX на русском языке.
-Поддерживает любые технические книги. Все данные конкретной книги хранятся в папке `project/` — конфиги, кэш, переводы, результаты.
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.13+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.13+">
+  <img src="https://img.shields.io/badge/React-18.3.1-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React 18">
+  <img src="https://img.shields.io/badge/TypeScript-5.6.3-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript 5.6">
+  <img src="https://img.shields.io/badge/Tailwind_CSS-4.0-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white" alt="Tailwind CSS 4.0">
+  <img src="https://img.shields.io/badge/FastAPI-0.115-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
+</p>
 
-## Быстрый старт
+**Knowledge Assembly Engine (KAE)** — детерминированная высокопроизводительная система сборки, анализа и трансфигурации знаний из сложной технической документации (книги, PDF-сканы, даташиты, спецификации микропроцессорных архитектур и стандарты).
 
+KAE преобразует неструктурированные и отсканированные первичные материалы в строго структурированные электронные артефакты, графы знаний, интерактивные векторизованные схемы TikZ и печатный LaTeX со сквозной криптографической прослеживаемостью (**Provenance**).
+
+---
+
+## 🌟 Ключевые возможности
+
+- **Content-Addressed Storage (`.kap` bundles):** Кэширование и упаковывание готовых книг и разделов в иммутабельные архивы с обращением по SHA-256 хэшу содержимого.
+- **Сквозная прослеживаемость (SHA-256 Provenance):** Каждое утверждение, формула, таблица и график привязаны к координатам страницы и оригинальному блоку исходного документа.
+- **Storage Endpoint Providers (SEP Engine):** Унифицированный протокол абстракции источников данных для работы с NVMe SSD, корпоративными S3/MinIO бакетами, WebDAV артефактами и Google Drive.
+- **Гибридный роутер нейросетей (`HybridLLMRouter`):** Автоматическое распределение тяжелых задач между облачными ускорителями (Google Colab T4/L4 GPU) и локальными энергоэффективными edge-узлами (Ollama, llama.cpp, ARM64 Pi 5 / Orange Pi CM5).
+- **Реактивный HITL (Human-In-The-Loop):** Непрерывная валидация с интеграцией всплывающего интерактивного баннера для модерации и исправления узлов с низким `confidence_score` в 1 клик.
+- **Компьютерное зрение и векторизация схем:** Автоматическое выделение структурных диаграмм из PDF, распознавание топологии и реконструирование чистых векторов TikZ / LaTeX.
+- **Детерминированные сборки (`kae.lock`):** Полная воспроизводимость процесса сборки документации с фиксацией версий промптов, моделей и словарей.
+
+---
+
+## 📐 Архитектура пайплайна KAE
+
+```mermaid
+flowchart TD
+    A[Первичный документ / PDF скан] --> B[SEP Engine: MinIO / NVMe / WebDAV]
+    B --> C[1. Extract: PyMuPDF / OCR]
+    C --> D[2. Manifest: Инвентаризация элементов]
+    D --> E[3. CV Figures: Анализ и TikZ рендер]
+    E --> F[4. Hybrid LLM Router: Colab T4 / Ollama]
+    F --> G{5. Confidence Check}
+    G -- "Confidence < 0.8" --> H[Реактивный HITL Banner]
+    H -- "Одобрение / Коррекция" --> I[KRM Tree Node]
+    G -- "Confidence >= 0.8" --> I
+    I --> J[6. Knowledge & Reading Graph]
+    J --> K[7. AutoFix & LaTeX Build Engine]
+    K --> L[8. XeLaTeX / Docker Compilation]
+    L --> M[Готовый PDF & .kap Knowledge Archive]
+```
+
+---
+
+## 📑 Спецификации и стандарты (RFC 0001–0020)
+
+Архитектура системы KAE полностью регламентирована набором стандартов RFC:
+
+| RFC | Модуль / Спецификация | Описание |
+| :--- | :--- | :--- |
+| **RFC 0001** | `KRM Tree Core` | Иерархическое представление модели знаний (Knowledge Representation Model) |
+| **RFC 0002** | `Knowledge Graph` | Семантический граф сущностей, мнемоник, регистров и связей |
+| **RFC 0003** | `Reading Graph` | Педагогический граф последовательности прочтения и усвоения тем |
+| **RFC 0004** | `Reproducible Builds` | Спецификация файла блокировки сборок `kae.lock` и детерминированных хэшей |
+| **RFC 0005** | `Storage Endpoint Providers` | Абстракция протокола SEP для S3, MinIO, NVMe, WebDAV, GDrive |
+| **RFC 0006** | `Content-Addressed Archive` | Формат контейнера знаний `.kap` (Knowledge Assembly Package) |
+| **RFC 0007** | `pyjobkit Task Engine` | Идемпотентная распределенная очередь задач на базе SQLite/Postgres |
+| **RFC 0008** | `Hybrid LLM Router` | Динамическая маршрутизация запросов (Colab GPU + Local Ollama / Claude) |
+| **RFC 0009** | `CV Diagram Reconstruction` | Алгоритмы извлечения топологии схем и генерации кодовой базы TikZ |
+| **RFC 0010** | `Reactive HITL Protocol` | Всплывающий протокол интервенции оператора при низком качестве сегментации |
+| **RFC 0011** | `Live Glossary Engine` | Динамический словарь терминов с поддержкой Keep-As-Is правил |
+| **RFC 0012** | `LaTeX Compilation Engine` | Изолированная компиляция XeLaTeX через Docker и SSH контейнеры |
+| **RFC 0013** | `Provenance Audit Trail` | Дерево Меркла и SHA-256 цепочки подтверждения исходных цитат |
+| **RFC 0014** | `Real-time Event SSE` | Потоковая трансляция прогресса сборки и состояния рабочей области по SSE |
+| **RFC 0015** | `Unified API Gateway` | Скоростной прокси-сервер Express/FastAPI с поддержкой CORS и REST v1 |
+| **RFC 0016** | `Clean Workspace Frontend` | Минималистичный двухпанельный React UI без избыточной перегруженности |
+| **RFC 0017** | `Multi-Layer Translation Merge`| Слойный мёрдж переводов (Base -> AutoFix Diff -> Manual Overrides) |
+| **RFC 0018** | `Code & ASM Auto-Fixer` | Автоматическая коррекция синтаксиса ассемблера 8086 и табуляций кода |
+| **RFC 0019** | `Security Command Sandbox` | Песочница исполнения shell-команд и компиляции TeX документов |
+| **RFC 0020** | `Remote Worker Node Specs` | Протокол подключения Colab GPU и ARM64 Edge воркеров в единую сеть |
+
+---
+
+## 📂 Структура проекта
+
+```
+kae-platform/
+├── server.ts                    # Единый Express Gateway & API Вход (Port 3000)
+├── package.json                 # Node.js зависимости & npm скрипты
+├── vite.config.ts               # Конфигурация сборки Vite & React
+├── pyproject.toml               # Python 3.13 конфигурация и зависимости
+├── Dockerfile                   # Docker образ с XeLaTeX и кириллическими шрифтами
+│
+├── src/                         # Исходный код приложения
+│   ├── api/                     # REST & SSE API Клиенты и Серверный роутер
+│   │   ├── client.ts            # Typed KAE API Client (REST & SSE subscriptions)
+│   │   └── app.py               # Python FastAPI backend подсистема
+│   │
+│   ├── components/              # React Компоненты Clean Workspace UI
+│   │   ├── CleanWorkspace.tsx   # Двухпанельный сплит-редактор KRM & Markdown
+│   │   ├── DocumentDashboard.tsx# Мониторинг документов и запуск сборок pyjobkit
+│   │   ├── SEPSourcesDialog.tsx # Модальное окно подключения хранилищ SEP
+│   │   ├── PipelineStepper.tsx  # Компактный индикатор выполнения пайплайна
+│   │   ├── KnowledgeGraphModal.tsx # Визуализация графов знаний и связей
+│   │   ├── LatexBuildView.tsx   # Предпросмотр скомпилированного LaTeX PDF
+│   │   └── Header.tsx           # Лаконичная шапка с переключением экранов
+│   │
+│   ├── core/                    # Ядро обработки данных
+│   │   ├── pipeline.py          # Оркестратор стадий сборки
+│   │   ├── state.py             # Управление чекпоинтами и состоянием
+│   │   ├── translator.py        # Клиент гибридного перевода и генерации
+│   │   ├── validate_chapter.py  # 11 категорий автоматической валидации
+│   │   ├── build_latex.py       # Генератор документов XeLaTeX
+│   │   └── diagram_extract.py   # CV-модуль анализа иллюстраций и схем
+│   │
+│   ├── types.ts                 # Общие TypeScript интерфейсы и типы KAE
+│   └── main.tsx                 # Точка входа React SPA
+│
+├── project.example/             # Шаблон конфигурации книги и словарей
+└── colab/                       # Jupyter Notebooks для Colab GPU
+    └── bookassembler_agent.ipynb
+```
+
+---
+
+## 🚀 Быстрый старт
+
+### Требования к окружению
+- **Node.js:** `>= 18.0`
+- **Python:** `>= 3.13` (обязательно для `pyjobkit`)
+- **Docker:** (для локальной компиляции XeLaTeX)
+
+### 1. Клонирование и настройка зависимостей
 ```bash
-# Python >= 3.13 обязателен (зависимость pyjobkit)
-python3 -m venv .venv && source .venv/bin/activate
+# Клонирование репозитория
+git clone https://github.com/your-org/kae-platform.git
+cd kae-platform
+
+# Настройка виртуального окружения Python 3.13
+python3.13 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[api,dev]"
 
-# Скопировать конфиги
+# Установка npm пакетов frontend
+npm install
+```
+
+### 2. Конфигурация окружения
+Скопируйте примеры конфигурационных файлов:
+```bash
 cp .env.example .env
 cp -r project.example project
-
-# Собрать Docker-образ для компиляции LaTeX
-docker build -t bookassembler-xelatex .
-
-# Запустить пайплайн для главы 5
-python3 src/pipeline.py --chapter 5
-
-# Продолжить после ошибки
-python3 src/pipeline.py --chapter 5 --resume
-
-# Проверить статус
-python3 src/pipeline.py --chapter 5 --status
-
-# pyjobkit — очередь задач
-python3 src/pipeline.py --chapter 5 --enqueue        # поставить в очередь
-python3 src/pipeline.py --work-once                   # выполнить и выйти
-python3 src/pipeline.py --work                        # worker (long-running)
-python3 src/pipeline.py --chapter 5 --jobs-status     # статус задач
 ```
 
-## Архитектура
-
+Отредактируйте `.env`:
+```env
+TRANSLATE_MODE=api
+AI_PROVIDER=openai
+AI_API_KEY=sk-your-api-key-here
+AI_MODEL=gpt-4o
+COMPILE_MODE=docker
 ```
-PDF (скан) → extract → manifest → figures → translate → autofix → validate → build → compile → PDF
-```
 
-### Конфигурация
-
-Вся конфигурация вынесена из кода:
-
-| Файл | Что настраивает |
-|------|----------------|
-| `project/chapters.yaml` | Структура книги: главы, диапазоны страниц, PDF-файл |
-| `project/book_profile.yaml` | Профиль книги: мнемоники, паттерны кода, классификация фигур, промпт перевода |
-| `.env` | Режим перевода, режим компиляции, ключи API |
-| `project/glossary.json` | Словарь терминов (EN→RU), keep-as-is списки, правила форматирования |
-
+### 3. Запуск платформы (Full-Stack)
+Запустите единый сервер разработки на порту `3000`:
 ```bash
-# .env
-TRANSLATE_MODE=api          # "api" (автоматический) или "agent" (задачи для Claude Code)
-AI_PROVIDER=openai          # "anthropic", "openai", или любой OpenAI-совместимый
-AI_API_KEY=sk-...           # ключ API выбранного провайдера
-AI_MODEL=gpt-4o             # модель (опционально, есть дефолты для каждого провайдера)
-AI_BASE_URL=                # только для OpenAI-совместимых (Groq, Together, Ollama и т.д.)
-COMPILE_MODE=docker         # "docker" (локально) или "ssh" (удалённый хост)
-COMPILE_HOST=user@host      # только для COMPILE_MODE=ssh
-COMPILE_DIR=~/path/to/dir   # только для COMPILE_MODE=ssh
+npm run dev
 ```
+После запуска интерфейс KAE Clean Workspace будет доступен по адресу:
+👉 `http://localhost:3000`
 
-### Настройка для новой книги
+---
 
-1. Скопируйте шаблон и отредактируйте `project/chapters.yaml`:
+## 🤖 Гибридный воркер (Google Colab & Edge Nodes)
 
-```yaml
-book:
-  title: "My Technical Book"
-  pdf: "my_book.pdf"
-  target_lang: ru
+Для экономии средств и ускорения работы с тяжелыми моделями KAE поддерживает подключение внешних GPU-ускорителей:
 
-chapters:
-  1:
-    pages: [10, 45]
-    title: "Introduction"
-  2:
-    pages: [46, 120]
-    title: "Core Concepts"
-```
+1. Откройте `colab/bookassembler_agent.ipynb` в **Google Colab**.
+2. Подключите runtime **T4 GPU** или **L4 GPU**.
+3. Смонтируйте Google Drive для сохранения кэша `.kap` и промежуточных результатов.
+4. Включите режим `Ollama` / `llama.cpp` серверной трансляции и укажите URL в `.env`:
+   ```env
+   AI_BASE_URL=https://your-colab-tunnel-url.ngrok-free.app/v1
+   ```
 
-2. (Опционально) Создайте `project/book_profile.yaml` для книг с кодом:
+---
 
-```yaml
-book_description: "учебник по Python"
-translation_prompt_intro: "Переведи текст из учебника по Python на русский язык.\n"
+## 📡 API Endpoints & Event Streaming
 
-asm_mnemonics: []  # пусто, если в книге нет ассемблера
-debug_indicators: []
-debug_line_patterns: []
-debug_flag_strings: []
+KAE предоставляют REST API `/api/v1/*` и поддержку Server-Sent Events (SSE):
 
-section_pattern: '(\d+\.\d+)\s+(.+)'
-section_flags: 0
+### Хранилища SEP (Storage Endpoint Providers)
+- `GET /api/v1/sep/providers` — Список подключенных источников (S3, NVMe, WebDAV).
+- `POST /api/v1/sep/providers` — Регистрация нового SEP провайдера.
+- `GET /api/v1/sep/providers/:id/browse` — Навигация по каталогам хранилища.
+- `POST /api/v1/sep/providers/:id/import` — Запуск импорта файла в пайплайн.
 
-subscript_bases: [2, 10, 16]
+### Задачи и Пайплайн (`pyjobkit`)
+- `POST /api/v1/documents/upload` — Загрузка документа.
+- `GET /api/v1/jobs/:job_id/status` — Текущий статус выполнения сборки.
+- `GET /api/v1/jobs/stream` — SSE Поток обновлений статусов и прогресса сборок в реальном времени.
 
-table_indicators:
-  - pattern: 'Method\s+Description'
-    type: method_table
-  - pattern: 'Parameter\s+Type'
-    type: parameter_table
+### HITL Валидация (Human-In-The-Loop)
+- `GET /api/v1/hitl/pending` — Получение списка спорных узлов с низким `confidence_score`.
+- `POST /api/v1/hitl/correct` — Отправка одобрения или ручной коррекции узла KRM.
 
-figure_categories:
-  screenshot: ["screenshot", "output"]
-  diagram: ["diagram", "architecture", "flow"]
-  code_listing: ["listing", "source code"]
-```
+### Графы знаний и структуры
+- `GET /api/v1/graph/:job_id` — Получение структуры Knowledge Graph и Reading Graph.
 
-Без `book_profile.yaml` профиль определяется автоматически из текста книги при первом запуске `extract`.
-
-PDF книги тоже кладётся в `project/`. Путь к другой рабочей папке можно задать через `BOOKASSEMBLER_PROJECT_DIR`.
-
-## Стадии пайплайна
-
-| # | Стадия | Что делает | Блокирует следующую? |
-|---|--------|-----------|---------------------|
-| 1 | `extract` | Извлекает текст из PDF (PyMuPDF) | — |
-| 2 | `manifest` | Строит инвентарь: фигуры, примеры, DEBUG-сессии, порядок элементов | — |
-| 3 | `figures` | Рендерит страницы, анализирует фигуры (с per-figure кешем), генерирует TikZ-задачи | — |
-| 4 | `translate` | Переводит через Claude API (с retry) или генерирует задачи для агентов | — |
-| 5 | `autofix` | Wrap DEBUG/ASM в code blocks, удаление дублей таблиц, fix подстрочных | — |
-| 6 | `validate` | Проверка по манифесту + глоссарию. **Блокирует build при ошибках** | build |
-| 7 | `build` | Собирает LaTeX из переводов (markdown → LaTeX, вставка фигур) | — |
-| 8 | `compile` | Компиляция XeLaTeX через Docker или SSH | — |
-
-### State management
-
-Каждый этап трекается в `cache/state/ch{N}.json`:
-- **Чекпоинты** — при сбое на 400-й странице, 399 уже сохранены
-- **Resume** — `--resume` продолжает с последнего упавшего этапа
-- **Зависимости** — build не запустится без validate, translate не запустится без extract
-- **Сброс** — `--reset-stage translate` для повторного запуска отдельного этапа
-
-```bash
-python3 src/pipeline.py --chapter 5 --status
-# Глава 5:
-#   [+] extract: done (3с)
-#   [+] manifest: done (12с)
-#   [+] translate: done (180с)
-#   [!!] validate: failed — 12 проблем
-```
-
-## Перевод
-
-### Два режима
-
-**API-режим** (`TRANSLATE_MODE=api`) — полностью автоматический:
-- Прямые вызовы Claude API с контекстными промптами
-- Exponential backoff при ошибках (до `TRANSLATE_MAX_RETRIES` попыток)
-- Встроенная валидация каждой страницы
-
-**Agent-режим** (`TRANSLATE_MODE=agent`) — генерирует задачи:
-- Записывает задачи в `ch{N}_tasks.json` с метаданными (тип контента, глоссарий)
-- Задачи выполняются через Claude Code Agent tool
-
-### Merge-стратегия переводов
-
-Переводы загружаются слоями с чётким приоритетом:
-
-```
-ch4_154_169.json      ← 1. оригинальный перевод (низший приоритет)
-ch4_autofix.json      ← 2. автоматические исправления (diff-слой)
-ch4_all_fixed.json    ← 3. ручные правки (высший приоритет, никогда не затираются)
-```
-
-### Живой глоссарий
-
-При валидации перевода система автоматически находит технические термины, отсутствующие в глоссарии, и записывает их в `glossary_suggestions.json` с счётчиком упоминаний. Разбор предложений — вручную.
-
-## Скрипты
-
-| Скрипт | Назначение |
-|--------|-----------|
-| `book_profile.py` | Профиль книги: загрузка и предоставление book-specific констант |
-| `pipeline.py` | Главный вход — оркестрация всех стадий |
-| `translator.py` | Абстракция перевода: `TranslatorClient`, контракты данных, валидация |
-| `state.py` | State management: чекпоинты, зависимости, resume |
-| `extract_chapter_manifest.py` | Инвентарь главы из оригинального PDF |
-| `validate_chapter.py` | Валидация перевода (11 категорий проверок) |
-| `build_latex.py` | Markdown → LaTeX (заголовки, списки, таблицы, код, примеры, фигуры) |
-| `generate_figures.py` | Поиск фигур в PDF, рендер страниц, промпты для TikZ-агентов |
-| `translate_book.py` | Утилиты извлечения текста и генерации промптов |
-| `diagram_extract.py` | CV-анализ схем: crop → classify → detect → measure → topology → review |
-
-## Структура данных
-
-| Путь | Содержимое | В Git? |
-|------|-----------|--------|
-| `src/` | Скрипты | Да |
-| `project.example/` | Шаблон рабочей папки | Да |
-| `project/` | Рабочая папка (данные книги) | Нет |
-| `project/chapters.yaml` | Структура книги | Нет |
-| `project/book_profile.yaml` | Профиль книги (авто) | Нет |
-| `project/glossary.json` | Словарь терминов | Нет |
-| `project/cache/` | Кэш и состояние | Нет |
-| `project/claude_translations/` | JSON с переводами | Нет |
-| `project/latex_output/` | Готовые `.tex` для компиляции | Нет |
-
-## Компиляция LaTeX
-
-### Docker (по умолчанию)
-
-```bash
-docker build -t bookassembler-xelatex .
-python3 src/pipeline.py --chapter 5 --stage compile
-```
-
-Образ содержит XeLaTeX, кириллические шрифты и все необходимые пакеты.
-
-### SSH (опционально)
-
-Для компиляции на удалённом хосте установите в `.env`:
-
-```bash
-COMPILE_MODE=ssh
-COMPILE_HOST=user@hostname
-COMPILE_DIR=~/path/to/latex
-```
-
-SSH-режим блокируется в CI/CD-окружении. Перед подключением проверяется доступность хоста и наличие SSH-ключей.
-
-## Google Colab — полный пайплайн с GPU
-
-Notebook `colab/bookassembler_agent.ipynb` запускает весь BookAssembler на Colab с GPU-ускорением.
-
-```
-1. Установка Ollama + модель на T4 GPU
-2. Клонирование BookAssembler (из GitHub или Google Drive)
-3. Загрузка PDF (Google Drive / URL / upload)
-4. Запуск пайплайна: extract → translate → build
-5. Экспорт результатов (Google Drive или скачивание)
-```
-
-Все файлы хранятся на Google Drive — PDF, переводы, кэш, результаты. При перезапуске Colab прогресс не теряется (`--resume`).
-
-```
-Google Drive/BookAssembler/    ← BOOKASSEMBLER_PROJECT_DIR
-  mybook.pdf                   ← PDF книги
-  chapters.yaml                ← структура книги
-  claude_translations/         ← переводы
-  latex_output/                ← готовые .tex файлы
-  cache/                       ← кэш и состояние пайплайна
-```
-
-Порядок работы:
-1. Положите PDF в `Google Drive/BookAssembler/`
-2. Откройте notebook в Colab, выберите **T4 GPU** runtime
-3. Выберите модель (рекомендуется `gemma3:12b` для T4 с 16GB)
-4. Отредактируйте `chapters.yaml` с диапазонами страниц
-5. Запустите пайплайн — на T4 GPU ~30-50 tok/s (vs ~5 tok/s на ARM CPU)
-
-## pyjobkit — очередь задач
-
-Тяжёлые стадии (translate, figures, build, compile) можно выполнять через очередь `pyjobkit` с SQLite-бэкендом:
-
-```bash
-# Поставить задачи для главы 5 в очередь
-python3 src/pipeline.py --chapter 5 --enqueue
-
-# Выполнить все задачи в очереди и завершиться
-python3 src/pipeline.py --work-once
-
-# Или запустить worker для постоянной обработки
-python3 src/pipeline.py --work
-
-# Посмотреть статус задач
-python3 src/pipeline.py --chapter 5 --jobs-status
-```
-
-База задач: `cache/jobs/bookassembler.sqlite3` (переопределяется через `BOOKASSEMBLER_JOB_DSN`).
-
-Идемпотентность: повторный `--enqueue` для той же главы не дублирует задачи (ключи вида `ch5:translate:218-300`).
-
-## Зависимости
-
-- Python >= 3.13
-- PyMuPDF (`pymupdf`)
-- OpenCV (`opencv-python-headless`)
-- NumPy (`numpy`)
-- PyYAML (`pyyaml`) — для `chapters.yaml` и `book_profile.yaml`
-- pyjobkit[sqlite] (`pyjobkit`) — очередь задач с SQLite-бэкендом
-- Anthropic SDK (`anthropic`) — только для `AI_PROVIDER=anthropic`
-- OpenAI SDK (`openai`) — для OpenAI и OpenAI-совместимых провайдеров (Ollama, Groq, Together)
-- Docker — для локальной компиляции LaTeX
+---
