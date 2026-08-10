@@ -19,7 +19,7 @@ import { KAEJobEvent } from './types';
 
 export const App: React.FC = () => {
   const [activeView, setActiveView] = useState<'workspace' | 'documents'>('workspace');
-  const [activeJobId, setActiveJobId] = useState<string | null>('job-kae-ch04-8086');
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [isSepDialogOpen, setIsSepDialogOpen] = useState<boolean>(false);
   const [graphModalJobId, setGraphModalJobId] = useState<string | null>(null);
   const [isGraphModalOpen, setIsGraphModalOpen] = useState<boolean>(false);

@@ -171,11 +171,29 @@ export class KAEApiClient {
     providerId: string,
     folderPath = '/'
   ): Promise<SEPRemoteFile[]> {
-    const url = `${API_BASE}/sep/providers/${providerId}/browse?folder_path=${encodeURIComponent(folderPath)}`;
+    const url = `${API_BASE}/sep/providers/${providerId}/browse?path=${encodeURIComponent(folderPath)}`;
     const res = await fetch(url);
     if (!res.ok) {
       throw new Error(`Failed to browse SEP provider folder: ${res.statusText || `HTTP ${res.status}`}`);
     }
+    return res.json();
+  }
+
+  /**
+   * List all processed documents
+   */
+  async listDocuments(): Promise<any[]> {
+    const res = await fetch(`${API_BASE}/documents`);
+    if (!res.ok) throw new Error(`Failed to fetch documents: ${res.statusText}`);
+    return res.json();
+  }
+
+  /**
+   * Get parsed KRM result for a job
+   */
+  async getJobResult(jobId: string): Promise<any> {
+    const res = await fetch(`${API_BASE}/jobs/${jobId}/result`);
+    if (!res.ok) throw new Error(`Failed to fetch job result: ${res.statusText}`);
     return res.json();
   }
 

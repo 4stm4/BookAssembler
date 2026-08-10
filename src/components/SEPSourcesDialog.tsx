@@ -44,6 +44,7 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
   const [newS3Bucket, setNewS3Bucket] = useState('kae-documents-bucket');
   const [newS3Endpoint, setNewS3Endpoint] = useState('https://minio.local:9000');
   const [newWebDavUrl, setNewWebDavUrl] = useState('https://webdav.storage.internal');
+  const [newLocalPath, setNewLocalPath] = useState('/mnt/ssd');
   const [isAddingProvider, setIsAddingProvider] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -127,6 +128,8 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
         opts['endpoint'] = newS3Endpoint;
       } else if (newProviderType === 'webdav') {
         opts['url'] = newWebDavUrl;
+      } else if (newProviderType === 'local_nvme') {
+        opts['root_path'] = newLocalPath;
       }
 
       const created = await kaeApi.createSEPProvider({
@@ -473,6 +476,19 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
                       type="text"
                       value={newWebDavUrl}
                       onChange={(e) => setNewWebDavUrl(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono"
+                    />
+                  </div>
+                )}
+
+                {newProviderType === 'local_nvme' && (
+                  <div className="pt-2">
+                    <label className="block text-slate-300 font-medium mb-1">Путь к точке монтирования SSD</label>
+                    <input
+                      type="text"
+                      value={newLocalPath}
+                      onChange={(e) => setNewLocalPath(e.target.value)}
+                      placeholder="/mnt/ssd"
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white font-mono"
                     />
                   </div>

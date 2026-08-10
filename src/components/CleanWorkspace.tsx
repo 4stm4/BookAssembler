@@ -42,55 +42,9 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
   const [activeTabRight, setActiveTabRight] = useState<'preview' | 'editor'>('preview');
 
   // Document Content States
-  const [sourceText, setSourceText] = useState<string>(
-    '# Chapter 4: Data Movement Instructions\n\n' +
-    'The MOV instruction is the most fundamental data movement operation in the 8086 microprocessor.\n' +
-    'It copies a byte or word from a source operand to a destination operand.\n\n' +
-    'Syntax: MOV destination, source\n\n' +
-    'Example 4.1:\n' +
-    '```assembly\n' +
-    'MOV AX, 0100H    ; Load AX with hexadecimal 0100\n' +
-    'MOV DS, AX       ; Set Data Segment register\n' +
-    'MOV BX, [1000H]  ; Move word from memory offset 1000H into BX\n' +
-    '```\n\n' +
-    'Note that both operands cannot be memory locations simultaneously. To move data from memory to memory, an intermediate register such as AX must be used.'
-  );
-
-  const [targetMarkdown, setTargetMarkdown] = useState<string>(
-    '# Глава 4: Инструкции передачи данных\n\n' +
-    'Инструкция **MOV** является базовой операцией перемещения данных в микропроцессоре 8086. Она копирует байт или слово из операнда-источника в операнд назначения (приёмник).\n\n' +
-    '**Синтаксис:** `MOV destination, source` \n\n' +
-    '### ПРИМЕР 4.1:\n' +
-    '```assembly\n' +
-    'MOV AX, 0100H    ; Загрузка в AX шестнадцатеричного значения 0100\n' +
-    'MOV DS, AX       ; Настройка регистра сегмента данных DS\n' +
-    'MOV BX, [1000H]  ; Перемещение слова из смещения памяти 1000H в BX\n' +
-    '```\n\n' +
-    '> Обратите внимание: оба операнда не могут одновременно находиться в оперативной памяти. Для перемещения данных из памяти в память необходимо использовать промежуточный регистр, например **AX**.'
-  );
-
-  const [krmNodes, setKrmNodes] = useState<KRMNode[]>([
-    {
-      id: 'krm-root-1',
-      type: 'ContainerUnit',
-      confidence_score: 1.0,
-      title: 'Root Section: Chapter 4 Data Movement',
-      children: [
-        {
-          id: 'krm-para-1',
-          type: 'ParagraphBlock',
-          confidence_score: 0.98,
-          text: 'The MOV instruction is the most fundamental data movement operation...',
-        },
-        {
-          id: 'krm-code-1',
-          type: 'CodeListingBlock',
-          confidence_score: 0.54, // Low confidence node!
-          text: 'MOV AX, 0100H\nMOV DS, AX\nMOV BX, [1000H]',
-        },
-      ],
-    },
-  ]);
+  const [sourceText, setSourceText] = useState<string>('');
+  const [targetMarkdown, setTargetMarkdown] = useState<string>('');
+  const [krmNodes, setKrmNodes] = useState<KRMNode[]>([]);
 
   // HITL Verification Banner State
   const [pendingHitlTasks, setPendingHitlTasks] = useState<HITLTask[]>([]);
@@ -105,6 +59,33 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
       setActiveJobId(initialJobId);
     }
   }, [initialJobId]);
+
+  // Fetch real KRM data when job is active
+  useEffect(() => {
+    if (!activeJobId) return;
+    const fetchResult = async () => {
+      try {
+        const res = await fetch(`/api/v1/jobs/${activeJobId}/result`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.containers) {
+          setKrmNodes(data.containers);
+        }
+        // Build source text from KRM tree
+        const texts: string[] = [];
+        const extractText = (node: any) => {
+          if (node.text) texts.push(node.text);
+          if (node.children) node.children.forEach(extractText);
+        };
+        (data.containers || []).forEach(extractText);
+        setSourceText(texts.join('\n\n'));
+        setTargetMarkdown(''); // Translation not yet available in Phase 1
+      } catch (err) {
+        console.warn('Failed to fetch job result:', err);
+      }
+    };
+    fetchResult();
+  }, [activeJobId]);
 
   // Subscribe to reactive SSE job stream
   useEffect(() => {

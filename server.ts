@@ -1,20 +1,12 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import path from 'path';
+import fs from 'fs';
 import dotenv from 'dotenv';
 import { spawn } from 'child_process';
 import { createProxyMiddleware } from 'http-proxy-middleware';
-import { createServer as createViteServer } from 'vite';
+// vite imported dynamically in dev mode only
 import { GoogleGenAI } from '@google/genai';
-import {
-  initialBookConfig,
-  initialBookProfile,
-  initialGlossary,
-  sampleManifestCh4,
-  samplePagesCh4,
-  sampleFiguresCh4,
-  sampleJobs,
-} from './src/data';
 import {
   BookConfig,
   BookProfile,
@@ -35,6 +27,16 @@ const app = express();
 const PORT = 3000;
 
 app.use(cors());
+
+// Proxy /api/v1/* to Python FastAPI backend BEFORE body parsing
+app.use('/api/v1', createProxyMiddleware({
+  target: 'http://127.0.0.1:8000',
+  changeOrigin: true,
+  pathRewrite: (_path: string, req: any) => req.originalUrl,
+  timeout: 600000,
+  proxyTimeout: 600000,
+}) as any);
+
 app.use(express.json({ limit: '10mb' }));
 
 // Attempt to spawn Python FastAPI Backend for PyJobKit & KAE API if python3/uvicorn available
@@ -55,109 +57,32 @@ try {
   });
 } catch (_) {}
 
-// In-Memory Storage Endpoint Providers (SEP) Store
-let sepProviders = [
-  {
-    provider_id: 'sep-s3-prod-01',
-    name: 'Корпоративный MinIO S3 Storage',
-    sep_type: 's3_minio',
-    is_connected: true,
-    last_synced: new Date().toISOString(),
-    details: 'bucket: kae-documents-bucket, endpoint: https://minio.local:9000',
-  },
-  {
-    provider_id: 'sep-nvme-local-02',
-    name: 'Локальное NVMe Хранилище (KAE Server)',
-    sep_type: 'local_nvme',
-    is_connected: true,
-    last_synced: new Date().toISOString(),
-    details: 'path: /mnt/kae_data/raw_pdf/',
-  },
-  {
-    provider_id: 'sep-webdav-archive-03',
-    name: 'Архивный WebDAV Сервер',
-    sep_type: 'webdav',
-    is_connected: true,
-    last_synced: new Date().toISOString(),
-    details: 'url: https://webdav.storage.internal/books/',
-  },
-];
-
-let sepFiles: Record<string, any[]> = {
-  'sep-s3-prod-01': [
-    {
-      file_id: 'file-ch04-intel8086-pdf',
-      name: '8086_Family_Users_Manual_Ch04.pdf',
-      file_size: 4210500,
-      mime_type: 'application/pdf',
-      is_directory: false,
-      last_modified: '2026-08-07T14:20:00Z',
-      path: '/books/8086_Family_Users_Manual_Ch04.pdf',
-    },
-    {
-      file_id: 'file-ch05-interrupts-pdf',
-      name: '8086_Chapter_05_Interrupts.pdf',
-      file_size: 3120000,
-      mime_type: 'application/pdf',
-      is_directory: false,
-      last_modified: '2026-08-07T15:10:00Z',
-      path: '/books/8086_Chapter_05_Interrupts.pdf',
-    },
-    {
-      file_id: 'file-ch06-memory-pdf',
-      name: '8086_Chapter_06_Memory_Interface.pdf',
-      file_size: 5400000,
-      mime_type: 'application/pdf',
-      is_directory: false,
-      last_modified: '2026-08-07T16:00:00Z',
-      path: '/books/8086_Chapter_06_Memory_Interface.pdf',
-    },
-  ],
-  'sep-nvme-local-02': [
-    {
-      file_id: 'nvme-file-01',
-      name: 'ch04_data_movement_raw.docx',
-      file_size: 1048576,
-      mime_type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      is_directory: false,
-      last_modified: '2026-08-08T02:00:00Z',
-      path: '/mnt/kae_data/raw_pdf/ch04_data_movement_raw.docx',
-    },
-    {
-      file_id: 'nvme-file-02',
-      name: 'ch05_arithmetic_raw.pdf',
-      file_size: 2097152,
-      mime_type: 'application/pdf',
-      is_directory: false,
-      last_modified: '2026-08-08T03:15:00Z',
-      path: '/mnt/kae_data/raw_pdf/ch05_arithmetic_raw.pdf',
-    },
-  ],
-  'sep-webdav-archive-03': [
-    {
-      file_id: 'webdav-file-01',
-      name: '8086_complete_assembler_manual.pdf',
-      file_size: 15728640,
-      mime_type: 'application/pdf',
-      is_directory: false,
-      last_modified: '2026-08-06T10:00:00Z',
-      path: '/books/8086_complete_assembler_manual.pdf',
-    },
-  ],
+// In-Memory Database Stores
+let bookConfig: BookConfig = {
+  title: '8088/8086 Microprocessors',
+  pdf: '',
+  source_lang: 'en',
+  target_lang: 'ru',
+  chapters: {},
 };
-
-// In-Memory Database Stores (mirrors state.py & project cache)
-let bookConfig: BookConfig = JSON.parse(JSON.stringify(initialBookConfig));
-let bookProfile: BookProfile = JSON.parse(JSON.stringify(initialBookProfile));
-let glossary: Glossary = JSON.parse(JSON.stringify(initialGlossary));
-let manifests: Record<number, ChapterManifest> = {
-  4: JSON.parse(JSON.stringify(sampleManifestCh4)),
+let bookProfile: BookProfile = {
+  book_description: '',
+  translation_prompt_intro: '',
+  asm_mnemonics: [],
+  debug_indicators: [],
+  debug_line_patterns: [],
+  debug_flag_strings: [],
+  section_pattern: '',
+  section_flags: 0,
+  table_indicators: [],
+  figure_categories: {},
+  subscript_bases: [],
 };
-let translations: Record<number, Record<number, TranslationPage>> = {
-  4: JSON.parse(JSON.stringify(samplePagesCh4)),
-};
-let figures: Record<string, FigureDiagram> = JSON.parse(JSON.stringify(sampleFiguresCh4));
-let jobs: JobTask[] = JSON.parse(JSON.stringify(sampleJobs));
+let glossary: Glossary = { terms: {}, keep_as_is: {}, formatting_rules: {}, suggestions: {} };
+let manifests: Record<number, ChapterManifest> = {};
+let translations: Record<number, Record<number, TranslationPage>> = {};
+let figures: Record<string, FigureDiagram> = {};
+let jobs: JobTask[] = [];
 
 const pipelineStates: Record<number, PipelineState> = {
   4: {
@@ -881,180 +806,6 @@ app.post('/api/chapters/:id/compile', (req: Request, res: Response) => {
   });
 });
 
-// -------------------------------------------------------------
-// KAE /api/v1 REST Endpoints (Storage Endpoint Providers & Pipeline)
-// -------------------------------------------------------------
-
-app.get('/api/v1/sep/providers', (req: Request, res: Response) => {
-  res.json(sepProviders);
-});
-
-app.post('/api/v1/sep/providers', (req: Request, res: Response) => {
-  const { name, sep_type, options } = req.body || {};
-  const newProvider = {
-    provider_id: `sep-${sep_type || 'custom'}-${Date.now()}`,
-    name: name || 'Новое SEP Хранилище',
-    sep_type: sep_type || 's3_minio',
-    is_connected: true,
-    last_synced: new Date().toISOString(),
-    details: options?.endpoint ? `endpoint: ${options.endpoint}` : 'Подключено успешно',
-  };
-  sepProviders.push(newProvider);
-  sepFiles[newProvider.provider_id] = [
-    {
-      file_id: `file-${Date.now()}-01`,
-      name: 'sample_document_kae.pdf',
-      file_size: 2048000,
-      mime_type: 'application/pdf',
-      is_directory: false,
-      last_modified: new Date().toISOString(),
-      path: '/documents/sample_document_kae.pdf',
-    },
-  ];
-  res.json(newProvider);
-});
-
-app.get('/api/v1/sep/providers/:id/browse', (req: Request, res: Response) => {
-  const providerId = req.params.id;
-  const items = sepFiles[providerId] || [
-    {
-      file_id: `file-${providerId}-default`,
-      name: '8086_Microprocessor_Book.pdf',
-      file_size: 4800000,
-      mime_type: 'application/pdf',
-      is_directory: false,
-      last_modified: new Date().toISOString(),
-      path: '/books/8086_Microprocessor_Book.pdf',
-    },
-  ];
-  res.json(items);
-});
-
-app.post('/api/v1/sep/providers/:id/import', (req: Request, res: Response) => {
-  const providerId = req.params.id;
-  const { file_id } = req.body || {};
-  const jobId = `job-kae-imported-${Date.now()}`;
-  res.json({
-    job_id: jobId,
-    status: 'queued',
-    source_uri: `sep://${providerId}/${file_id || 'document.pdf'}`,
-  });
-});
-
-app.post('/api/v1/documents/upload', (req: Request, res: Response) => {
-  const { source_uri } = req.body || {};
-  const jobId = `job-kae-upload-${Date.now()}`;
-  res.json({
-    job_id: jobId,
-    status: 'queued',
-    source_uri: source_uri || 'upload://document.txt',
-  });
-});
-
-app.get('/api/v1/jobs/:job_id/status', (req: Request, res: Response) => {
-  const jobId = req.params.job_id;
-  res.json({
-    job_id: jobId,
-    status: 'completed',
-    source_uri: 'sep://sep-s3-prod-01/ch04_data_movement.pdf',
-    created_at: new Date(Date.now() - 3600000).toISOString(),
-    updated_at: new Date().toISOString(),
-  });
-});
-
-app.get('/api/v1/hitl/pending', (req: Request, res: Response) => {
-  res.json([
-    {
-      task_id: 'hitl-task-001',
-      target_krm_id: 'krm-node-fig-4.1',
-      current_confidence: 0.62,
-      status: 'pending',
-      suggested_fix: {
-        type: 'tikz_syntax_repair',
-        issue: 'Отсутствует точка с запятой в TikZ схеме регистра 8086',
-        original_tikz: '\\node (a) {AX}; \\node (b) [right of=a] {DS}',
-        suggested_tikz: '\\node (a) {AX}; \\node (b) [right of=a] {DS};',
-      },
-    },
-    {
-      task_id: 'hitl-task-002',
-      target_krm_id: 'krm-node-tbl-4.2',
-      current_confidence: 0.71,
-      status: 'pending',
-      suggested_fix: {
-        type: 'table_structure_repair',
-        issue: 'Неоднозначность ячеек адресации в таблице 4.2',
-        original_tikz: '[BX+SI] -> Memory Offset',
-        suggested_tikz: '[BX+SI] -> Офсет физического адреса',
-      },
-    },
-  ]);
-});
-
-app.post('/api/v1/hitl/correct', (req: Request, res: Response) => {
-  const { task_id, reviewer_id } = req.body || {};
-  res.json({
-    status: 'approved',
-    task_id: task_id || 'hitl-task-001',
-    reviewer_id: reviewer_id || 'reviewer-lead',
-  });
-});
-
-app.get('/api/v1/graph/:job_id', (req: Request, res: Response) => {
-  const jobId = req.params.job_id;
-  res.json({
-    job_id: jobId,
-    knowledge_graph: {
-      nodes: [
-        { id: 'n1', label: 'Инструкция MOV', type: 'mnemonic', confidence: 0.98 },
-        { id: 'n2', label: 'Регистр AX (Accumulator)', type: 'register', confidence: 0.99 },
-        { id: 'n3', label: 'Регистр DS (Data Segment)', type: 'register', confidence: 0.97 },
-        { id: 'n4', label: 'Операнд Памяти [1000H]', type: 'addressing', confidence: 0.92 },
-        { id: 'n5', label: 'Регистр BX (Base)', type: 'register', confidence: 0.96 },
-      ],
-      edges: [
-        { source: 'n1', target: 'n2', label: 'НАЗНАЧЕНИЕ' },
-        { source: 'n1', target: 'n3', label: 'СЕГМЕНТ' },
-        { source: 'n1', target: 'n4', label: 'ЧТЕНИЕ_ПАМЯТИ' },
-        { source: 'n1', target: 'n5', label: 'ПРИЁМНИК' },
-      ],
-    },
-    reading_graph: {
-      units: [
-        { id: 'u1', order: 1, type: 'paragraph', summary: 'Синтаксис и операнды инструкции MOV' },
-        { id: 'u2', order: 2, type: 'code_example', summary: 'Пример 4.1: Пересылка данных в 8086' },
-        { id: 'u3', order: 3, type: 'note', summary: 'Ограничение: Запрет прямой пересылки память-память' },
-      ],
-    },
-  });
-});
-
-app.get('/api/v1/jobs/stream', (req: Request, res: Response) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
-
-  const sendEvent = (data: any) => {
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-  };
-
-  sendEvent({ event: 'job_started', job_id: 'job-kae-ch04-8086', job_type: 'KAE KRM Pipeline' });
-
-  const interval = setInterval(() => {
-    sendEvent({
-      event: 'job_progress',
-      job_id: 'job-kae-ch04-8086',
-      progress: Math.min(1.0, Math.random()),
-      current_stage: 'krm_assembly',
-    });
-  }, 4000);
-
-  req.on('close', () => {
-    clearInterval(interval);
-  });
-});
-
 // Job Queue (pyjobkit)
 app.get('/api/jobs', (req: Request, res: Response) => {
   res.json({
@@ -1145,6 +896,7 @@ Provide a concise, practical, technical answer with code snippets where helpful.
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true, host: '0.0.0.0', port: 3000 },
       appType: 'spa',
@@ -1153,7 +905,7 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req: Request, res: Response) => {
+    app.get('{*path}', (req: Request, res: Response) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

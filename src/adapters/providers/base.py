@@ -30,6 +30,17 @@ class SEPType(str, Enum):
     WEBDAV_GENERIC = "WEBDAV_GENERIC"
     GOOGLE_DRIVE = "GOOGLE_DRIVE"
 
+    @classmethod
+    def _missing_(cls, value: object) -> "SEPType | None":
+        aliases = {
+            "local_nvme": cls.LOCAL_FS,
+            "s3_minio": cls.S3_MINIO,
+            "webdav": cls.WEBDAV_GENERIC,
+            "gdrive": cls.GOOGLE_DRIVE,
+        }
+        if isinstance(value, str):
+            return aliases.get(value.lower())
+
 
 @dataclass
 class RemoteFileItem:

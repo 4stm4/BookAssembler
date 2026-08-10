@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   FileText,
   Search,
@@ -27,41 +27,32 @@ export const DocumentDashboard: React.FC<DocumentDashboardProps> = ({
   onOpenWorkspace,
   onOpenGraph,
 }) => {
-  const [documents, setDocuments] = useState<KAEDocumentItem[]>([
-    {
-      job_id: 'job-kae-ch04-8086',
-      title: 'Глава 4: Инструкции передачи данных (8086 Microprocessor)',
-      source_uri: 'sep://sep-s3-prod-01/books/8086_Family_Users_Manual_Ch04.pdf',
-      status: 'PENDING_HUMAN_REVIEW',
-      progress: 0.85,
-      created_at: '12:30',
-      updated_at: 'Только что',
-      node_count: 64,
-      confidence_avg: 0.92,
-    },
-    {
-      job_id: 'job-kae-ch05-arithmetic',
-      title: 'Глава 5: Арифметические инструкции и Флаги процессора',
-      source_uri: 'sep://sep-nvme-local-02/raw_pdf/ch05_arithmetic.docx',
-      status: 'COMPLETED',
-      progress: 1.0,
-      created_at: '11:15',
-      updated_at: 'Вчера',
-      node_count: 88,
-      confidence_avg: 0.98,
-    },
-    {
-      job_id: 'job-kae-ch06-control-flow',
-      title: 'Глава 6: Инструкции ветвления, циклов и вызовов процедур',
-      source_uri: 'sep://sep-webdav-archive-03/books/ch06_control_flow.pdf',
-      status: 'RUNNING',
-      progress: 0.58,
-      created_at: '10 мин назад',
-      updated_at: '1 мин назад',
-      node_count: 42,
-      confidence_avg: 0.89,
-    },
-  ]);
+  const [documents, setDocuments] = useState<KAEDocumentItem[]>([]);
+
+  useEffect(() => {
+    const fetchDocs = async () => {
+      try {
+        const res = await fetch('/api/v1/documents');
+        if (res.ok) {
+          const data = await res.json();
+          setDocuments(data.map((d: any) => ({
+            job_id: d.job_id,
+            title: d.title || 'Untitled',
+            source_uri: d.source_uri || '',
+            status: d.status || 'UNKNOWN',
+            progress: d.status === 'COMPLETED' ? 1.0 : 0,
+            created_at: d.created_at || '',
+            updated_at: d.updated_at || '',
+            node_count: d.node_count || 0,
+            confidence_avg: 1.0,
+          })));
+        }
+      } catch (err) {
+        console.warn('Failed to fetch documents:', err);
+      }
+    };
+    fetchDocs();
+  }, []);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');

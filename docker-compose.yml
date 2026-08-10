@@ -1,0 +1,23 @@
+services:
+  kae:
+    build: .
+    container_name: kae-engine
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+      - "8000:8000"
+    volumes:
+      - /data/kae:/data/ssd
+      - kae-db:/app/data
+    environment:
+      - NODE_ENV=production
+      - KAE_SSD_PATH=/data/ssd
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+
+volumes:
+  kae-db:

@@ -18,7 +18,9 @@ Guarantees:
 """
 
 import asyncio
+import io
 import json
+import os
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from uuid import uuid4
 
@@ -35,6 +37,7 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from src.adapters import create_default_registry
 from src.adapters.providers import (
     BaseSEPProvider,
     RemoteFileItem,
@@ -48,7 +51,9 @@ from src.jobs.manager import JobManager, JobRecord, JobStatus
 from src.jobs.pyjobkit_bridge import PyJobKitBridge
 from src.krm.models import (
     BaseKRMNode,
+    CodeBlock,
     ContainerUnit,
+    FigureBlock,
     KnowledgeDocument,
     ParagraphBlock,
     StyledTextSpan,
@@ -158,8 +163,19 @@ def create_app() -> FastAPI:
     artifact_store = ArtifactStore()
     sep_manager = SEPManager()
     pyjobkit_bridge = PyJobKitBridge()
+    adapter_registry = create_default_registry()
 
     app.state.pyjobkit_bridge = pyjobkit_bridge
+
+    # Auto-register NVMe SEP provider from environment
+    kae_ssd_path = os.environ.get("KAE_SSD_PATH", "/data/kae")
+    if os.path.isdir(kae_ssd_path):
+        nvme_config = SEPConfig(
+            name="RPi5 NVMe SSD (HAT+)",
+            sep_type=SEPType.LOCAL_FS,
+            options={"root_path": kae_ssd_path},
+        )
+        sep_manager.register_provider(nvme_config)
 
     @app.on_event("startup")
     async def startup_event() -> None:
@@ -419,7 +435,7 @@ def create_app() -> FastAPI:
     )
     async def browse_sep_provider(
         provider_id: str,
-        folder_path: str = Query("/", alias="folder_path"),
+        folder_path: str = Query("/", alias="path"),
     ) -> List[RemoteFileItemResponse]:
         """
         Browses file tree / list directory for a configured SEP provider.
@@ -476,23 +492,134 @@ def create_app() -> FastAPI:
                 detail=f"Failed to import file from SEP provider: {str(exc)}",
             )
 
-        # Attach initial document state
-        doc = KnowledgeDocument(source_uri=job.source_uri)
-        container = ContainerUnit(title="SEP Document Import", level=1)
-        container.children.append(
-            ParagraphBlock(
-                confidence_score=0.95,
-                inlines=[TextLineInline(spans=[StyledTextSpan(text=f"Content imported from {body.file_id}")])],
+        # Parse imported file through adapter registry
+        ext = os.path.splitext(body.file_id)[1].lstrip(".")
+        adapter = adapter_registry.get_adapter_for_extension(ext)
+        if adapter:
+            try:
+                sep_provider = sep_manager.get_provider(provider_id)
+                file_stream = await sep_provider.get_file_stream(body.file_id)
+                loop = asyncio.get_event_loop()
+                doc = await loop.run_in_executor(
+                    None, adapter.parse, file_stream, job.source_uri
+                )
+                docs_store[job.job_id] = doc
+                job_manager.update_status(job.job_id, JobStatus.COMPLETED)
+            except Exception as parse_err:
+                doc = KnowledgeDocument(source_uri=job.source_uri)
+                container = ContainerUnit(title="Parse Error", level=1)
+                container.children.append(
+                    ParagraphBlock(
+                        inlines=[TextLineInline(spans=[StyledTextSpan(text=f"Parse error: {parse_err}")])],
+                    )
+                )
+                doc.root_containers.append(container)
+                docs_store[job.job_id] = doc
+                job_manager.update_status(job.job_id, JobStatus.FAILED)
+        else:
+            doc = KnowledgeDocument(source_uri=job.source_uri)
+            container = ContainerUnit(title="Unsupported Format", level=1)
+            container.children.append(
+                ParagraphBlock(
+                    inlines=[TextLineInline(spans=[StyledTextSpan(text=f"No adapter for .{ext}")])],
+                )
             )
-        )
-        doc.root_containers.append(container)
-        docs_store[job.job_id] = doc
+            doc.root_containers.append(container)
+            docs_store[job.job_id] = doc
 
         return SEPImportResponse(
             job_id=job.job_id,
             status=job.status.value,
             source_uri=job.source_uri,
         )
+
+    # --- Document & Job Result Endpoints ---
+
+    @app.get("/api/v1/documents")
+    async def list_documents() -> List[Dict[str, Any]]:
+        results: List[Dict[str, Any]] = []
+        for job_id, doc in docs_store.items():
+            job = job_manager.get_job(job_id)
+            node_count = _count_nodes(doc)
+            results.append({
+                "job_id": job_id,
+                "title": doc.title or "Untitled",
+                "source_uri": doc.source_uri,
+                "status": job.status.value if job else "UNKNOWN",
+                "created_at": job.created_at if job else "",
+                "updated_at": job.updated_at if job else "",
+                "node_count": node_count,
+                "page_count": doc.metadata.get("page_count", 0) if doc.metadata else 0,
+            })
+        return results
+
+    @app.get("/api/v1/jobs/{job_id}/result")
+    async def get_job_result(job_id: str) -> Dict[str, Any]:
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        return _serialize_document(doc)
+
+    def _count_nodes(doc: KnowledgeDocument) -> int:
+        count = 0
+        def walk(children: list) -> None:  # type: ignore[type-arg]
+            nonlocal count
+            for child in children:
+                count += 1
+                if isinstance(child, ContainerUnit):
+                    walk(child.children)
+        for c in doc.root_containers:
+            count += 1
+            walk(c.children)
+        return count
+
+    def _serialize_document(doc: KnowledgeDocument) -> Dict[str, Any]:
+        def serialize_node(node: Any) -> Dict[str, Any]:
+            if isinstance(node, ContainerUnit):
+                return {
+                    "id": node.id,
+                    "type": "ContainerUnit",
+                    "title": node.title,
+                    "level": node.level,
+                    "confidence_score": node.confidence_score,
+                    "children": [serialize_node(c) for c in node.children],
+                }
+            elif isinstance(node, ParagraphBlock):
+                text_parts = []
+                for inline in (node.inlines or []):
+                    if hasattr(inline, "spans"):
+                        for span in inline.spans:
+                            if hasattr(span, "text"):
+                                text_parts.append(span.text)
+                return {
+                    "id": node.id,
+                    "type": "ParagraphBlock",
+                    "text": " ".join(text_parts),
+                    "confidence_score": node.confidence_score,
+                }
+            elif isinstance(node, CodeBlock):
+                return {
+                    "id": node.id,
+                    "type": "CodeBlock",
+                    "text": node.code_text or "",
+                    "confidence_score": node.confidence_score,
+                }
+            elif isinstance(node, FigureBlock):
+                return {
+                    "id": node.id,
+                    "type": "FigureBlock",
+                    "image_uri": node.image_uri or "",
+                    "confidence_score": node.confidence_score,
+                }
+            return {"id": getattr(node, "id", ""), "type": type(node).__name__}
+
+        return {
+            "title": doc.title,
+            "source_uri": doc.source_uri,
+            "source_type": doc.source_type,
+            "page_count": doc.metadata.get("page_count", 0) if doc.metadata else 0,
+            "containers": [serialize_node(c) for c in doc.root_containers],
+        }
 
     # --- PyJobKit Reactive SSE and WebSocket Endpoints ---
 
