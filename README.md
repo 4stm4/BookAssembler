@@ -204,3 +204,7 @@ KAE предоставляют REST API `/api/v1/*` и поддержку Server
 - `GET /api/v1/graph/:job_id` — Получение структуры Knowledge Graph и Reading Graph.
 
 ---
+
+## 📜 Лицензия
+
+Проект распространяется под лицензией **MIT**. Подробности в файле [LICENSE](LICENSE).
