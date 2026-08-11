@@ -14,7 +14,15 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from src.krm.models import BaseKRMNode, ContainerUnit, KnowledgeDocument
+from src.krm.models import (
+    BaseKRMNode,
+    ContainerUnit,
+    InlineUnit,
+    KnowledgeDocument,
+    ParagraphBlock,
+    SpanUnit,
+    TableBlock,
+)
 from src.provenance.models import ProvenanceTracker, SourceLocation, TransformationStep
 
 
@@ -39,6 +47,7 @@ class HITLTaskItem:
     status: CorrectionStatus = CorrectionStatus.PENDING_HUMAN_REVIEW
     reviewer_id: Optional[str] = None
     task_id: str = field(default_factory=lambda: str(uuid4()))
+    correction_history: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class HITLManager:
@@ -50,7 +59,7 @@ class HITLManager:
         self._tasks: Dict[str, HITLTaskItem] = {}
 
     def flag_low_confidence_nodes(
-        self, doc: KnowledgeDocument, threshold: float = 0.7
+        self, doc: KnowledgeDocument, threshold: float = 0.80
     ) -> List[HITLTaskItem]:
         """
         Scans all nodes in a KnowledgeDocument and flags nodes with confidence < threshold.
@@ -92,6 +101,14 @@ class HITLManager:
 
         input_snapshot = f"Node(id={node.id}, confidence={node.confidence_score}, metadata={node.metadata})"
 
+        before_state = {
+            "confidence_score": node.confidence_score,
+            "metadata": dict(node.metadata) if node.metadata else {},
+        }
+        for key in correction_payload:
+            if key != "rejected" and hasattr(node, key):
+                before_state[key] = getattr(node, key)
+
         # Apply payload attributes to node
         for key, value in correction_payload.items():
             if key == "rejected":
@@ -111,6 +128,22 @@ class HITLManager:
         else:
             task.status = CorrectionStatus.APPROVED_BY_HUMAN
         task.reviewer_id = reviewer_id
+
+        after_state = {
+            "confidence_score": node.confidence_score,
+            "metadata": dict(node.metadata) if node.metadata else {},
+        }
+        for key in correction_payload:
+            if key != "rejected" and hasattr(node, key):
+                after_state[key] = getattr(node, key)
+
+        from datetime import datetime, timezone
+        task.correction_history.append({
+            "before": before_state,
+            "after": after_state,
+            "reviewer_id": reviewer_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
 
         output_snapshot = f"Node(id={node.id}, confidence={node.confidence_score}, metadata={node.metadata})"
 
@@ -155,6 +188,18 @@ class HITLManager:
             if isinstance(n, ContainerUnit):
                 for child in n.children:
                     _traverse(child)
+            elif isinstance(n, ParagraphBlock):
+                for inline in n.inlines:
+                    _traverse(inline)
+            elif isinstance(n, InlineUnit):
+                for span in n.spans:
+                    _traverse(span)
+            elif isinstance(n, TableBlock):
+                for row in n.grid:
+                    for cell in row:
+                        _traverse(cell)
+                        for content_node in cell.content:
+                            _traverse(content_node)
 
         for root in doc.root_containers:
             _traverse(root)
