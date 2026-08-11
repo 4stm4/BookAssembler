@@ -13,7 +13,7 @@ Guarantees:
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 
 class ReadingTrack(str, Enum):
@@ -158,3 +158,18 @@ class ReadingGraph:
             sequence.append(current_id)
 
         return sequence
+
+    def to_json_dict(self) -> Dict[str, Any]:
+        return {
+            "graph_version": "1.0.0",
+            "edges": [
+                {
+                    "source_id": e.source_id,
+                    "target_id": e.target_id,
+                    "track": e.track.value,
+                    "confidence": e.confidence,
+                    "provenance_analyzer": e.provenance_analyzer,
+                }
+                for e in self._edges
+            ],
+        }

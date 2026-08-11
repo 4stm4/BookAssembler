@@ -38,6 +38,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.adapters import create_default_registry
+from src.analyzers import PipelineRunner, create_default_pipeline
+from src.graph.knowledge_graph import KnowledgeGraph
+from src.graph.reading_graph import ReadingGraph
 from src.adapters.providers import (
     BaseSEPProvider,
     RemoteFileItem,
@@ -187,6 +190,7 @@ def create_app() -> FastAPI:
 
     # In-memory store for documents associated with jobs
     docs_store: Dict[str, KnowledgeDocument] = {}
+    graphs_store: Dict[str, Dict[str, Any]] = {}
 
     @app.post(
         "/api/v1/documents/upload",
@@ -224,8 +228,14 @@ def create_app() -> FastAPI:
 
         docs_store[job.job_id] = doc
 
-        # Automatically flag low confidence nodes for HITL
-        hitl_manager.flag_low_confidence_nodes(doc, threshold=0.7)
+        # Run analyzer pipeline
+        rg = ReadingGraph()
+        kg = KnowledgeGraph()
+        pipeline = PipelineRunner(create_default_pipeline())
+        pipeline.execute(doc, rg, kg)
+        graphs_store[job.job_id] = {"rg": rg, "kg": kg}
+
+        hitl_manager.flag_low_confidence_nodes(doc, threshold=0.80)
 
         return DocumentUploadResponse(
             job_id=job.job_id,
@@ -305,12 +315,10 @@ def create_app() -> FastAPI:
                 break
 
         if target_doc is None:
-            # Fallback mock doc
-            target_doc = KnowledgeDocument(source_uri="hitl_doc")
-            container = ContainerUnit(title="Section")
-            para = ParagraphBlock(id=task.target_krm_id, confidence_score=task.current_confidence)
-            container.children.append(para)
-            target_doc.root_containers.append(container)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document containing KRM node '{task.target_krm_id}' not found",
+            )
 
         hitl_manager.apply_human_correction(
             doc=target_doc,
@@ -340,32 +348,9 @@ def create_app() -> FastAPI:
                 detail=f"Job with ID '{job_id}' not found",
             )
 
-        doc = docs_store.get(job_id)
-
-        # Build graph structure
-        nodes: List[Dict[str, Any]] = []
-        if doc is not None:
-            all_nodes = hitl_manager._get_all_nodes(doc)
-            for n in all_nodes:
-                nodes.append(
-                    {
-                        "id": n.id,
-                        "type": type(n).__name__,
-                        "confidence": n.confidence_score,
-                    }
-                )
-
-        kg_data = {
-            "job_id": job_id,
-            "nodes": nodes if nodes else [{"id": "root_node", "type": "CONCEPT", "confidence": 1.0}],
-            "edges": [],
-        }
-
-        rg_data = {
-            "job_id": job_id,
-            "reading_order": [n["id"] for n in nodes] if nodes else ["root_node"],
-            "sequence": [],
-        }
+        graphs = graphs_store.get(job_id, {})
+        kg_data = graphs["kg"].to_json_dict() if "kg" in graphs else {"graph_version": "1.0.0", "entities": [], "edges": []}
+        rg_data = graphs["rg"].to_json_dict() if "rg" in graphs else {"graph_version": "1.0.0", "edges": []}
 
         return GraphVisualizationResponse(
             job_id=job_id,
@@ -504,6 +489,14 @@ def create_app() -> FastAPI:
                     None, adapter.parse, file_stream, job.source_uri
                 )
                 docs_store[job.job_id] = doc
+
+                rg = ReadingGraph()
+                kg = KnowledgeGraph()
+                pipeline = PipelineRunner(create_default_pipeline())
+                pipeline.execute(doc, rg, kg)
+                graphs_store[job.job_id] = {"rg": rg, "kg": kg}
+                hitl_manager.flag_low_confidence_nodes(doc, threshold=0.80)
+
                 job_manager.update_status(job.job_id, JobStatus.COMPLETED)
             except Exception as parse_err:
                 doc = KnowledgeDocument(source_uri=job.source_uri)
