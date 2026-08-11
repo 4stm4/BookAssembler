@@ -38,7 +38,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.adapters import create_default_registry
+from src.ai_layer.chunker import SemanticChunker
+from src.ai_layer.exporter import AIKnowledgeExporter
 from src.analyzers import PipelineRunner, create_default_pipeline
+from src.audit.logger import AuditLogger
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.adapters.providers import (
@@ -167,6 +170,7 @@ def create_app() -> FastAPI:
     sep_manager = SEPManager()
     pyjobkit_bridge = PyJobKitBridge()
     adapter_registry = create_default_registry()
+    audit_logger = AuditLogger(log_dir=os.environ.get("KAE_DATA_DIR", ".kae"))
 
     app.state.pyjobkit_bridge = pyjobkit_bridge
 
@@ -326,6 +330,12 @@ def create_app() -> FastAPI:
             correction_payload=body.correction_payload,
             reviewer_id=body.reviewer_id,
         )
+
+        audit_logger.log("HITL_CORRECTION", body.reviewer_id, {
+            "task_id": body.task_id,
+            "target_krm_id": task.target_krm_id,
+            "status": task.status.value,
+        })
 
         return HumanCorrectionResponse(
             status=task.status.value,
@@ -497,6 +507,14 @@ def create_app() -> FastAPI:
                 graphs_store[job.job_id] = {"rg": rg, "kg": kg}
                 hitl_manager.flag_low_confidence_nodes(doc, threshold=0.80)
 
+                audit_logger.log("DOCUMENT_IMPORTED", "system", {
+                    "job_id": job.job_id, "source_uri": job.source_uri,
+                })
+                audit_logger.log("PIPELINE_EXECUTED", "system", {
+                    "job_id": job.job_id,
+                    "analyzers": [a.manifest.name for a in create_default_pipeline()],
+                })
+
                 job_manager.update_status(job.job_id, JobStatus.COMPLETED)
             except Exception as parse_err:
                 doc = KnowledgeDocument(source_uri=job.source_uri)
@@ -613,6 +631,35 @@ def create_app() -> FastAPI:
             "page_count": doc.metadata.get("page_count", 0) if doc.metadata else 0,
             "containers": [serialize_node(c) for c in doc.root_containers],
         }
+
+    # --- SemanticChunker & Translation Endpoints ---
+
+    @app.get("/api/v1/jobs/{job_id}/chunks")
+    async def get_job_chunks(job_id: str) -> Dict[str, Any]:
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        graphs = graphs_store.get(job_id, {})
+        rg = graphs.get("rg", ReadingGraph())
+        kg = graphs.get("kg", KnowledgeGraph())
+        chunker = SemanticChunker()
+        chunks = chunker.build_chunks(doc, rg, kg)
+        return AIKnowledgeExporter.export_chunks_manifest(chunks)
+
+    class TranslateRequest(BaseModel):
+        page_number: int
+        source_text: str
+
+    @app.post("/api/v1/jobs/{job_id}/translate")
+    async def translate_page(job_id: str, body: TranslateRequest) -> Dict[str, Any]:
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        audit_logger.log("TRANSLATION_REQUESTED", "api", {
+            "job_id": job_id, "page_number": body.page_number,
+        })
+        translated = f"[Translation pending — connect LLM API]\n\n{body.source_text}"
+        return {"translated_text": translated, "page_number": body.page_number}
 
     # --- PyJobKit Reactive SSE and WebSocket Endpoints ---
 

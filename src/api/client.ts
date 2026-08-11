@@ -197,6 +197,22 @@ export class KAEApiClient {
     return res.json();
   }
 
+  async getChunks(jobId: string): Promise<any> {
+    const res = await fetch(`${API_BASE}/jobs/${jobId}/chunks`);
+    if (!res.ok) throw new Error(`Failed to fetch chunks: ${res.statusText}`);
+    return res.json();
+  }
+
+  async translatePage(jobId: string, pageNumber: number, sourceText: string): Promise<{ translated_text: string; page_number: number }> {
+    const res = await fetch(`${API_BASE}/jobs/${jobId}/translate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page_number: pageNumber, source_text: sourceText }),
+    });
+    if (!res.ok) throw new Error(`Failed to translate: ${res.statusText}`);
+    return res.json();
+  }
+
   /**
    * Subscribe to Server-Sent Events (SSE) broadcasting all PyJobKit job progress events
    */

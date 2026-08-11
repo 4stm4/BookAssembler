@@ -268,18 +268,20 @@ export interface KRMNode {
   confidence_score: number;
   title?: string;
   text?: string;
+  level?: number;
   children?: KRMNode[];
 }
 
 export interface GraphVisualizationData {
   job_id: string;
   knowledge_graph: {
-    nodes: Array<{ id: string; type: string; confidence: number; label?: string }>;
-    edges: Array<{ source: string; target: string; relation?: string }>;
+    graph_version?: string;
+    entities: Array<{ id: string; name: string; entity_type: string; canonical_name?: string; description?: string }>;
+    edges: Array<{ source_id: string; target_id: string; relation_type: string; confidence: number; provenance_analyzer?: string }>;
   };
   reading_graph: {
-    reading_order: string[];
-    sequence: any[];
+    graph_version?: string;
+    edges: Array<{ source_id: string; target_id: string; track: string; confidence: number; provenance_analyzer?: string }>;
   };
 }
 
