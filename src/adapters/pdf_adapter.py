@@ -261,8 +261,22 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     style=style,
                 )
 
-                if max_font_size >= heading_threshold and not is_mono_block and len(full_text) < 200:
-                    level = 1 if max_font_size >= heading_threshold * 1.2 else 2
+                is_plausible_heading = (
+                    max_font_size >= heading_threshold
+                    and not is_mono_block
+                    and len(full_text) < 200
+                    and len(full_text.strip()) >= 3
+                    and any(c.isalpha() for c in full_text)
+                )
+
+                if is_plausible_heading:
+                    ratio = max_font_size / heading_threshold
+                    if ratio >= 1.4:
+                        level = 1
+                    elif ratio >= 1.15:
+                        level = 2
+                    else:
+                        level = 3
 
                     while len(container_stack) > 1 and container_stack[-1].level >= level:
                         container_stack.pop()
