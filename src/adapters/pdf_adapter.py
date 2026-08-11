@@ -136,7 +136,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
         all_font_sizes: List[float] = []
         for page_idx in range(min(max_pages, len(pdf_doc))):
             page = pdf_doc.load_page(page_idx)
-            page_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+            page_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_PRESERVE_WHITESPACE)
             for block in page_dict.get("blocks", []):
                 if block.get("type") == 0:
                     for line in block.get("lines", []):
@@ -159,7 +159,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
             page = pdf_doc.load_page(page_idx)
             pw = float(page.rect.width) or 1.0
             ph = float(page.rect.height) or 1.0
-            page_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)
+            page_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_PRESERVE_WHITESPACE)
 
             page_has_text = False
 
@@ -208,19 +208,20 @@ class PdfSourceAdapter(BaseSourceAdapter):
                 if not lines:
                     continue
 
-                block_text_parts: List[str] = []
+                line_texts: List[str] = []
                 block_spans_info: List[Dict[str, Any]] = []
                 is_mono_block = True
                 max_font_size = 0.0
                 is_bold_block = False
 
                 for line in lines:
+                    line_parts: List[str] = []
                     for span in line.get("spans", []):
                         text = span.get("text", "")
                         if not text.strip():
                             continue
                         page_has_text = True
-                        block_text_parts.append(text)
+                        line_parts.append(text)
                         font_name = span.get("font", "")
                         font_size = span.get("size", 12.0)
                         flags = span.get("flags", 0)
@@ -241,8 +242,10 @@ class PdfSourceAdapter(BaseSourceAdapter):
                             "italic": is_italic,
                             "mono": is_mono,
                         })
+                    if line_parts:
+                        line_texts.append("".join(line_parts))
 
-                full_text = " ".join(block_text_parts).strip()
+                full_text = " ".join(line_texts).strip()
                 if not full_text:
                     continue
 
@@ -283,27 +286,16 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     )
                     container_stack[-1].children.append(code)
                 else:
-                    inlines: List[InlineUnit] = []
-                    for si in block_spans_info:
-                        span_style = StyleDescriptor(
-                            font_family=si["font"],
-                            font_size_pt=si["size"],
-                            is_bold=si["bold"],
-                            is_italic=si["italic"],
-                            is_monospace=si["mono"],
-                        )
-                        styled_span = StyledTextSpan(
-                            text=si["text"],
-                            visual_layout=VisualLayout(
-                                bounding_box=norm_rect,
-                                page_or_screen_index=page_idx,
-                                style=span_style,
-                            ),
-                        )
-                        inlines.append(TextLineInline(spans=[styled_span]))
-
+                    styled_span = StyledTextSpan(
+                        text=full_text,
+                        visual_layout=VisualLayout(
+                            bounding_box=norm_rect,
+                            page_or_screen_index=page_idx,
+                            style=style,
+                        ),
+                    )
                     para = ParagraphBlock(
-                        inlines=inlines,
+                        inlines=[TextLineInline(spans=[styled_span])],
                         parent_container_id=container_stack[-1].id,
                         provenance_info=provenance,
                         visual_layout=layout,

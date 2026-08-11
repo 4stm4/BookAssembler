@@ -25,6 +25,64 @@ import kaeApi from '../api/client';
 import { HITLTask, KAEJobEvent, KRMNode } from '../types';
 import SEPSourcesDialog from './SEPSourcesDialog';
 
+const TYPE_COLORS: Record<string, string> = {
+  ContainerUnit: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20',
+  ParagraphBlock: 'bg-sky-500/10 text-sky-400 border-sky-500/20',
+  CodeBlock: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+  FigureBlock: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
+  FormulaBlock: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
+  TableBlock: 'bg-pink-500/10 text-pink-400 border-pink-500/20',
+};
+
+const KRMNodeView: React.FC<{ node: KRMNode; depth: number }> = ({ node, depth }) => {
+  const [collapsed, setCollapsed] = useState(depth > 1);
+  const isContainer = node.type === 'ContainerUnit';
+  const hasChildren = node.children && node.children.length > 0;
+  const label = node.title || node.text?.slice(0, 80) || node.type;
+  const confPct = (node.confidence_score * 100).toFixed(0);
+  const isLow = node.confidence_score < 0.80;
+  const typeColor = TYPE_COLORS[node.type] || 'bg-slate-500/10 text-slate-400 border-slate-500/20';
+
+  return (
+    <div className={`${depth > 0 ? 'pl-4 border-l-2 border-slate-800/50' : ''}`}>
+      <div
+        className={`p-2.5 rounded-lg border text-xs font-sans mb-1.5 transition-all ${
+          isLow ? 'bg-amber-500/10 border-amber-500/30' : 'bg-slate-900/60 border-slate-800/80'
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center space-x-2 min-w-0">
+            {hasChildren && (
+              <button
+                onClick={() => setCollapsed(!collapsed)}
+                className="text-slate-500 hover:text-white text-[10px] shrink-0 w-4"
+              >
+                {collapsed ? '▶' : '▼'}
+              </button>
+            )}
+            <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono border shrink-0 ${typeColor}`}>
+              {node.type === 'ContainerUnit' ? `L${node.level || 1}` : node.type.replace('Block', '')}
+            </span>
+            <span className={`truncate ${isContainer ? 'font-semibold text-white' : 'text-slate-300'}`}>
+              {label}
+            </span>
+          </div>
+          <span className={`text-[10px] font-mono shrink-0 ${isLow ? 'text-amber-400' : 'text-emerald-400'}`}>
+            {confPct}%
+          </span>
+        </div>
+      </div>
+      {hasChildren && !collapsed && (
+        <div className="space-y-1 mt-1">
+          {node.children!.map((child: KRMNode) => (
+            <KRMNodeView key={child.id} node={child} depth={depth + 1} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 interface CleanWorkspaceProps {
   activeJobId?: string | null;
   onJobCreated?: (jobId: string) => void;
@@ -123,12 +181,7 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
     try {
       const tasks = await kaeApi.getHITLTasks();
       setPendingHitlTasks(tasks);
-      if (tasks.length > 0) {
-        setActiveHitlTask(tasks[0]);
-        setHitlEditText(tasks[0].suggested_fix?.suggested_text || tasks[0].suggested_fix?.original_text || '');
-      } else {
-        setActiveHitlTask(null);
-      }
+      setActiveHitlTask(null);
     } catch (err) {
       console.warn('Failed to fetch HITL tasks:', err);
     }
@@ -326,6 +379,19 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
                 Исходный текст
               </button>
             </div>
+
+            {pendingHitlTasks.length > 0 && (
+              <button
+                onClick={() => {
+                  const task = pendingHitlTasks[0];
+                  setActiveHitlTask(task);
+                  setHitlEditText(task.suggested_fix?.suggested_text || task.suggested_fix?.original_text || '');
+                }}
+                className="px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px] font-medium hover:bg-amber-500/20 transition-colors"
+              >
+                HITL: {pendingHitlTasks.length} задач
+              </button>
+            )}
           </div>
 
           {/* Pane Content */}
@@ -336,51 +402,7 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
                   Иерархия узлов KRM (Knowledge Representation Model)
                 </div>
                 {krmNodes.map((node) => (
-                  <div
-                    key={node.id}
-                    className="p-3.5 rounded-xl bg-slate-900/60 border border-slate-800/80 space-y-2"
-                  >
-                    <div className="flex items-center justify-between font-sans">
-                      <div className="flex items-center space-x-2">
-                        <span className="px-2 py-0.5 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded-md font-mono text-[10px]">
-                          {node.type}
-                        </span>
-                        <span className="font-semibold text-white">{node.title}</span>
-                      </div>
-                      <span className="text-[10px] text-emerald-400 font-mono">
-                        Conf: {(node.confidence_score * 100).toFixed(0)}%
-                      </span>
-                    </div>
-
-                    {node.children && (
-                      <div className="pl-4 border-l-2 border-slate-800 space-y-2 mt-2">
-                        {node.children.map((child) => (
-                          <div
-                            key={child.id}
-                            className={`p-2.5 rounded-lg border text-xs font-sans transition-all ${
-                              child.confidence_score < 0.7
-                                ? 'bg-amber-500/10 border-amber-500/30 text-amber-200'
-                                : 'bg-slate-950/80 border-slate-800/60 text-slate-300'
-                            }`}
-                          >
-                            <div className="flex items-center justify-between mb-1 text-[11px]">
-                              <span className="font-mono text-cyan-400">{child.type}</span>
-                              <span
-                                className={`font-mono font-medium ${
-                                  child.confidence_score < 0.7 ? 'text-amber-400' : 'text-emerald-400'
-                                }`}
-                              >
-                                Confidence: {(child.confidence_score * 100).toFixed(0)}%
-                              </span>
-                            </div>
-                            <div className="font-mono text-[11px] text-slate-400 truncate">
-                              {child.text}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                  <KRMNodeView key={node.id} node={node} depth={0} />
                 ))}
               </div>
             ) : (
