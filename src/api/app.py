@@ -60,6 +60,7 @@ from src.krm.models import (
     CodeBlock,
     ContainerUnit,
     FigureBlock,
+    FormulaBlock,
     KnowledgeDocument,
     ParagraphBlock,
     StyledTextSpan,
@@ -244,6 +245,13 @@ def create_app() -> FastAPI:
                     "image_uri": node.image_uri or "",
                     "confidence_score": node.confidence_score,
                 }
+            elif isinstance(node, FormulaBlock):
+                return {
+                    "id": node.id,
+                    "type": "FormulaBlock",
+                    "text": node.latex_expression or "",
+                    "confidence_score": node.confidence_score,
+                }
             return {"id": getattr(node, "id", ""), "type": type(node).__name__}
 
         return {
@@ -288,6 +296,13 @@ def create_app() -> FastAPI:
                 )
                 fb.id = n.get("id", fb.id)
                 return fb
+            elif t == "FormulaBlock":
+                fm = FormulaBlock(
+                    latex_expression=n.get("text", ""),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                fm.id = n.get("id", fm.id)
+                return fm
             return ContainerUnit(title=n.get("title", "unknown"))
 
         doc = KnowledgeDocument(

@@ -30,6 +30,7 @@ from src.krm.models import (
     CodeBlock,
     ContainerUnit,
     FigureBlock,
+    FormulaBlock,
     InlineUnit,
     KnowledgeDocument,
     NormalizedRect,
@@ -67,6 +68,32 @@ def _detect_heading_threshold(all_sizes: List[float]) -> float:
     counts = Counter(round(s, 1) for s in all_sizes)
     body_size = counts.most_common(1)[0][0]
     return body_size * 1.25
+
+
+import re
+
+_FORMULA_PATTERN = re.compile(
+    r'^[\d\s\.,=+\-*/()×÷<>≤≥≠\[\]{}|^_%#xXhHbBoO\'\"]+$'
+)
+_WORD_RE = re.compile(r'[a-zA-Z]{3,}')
+
+
+def _is_formula_text(text: str) -> bool:
+    """Detect if text looks like a numeric formula/conversion listing."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if _WORD_RE.search(stripped):
+        return False
+    total = len(stripped)
+    if total <= 2:
+        return True
+    if _FORMULA_PATTERN.match(stripped):
+        return True
+    alpha_count = sum(1 for c in stripped if c.isalpha())
+    if alpha_count == 0 and total < 60:
+        return True
+    return False
 
 
 class PdfSourceAdapter(BaseSourceAdapter):
@@ -299,6 +326,14 @@ class PdfSourceAdapter(BaseSourceAdapter):
                         visual_layout=layout,
                     )
                     container_stack[-1].children.append(code)
+                elif _is_formula_text(full_text):
+                    formula = FormulaBlock(
+                        latex_expression=full_text,
+                        parent_container_id=container_stack[-1].id,
+                        provenance_info=provenance,
+                        visual_layout=layout,
+                    )
+                    container_stack[-1].children.append(formula)
                 else:
                     styled_span = StyledTextSpan(
                         text=full_text,
