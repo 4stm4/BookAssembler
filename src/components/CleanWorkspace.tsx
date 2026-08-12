@@ -38,6 +38,7 @@ const KRMNodeView: React.FC<{ node: KRMNode; depth: number }> = ({ node, depth }
   const [collapsed, setCollapsed] = useState(depth > 1);
   const [expanded, setExpanded] = useState(false);
   const isContainer = node.type === 'ContainerUnit';
+  const isTable = node.type === 'TableBlock';
   const hasChildren = node.children && node.children.length > 0;
   const fullText = node.title || node.text || '';
   const isLong = !isContainer && fullText.length > 80;
@@ -49,14 +50,14 @@ const KRMNodeView: React.FC<{ node: KRMNode; depth: number }> = ({ node, depth }
   return (
     <div className={`${depth > 0 ? 'pl-4 border-l-2 border-slate-800/50' : ''}`}>
       <div
-        onClick={isLong ? () => setExpanded(!expanded) : undefined}
+        onClick={isLong ? () => setExpanded(!expanded) : isTable ? () => setCollapsed(!collapsed) : undefined}
         className={`p-2.5 rounded-lg border text-xs font-sans mb-1.5 transition-all ${
           isLow ? 'bg-amber-500/10 border-amber-500/30' : 'bg-slate-900/60 border-slate-800/80'
-        } ${isLong ? 'cursor-pointer hover:border-slate-700' : ''}`}
+        } ${isLong || isTable ? 'cursor-pointer hover:border-slate-700' : ''}`}
       >
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-start space-x-2 min-w-0">
-            {hasChildren && (
+            {(hasChildren || isTable) && (
               <button
                 onClick={(e) => { e.stopPropagation(); setCollapsed(!collapsed); }}
                 className="text-slate-500 hover:text-white text-[10px] shrink-0 w-4 mt-0.5"
@@ -68,7 +69,7 @@ const KRMNodeView: React.FC<{ node: KRMNode; depth: number }> = ({ node, depth }
               {node.type === 'ContainerUnit' ? `L${node.level || 1}` : node.type.replace('Block', '')}
             </span>
             <span className={`${expanded ? 'whitespace-pre-wrap break-words' : 'truncate'} ${isContainer ? 'font-semibold text-white' : 'text-slate-300'}`}>
-              {label || node.type}
+              {isTable ? `Таблица (${node.rows?.length || 0} строк)` : (label || node.type)}
             </span>
           </div>
           <span className={`text-[10px] font-mono shrink-0 mt-0.5 ${isLow ? 'text-amber-400' : 'text-emerald-400'}`}>
@@ -76,6 +77,23 @@ const KRMNodeView: React.FC<{ node: KRMNode; depth: number }> = ({ node, depth }
           </span>
         </div>
       </div>
+      {isTable && node.rows && !collapsed && (
+        <div className="overflow-x-auto mt-1 mb-1.5 ml-4">
+          <table className="text-[11px] font-mono border-collapse">
+            <tbody>
+              {node.rows.map((row, ri) => (
+                <tr key={ri} className={ri === 0 ? 'text-slate-400 font-semibold' : ''}>
+                  {row.map((cell, ci) => (
+                    <td key={ci} className="px-2 py-1 border border-slate-800/60 text-slate-300 whitespace-nowrap">
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       {hasChildren && !collapsed && (
         <div className="space-y-1 mt-1">
           {node.children!.map((child: KRMNode) => (

@@ -18,6 +18,7 @@ from src.analyzers.heading import HeadingAnalyzer
 from src.analyzers.normalization import NormalizationAnalyzer
 from src.analyzers.pipeline import PipelineRunner
 from src.analyzers.reading_order import ReadingOrderAnalyzer
+from src.analyzers.table_detector import TableDetectorAnalyzer
 
 
 def create_default_pipeline() -> List[BaseAnalyzer]:
@@ -26,6 +27,7 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         ReadingOrderAnalyzer(),
         HeadingAnalyzer(),
         EntityExtractorAnalyzer(),
+        TableDetectorAnalyzer(),
     ]
 
 
@@ -41,5 +43,6 @@ __all__ = [
     "RGPermission",
     "ReadingOrderAnalyzer",
     "SecurityViolationError",
+    "TableDetectorAnalyzer",
     "create_default_pipeline",
 ]
