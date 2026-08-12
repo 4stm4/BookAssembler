@@ -186,15 +186,151 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def startup_event() -> None:
+        _load_persisted_docs()
         pyjobkit_bridge.start_worker()
 
     @app.on_event("shutdown")
     async def shutdown_event() -> None:
         await pyjobkit_bridge.stop_worker()
 
-    # In-memory store for documents associated with jobs
+    def _count_nodes(doc: KnowledgeDocument) -> int:
+        count = 0
+        def walk(children: list) -> None:  # type: ignore[type-arg]
+            nonlocal count
+            for child in children:
+                count += 1
+                if isinstance(child, ContainerUnit):
+                    walk(child.children)
+        for c in doc.root_containers:
+            count += 1
+            walk(c.children)
+        return count
+
+    def _serialize_document(doc: KnowledgeDocument) -> Dict[str, Any]:
+        def serialize_node(node: Any) -> Dict[str, Any]:
+            if isinstance(node, ContainerUnit):
+                return {
+                    "id": node.id,
+                    "type": "ContainerUnit",
+                    "title": node.title,
+                    "level": node.level,
+                    "confidence_score": node.confidence_score,
+                    "children": [serialize_node(c) for c in node.children],
+                }
+            elif isinstance(node, ParagraphBlock):
+                text_parts = []
+                for inline in (node.inlines or []):
+                    if hasattr(inline, "spans"):
+                        for span in inline.spans:
+                            if hasattr(span, "text"):
+                                text_parts.append(span.text)
+                return {
+                    "id": node.id,
+                    "type": "ParagraphBlock",
+                    "text": " ".join(text_parts),
+                    "confidence_score": node.confidence_score,
+                }
+            elif isinstance(node, CodeBlock):
+                return {
+                    "id": node.id,
+                    "type": "CodeBlock",
+                    "text": node.code_text or "",
+                    "confidence_score": node.confidence_score,
+                }
+            elif isinstance(node, FigureBlock):
+                return {
+                    "id": node.id,
+                    "type": "FigureBlock",
+                    "image_uri": node.image_uri or "",
+                    "confidence_score": node.confidence_score,
+                }
+            return {"id": getattr(node, "id", ""), "type": type(node).__name__}
+
+        return {
+            "title": doc.title,
+            "source_uri": doc.source_uri,
+            "source_type": doc.source_type,
+            "page_count": doc.metadata.get("page_count", 0) if doc.metadata else 0,
+            "containers": [serialize_node(c) for c in doc.root_containers],
+        }
+
+    def _rebuild_document(data: Dict[str, Any]) -> KnowledgeDocument:
+        def rebuild_node(n: Dict[str, Any]) -> Any:
+            t = n.get("type", "")
+            if t == "ContainerUnit":
+                c = ContainerUnit(
+                    title=n.get("title", ""),
+                    level=n.get("level", 1),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                c.id = n.get("id", c.id)
+                for ch in n.get("children", []):
+                    c.children.append(rebuild_node(ch))
+                return c
+            elif t == "ParagraphBlock":
+                p = ParagraphBlock(
+                    confidence_score=n.get("confidence_score", 1.0),
+                    inlines=[TextLineInline(spans=[StyledTextSpan(text=n.get("text", ""))])],
+                )
+                p.id = n.get("id", p.id)
+                return p
+            elif t == "CodeBlock":
+                cb = CodeBlock(
+                    code_text=n.get("text", ""),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                cb.id = n.get("id", cb.id)
+                return cb
+            elif t == "FigureBlock":
+                fb = FigureBlock(
+                    image_uri=n.get("image_uri", ""),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                fb.id = n.get("id", fb.id)
+                return fb
+            return ContainerUnit(title=n.get("title", "unknown"))
+
+        doc = KnowledgeDocument(
+            title=data.get("title", ""),
+            source_uri=data.get("_source_uri", data.get("source_uri", "")),
+            source_type=data.get("_source_type", data.get("source_type", "pdf")),
+            metadata={"page_count": data.get("page_count", 0)},
+        )
+        for c in data.get("containers", []):
+            doc.root_containers.append(rebuild_node(c))
+        return doc
+
+    # Persistent document store (L1 Local Disk per RFC 0013)
     docs_store: Dict[str, KnowledgeDocument] = {}
     graphs_store: Dict[str, Dict[str, Any]] = {}
+    _docs_dir = os.path.join(os.environ.get("KAE_DATA_DIR", ".kae"), "docs")
+    os.makedirs(_docs_dir, exist_ok=True)
+
+    def _persist_doc(job_id: str, doc: KnowledgeDocument) -> None:
+        path = os.path.join(_docs_dir, f"{job_id}.json")
+        data = _serialize_document(doc)
+        data["_source_uri"] = doc.source_uri
+        data["_source_type"] = doc.source_type
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+    def _load_persisted_docs() -> None:
+        for fname in os.listdir(_docs_dir):
+            if not fname.endswith(".json"):
+                continue
+            job_id = fname[:-5]
+            if job_id in docs_store:
+                continue
+            try:
+                with open(os.path.join(_docs_dir, fname)) as f:
+                    data = json.load(f)
+                doc = _rebuild_document(data)
+                docs_store[job_id] = doc
+                job = job_manager.get_job(job_id)
+                if not job:
+                    job_manager.restore_job(job_id, data.get("_source_uri", ""), "COMPLETED")
+            except Exception:
+                pass
 
     @app.post(
         "/api/v1/documents/upload",
@@ -231,6 +367,7 @@ def create_app() -> FastAPI:
         doc.root_containers.append(container)
 
         docs_store[job.job_id] = doc
+        _persist_doc(job.job_id, doc)
 
         # Run analyzer pipeline
         rg = ReadingGraph()
@@ -499,6 +636,7 @@ def create_app() -> FastAPI:
                     None, adapter.parse, file_stream, job.source_uri
                 )
                 docs_store[job.job_id] = doc
+                _persist_doc(job.job_id, doc)
 
                 rg = ReadingGraph()
                 kg = KnowledgeGraph()
@@ -570,67 +708,6 @@ def create_app() -> FastAPI:
         if doc is None:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
         return _serialize_document(doc)
-
-    def _count_nodes(doc: KnowledgeDocument) -> int:
-        count = 0
-        def walk(children: list) -> None:  # type: ignore[type-arg]
-            nonlocal count
-            for child in children:
-                count += 1
-                if isinstance(child, ContainerUnit):
-                    walk(child.children)
-        for c in doc.root_containers:
-            count += 1
-            walk(c.children)
-        return count
-
-    def _serialize_document(doc: KnowledgeDocument) -> Dict[str, Any]:
-        def serialize_node(node: Any) -> Dict[str, Any]:
-            if isinstance(node, ContainerUnit):
-                return {
-                    "id": node.id,
-                    "type": "ContainerUnit",
-                    "title": node.title,
-                    "level": node.level,
-                    "confidence_score": node.confidence_score,
-                    "children": [serialize_node(c) for c in node.children],
-                }
-            elif isinstance(node, ParagraphBlock):
-                text_parts = []
-                for inline in (node.inlines or []):
-                    if hasattr(inline, "spans"):
-                        for span in inline.spans:
-                            if hasattr(span, "text"):
-                                text_parts.append(span.text)
-                return {
-                    "id": node.id,
-                    "type": "ParagraphBlock",
-                    "text": " ".join(text_parts),
-                    "confidence_score": node.confidence_score,
-                }
-            elif isinstance(node, CodeBlock):
-                return {
-                    "id": node.id,
-                    "type": "CodeBlock",
-                    "text": node.code_text or "",
-                    "confidence_score": node.confidence_score,
-                }
-            elif isinstance(node, FigureBlock):
-                return {
-                    "id": node.id,
-                    "type": "FigureBlock",
-                    "image_uri": node.image_uri or "",
-                    "confidence_score": node.confidence_score,
-                }
-            return {"id": getattr(node, "id", ""), "type": type(node).__name__}
-
-        return {
-            "title": doc.title,
-            "source_uri": doc.source_uri,
-            "source_type": doc.source_type,
-            "page_count": doc.metadata.get("page_count", 0) if doc.metadata else 0,
-            "containers": [serialize_node(c) for c in doc.root_containers],
-        }
 
     # --- SemanticChunker & Translation Endpoints ---
 
