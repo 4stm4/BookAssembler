@@ -64,6 +64,8 @@ from src.krm.models import (
     KnowledgeDocument,
     ParagraphBlock,
     StyledTextSpan,
+    TableBlock,
+    TableCell,
     TextLineInline,
 )
 
@@ -252,6 +254,26 @@ def create_app() -> FastAPI:
                     "text": node.latex_expression or "",
                     "confidence_score": node.confidence_score,
                 }
+            elif isinstance(node, TableBlock):
+                rows = []
+                for row in node.grid:
+                    cells = []
+                    for cell in row:
+                        cell_text = ""
+                        for content in cell.content:
+                            if isinstance(content, ParagraphBlock):
+                                for inline in (content.inlines or []):
+                                    for span in getattr(inline, "spans", []):
+                                        if hasattr(span, "text"):
+                                            cell_text += span.text
+                        cells.append(cell_text)
+                    rows.append(cells)
+                return {
+                    "id": node.id,
+                    "type": "TableBlock",
+                    "rows": rows,
+                    "confidence_score": node.confidence_score,
+                }
             return {"id": getattr(node, "id", ""), "type": type(node).__name__}
 
         return {
@@ -303,6 +325,21 @@ def create_app() -> FastAPI:
                 )
                 fm.id = n.get("id", fm.id)
                 return fm
+            elif t == "TableBlock":
+                grid = []
+                for row in n.get("rows", []):
+                    cells = []
+                    for cell_text in row:
+                        cell = TableCell(
+                            content=[ParagraphBlock(
+                                inlines=[TextLineInline(spans=[StyledTextSpan(text=cell_text)])]
+                            )]
+                        )
+                        cells.append(cell)
+                    grid.append(cells)
+                tb = TableBlock(grid=grid, confidence_score=n.get("confidence_score", 1.0))
+                tb.id = n.get("id", tb.id)
+                return tb
             return ContainerUnit(title=n.get("title", "unknown"))
 
         doc = KnowledgeDocument(
