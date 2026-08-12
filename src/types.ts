@@ -270,6 +270,7 @@ export interface KRMNode {
   text?: string;
   level?: number;
   children?: KRMNode[];
+  rows?: string[][];
 }
 
 export interface GraphVisualizationData {
