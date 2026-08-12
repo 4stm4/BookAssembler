@@ -36,9 +36,12 @@ const TYPE_COLORS: Record<string, string> = {
 
 const KRMNodeView: React.FC<{ node: KRMNode; depth: number }> = ({ node, depth }) => {
   const [collapsed, setCollapsed] = useState(depth > 1);
+  const [expanded, setExpanded] = useState(false);
   const isContainer = node.type === 'ContainerUnit';
   const hasChildren = node.children && node.children.length > 0;
-  const label = node.title || node.text?.slice(0, 80) || node.type;
+  const fullText = node.title || node.text || '';
+  const isLong = !isContainer && fullText.length > 80;
+  const label = expanded || !isLong ? fullText : fullText.slice(0, 80) + '…';
   const confPct = (node.confidence_score * 100).toFixed(0);
   const isLow = node.confidence_score < 0.80;
   const typeColor = TYPE_COLORS[node.type] || 'bg-slate-500/10 text-slate-400 border-slate-500/20';
@@ -46,16 +49,17 @@ const KRMNodeView: React.FC<{ node: KRMNode; depth: number }> = ({ node, depth }
   return (
     <div className={`${depth > 0 ? 'pl-4 border-l-2 border-slate-800/50' : ''}`}>
       <div
+        onClick={isLong ? () => setExpanded(!expanded) : undefined}
         className={`p-2.5 rounded-lg border text-xs font-sans mb-1.5 transition-all ${
           isLow ? 'bg-amber-500/10 border-amber-500/30' : 'bg-slate-900/60 border-slate-800/80'
-        }`}
+        } ${isLong ? 'cursor-pointer hover:border-slate-700' : ''}`}
       >
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center space-x-2 min-w-0">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-start space-x-2 min-w-0">
             {hasChildren && (
               <button
-                onClick={() => setCollapsed(!collapsed)}
-                className="text-slate-500 hover:text-white text-[10px] shrink-0 w-4"
+                onClick={(e) => { e.stopPropagation(); setCollapsed(!collapsed); }}
+                className="text-slate-500 hover:text-white text-[10px] shrink-0 w-4 mt-0.5"
               >
                 {collapsed ? '▶' : '▼'}
               </button>
@@ -63,11 +67,11 @@ const KRMNodeView: React.FC<{ node: KRMNode; depth: number }> = ({ node, depth }
             <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono border shrink-0 ${typeColor}`}>
               {node.type === 'ContainerUnit' ? `L${node.level || 1}` : node.type.replace('Block', '')}
             </span>
-            <span className={`truncate ${isContainer ? 'font-semibold text-white' : 'text-slate-300'}`}>
-              {label}
+            <span className={`${expanded ? 'whitespace-pre-wrap break-words' : 'truncate'} ${isContainer ? 'font-semibold text-white' : 'text-slate-300'}`}>
+              {label || node.type}
             </span>
           </div>
-          <span className={`text-[10px] font-mono shrink-0 ${isLow ? 'text-amber-400' : 'text-emerald-400'}`}>
+          <span className={`text-[10px] font-mono shrink-0 mt-0.5 ${isLow ? 'text-amber-400' : 'text-emerald-400'}`}>
             {confPct}%
           </span>
         </div>

@@ -8,11 +8,13 @@ import {
   RefreshCw,
   CheckCircle2,
   X,
+  ArrowLeft,
   ArrowRight,
   ChevronRight,
   Database,
   Globe,
   HardDriveUpload,
+  Download,
 } from 'lucide-react';
 import kaeApi from '../api/client';
 import { SEPProvider, SEPRemoteFile } from '../types';
@@ -23,51 +25,54 @@ interface SEPSourcesDialogProps {
   onImportSuccess?: (jobId: string, sourceUri: string) => void;
 }
 
+type DialogView = 'providers' | 'browse' | 'add';
+
 export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
   isOpen,
   onClose,
   onImportSuccess,
 }) => {
   const [providers, setProviders] = useState<SEPProvider[]>([]);
-  const [selectedProviderId, setSelectedProviderId] = useState<string>('');
+  const [selectedProvider, setSelectedProvider] = useState<SEPProvider | null>(null);
   const [currentFolderPath, setCurrentFolderPath] = useState<string>('/');
   const [files, setFiles] = useState<SEPRemoteFile[]>([]);
   const [isLoadingProviders, setIsLoadingProviders] = useState<boolean>(false);
   const [isLoadingFiles, setIsLoadingFiles] = useState<boolean>(false);
   const [isImporting, setIsImporting] = useState<boolean>(false);
-  const [selectedFile, setSelectedFile] = useState<SEPRemoteFile | null>(null);
-  const [activeTab, setActiveTab] = useState<'browse' | 'add'>('browse');
+  const [confirmImport, setConfirmImport] = useState<SEPRemoteFile | null>(null);
+  const [view, setView] = useState<DialogView>('providers');
+  const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Add Provider form state
   const [newProviderName, setNewProviderName] = useState('');
-  const [newProviderType, setNewProviderType] = useState<'local_nvme' | 's3_minio' | 'webdav' | 'gdrive'>('s3_minio');
+  const [newProviderType, setNewProviderType] = useState<'local_nvme' | 's3_minio' | 'webdav' | 'gdrive'>('local_nvme');
   const [newS3Bucket, setNewS3Bucket] = useState('kae-documents-bucket');
   const [newS3Endpoint, setNewS3Endpoint] = useState('https://minio.local:9000');
   const [newWebDavUrl, setNewWebDavUrl] = useState('https://webdav.storage.internal');
   const [newLocalPath, setNewLocalPath] = useState('/mnt/ssd');
   const [isAddingProvider, setIsAddingProvider] = useState(false);
-  const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     if (isOpen) {
+      setView('providers');
+      setSelectedProvider(null);
+      setConfirmImport(null);
+      setFeedbackMsg(null);
       loadProviders();
     }
   }, [isOpen]);
 
   useEffect(() => {
-    if (selectedProviderId) {
-      loadFiles(selectedProviderId, currentFolderPath);
+    if (selectedProvider && view === 'browse') {
+      loadFiles(selectedProvider.provider_id, currentFolderPath);
     }
-  }, [selectedProviderId, currentFolderPath]);
+  }, [selectedProvider, currentFolderPath, view]);
 
   const loadProviders = async () => {
     setIsLoadingProviders(true);
     try {
       const data = await kaeApi.getSEPProviders();
       setProviders(data);
-      if (data.length > 0 && !selectedProviderId) {
-        setSelectedProviderId(data[0].provider_id);
-      }
     } catch (err: any) {
       console.error('Failed to load SEP providers:', err);
     } finally {
@@ -77,7 +82,6 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
 
   const loadFiles = async (providerId: string, path: string) => {
     setIsLoadingFiles(true);
-    setSelectedFile(null);
     try {
       const items = await kaeApi.browseSEPProvider(providerId, path);
       setFiles(items);
@@ -89,26 +93,31 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
     }
   };
 
+  const handleOpenBrowser = (provider: SEPProvider) => {
+    setSelectedProvider(provider);
+    setCurrentFolderPath('/');
+    setView('browse');
+  };
+
   const handleImportFile = async (fileItem: SEPRemoteFile) => {
-    if (!selectedProviderId) return;
+    if (!selectedProvider) return;
     setIsImporting(true);
     setFeedbackMsg(null);
+    setConfirmImport(null);
     try {
-      const res = await kaeApi.importFromSEP(selectedProviderId, fileItem.file_id);
+      const res = await kaeApi.importFromSEP(selectedProvider.provider_id, fileItem.file_id);
       setFeedbackMsg({
         type: 'success',
-        text: `Документ "${fileItem.name}" успешно отправлен в KAE! Job ID: ${res.job_id}`,
+        text: `"${fileItem.name}" импортирован в KAE (Job: ${res.job_id.slice(0, 8)}…)`,
       });
       if (onImportSuccess) {
         onImportSuccess(res.job_id, res.source_uri);
       }
-      setTimeout(() => {
-        onClose();
-      }, 1200);
+      setTimeout(onClose, 1500);
     } catch (err: any) {
       setFeedbackMsg({
         type: 'error',
-        text: err.message || 'Ошибка импорта файла из хранилища SEP',
+        text: err.message || 'Ошибка импорта',
       });
     } finally {
       setIsImporting(false);
@@ -120,9 +129,7 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
     if (!newProviderName.trim()) return;
     setIsAddingProvider(true);
     try {
-      const creds: Record<string, string> = {};
       const opts: Record<string, any> = {};
-
       if (newProviderType === 's3_minio') {
         opts['bucket'] = newS3Bucket;
         opts['endpoint'] = newS3Endpoint;
@@ -135,17 +142,16 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
       const created = await kaeApi.createSEPProvider({
         name: newProviderName,
         sep_type: newProviderType,
-        credentials: creds,
+        credentials: {},
         options: opts,
       });
 
       setProviders((prev) => [...prev, created]);
-      setSelectedProviderId(created.provider_id);
-      setActiveTab('browse');
       setNewProviderName('');
-      setFeedbackMsg({ type: 'success', text: `Хранилище "${created.name}" успешно подключено.` });
+      setFeedbackMsg({ type: 'success', text: `"${created.name}" подключено.` });
+      setView('providers');
     } catch (err: any) {
-      setFeedbackMsg({ type: 'error', text: err.message || 'Не удалось зарегистрировать провайдер' });
+      setFeedbackMsg({ type: 'error', text: err.message || 'Не удалось подключить провайдер' });
     } finally {
       setIsAddingProvider(false);
     }
@@ -154,15 +160,32 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
   const getProviderIcon = (type: string) => {
     switch (type) {
       case 'local_nvme':
-        return <HardDrive className="w-4 h-4 text-emerald-400" />;
+      case 'LOCAL_FS':
+        return <HardDrive className="w-5 h-5 text-emerald-400" />;
       case 's3_minio':
-        return <Database className="w-4 h-4 text-amber-400" />;
+        return <Database className="w-5 h-5 text-amber-400" />;
       case 'webdav':
-        return <Globe className="w-4 h-4 text-sky-400" />;
+        return <Globe className="w-5 h-5 text-sky-400" />;
       case 'gdrive':
-        return <Cloud className="w-4 h-4 text-purple-400" />;
+        return <Cloud className="w-5 h-5 text-purple-400" />;
       default:
-        return <Cloud className="w-4 h-4 text-slate-400" />;
+        return <Cloud className="w-5 h-5 text-slate-400" />;
+    }
+  };
+
+  const getProviderTypeLabel = (type: string) => {
+    switch (type) {
+      case 'local_nvme':
+      case 'LOCAL_FS':
+        return 'Local NVMe SSD';
+      case 's3_minio':
+        return 'S3 / MinIO';
+      case 'webdav':
+        return 'WebDAV';
+      case 'gdrive':
+        return 'Google Drive';
+      default:
+        return type;
     }
   };
 
@@ -177,18 +200,32 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
       <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-4xl shadow-2xl flex flex-col max-h-[85vh] overflow-hidden text-slate-100">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-900/50">
           <div className="flex items-center space-x-3">
+            {view !== 'providers' && (
+              <button
+                onClick={() => { setView('providers'); setConfirmImport(null); }}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors mr-1"
+              >
+                <ArrowLeft className="w-4 h-4" />
+              </button>
+            )}
             <div className="p-2 bg-indigo-500/10 border border-indigo-500/20 rounded-xl">
               <HardDriveUpload className="w-5 h-5 text-indigo-400" />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-white">Интеграция SEP Хранилищ</h2>
+              <h2 className="text-lg font-semibold text-white">
+                {view === 'providers' && 'Хранилища SEP'}
+                {view === 'browse' && selectedProvider?.name}
+                {view === 'add' && 'Подключить хранилище'}
+              </h2>
               <p className="text-xs text-slate-400">
-                Подключение и прямое сканирование Local NVMe, S3/MinIO, WebDAV и Google Drive
+                {view === 'providers' && 'Подключённые источники данных (RFC 0013 L3)'}
+                {view === 'browse' && `${getProviderTypeLabel(selectedProvider?.sep_type || '')} — обзор файлов`}
+                {view === 'add' && 'Local NVMe, S3/MinIO, WebDAV или Google Drive'}
               </p>
             </div>
           </div>
@@ -200,15 +237,13 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
           </button>
         </div>
 
-        {/* Feedback Alert */}
+        {/* Feedback */}
         {feedbackMsg && (
-          <div
-            className={`px-6 py-2.5 text-xs flex items-center justify-between ${
-              feedbackMsg.type === 'success'
-                ? 'bg-emerald-500/10 text-emerald-300 border-b border-emerald-500/20'
-                : 'bg-rose-500/10 text-rose-300 border-b border-rose-500/20'
-            }`}
-          >
+          <div className={`px-6 py-2.5 text-xs flex items-center justify-between ${
+            feedbackMsg.type === 'success'
+              ? 'bg-emerald-500/10 text-emerald-300 border-b border-emerald-500/20'
+              : 'bg-rose-500/10 text-rose-300 border-b border-rose-500/20'
+          }`}>
             <div className="flex items-center space-x-2">
               <CheckCircle2 className="w-4 h-4" />
               <span>{feedbackMsg.text}</span>
@@ -219,89 +254,70 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
           </div>
         )}
 
-        {/* Tabs & Toolbar */}
-        <div className="flex items-center justify-between px-6 py-3 border-b border-slate-800 bg-slate-950/40 text-xs">
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => setActiveTab('browse')}
-              className={`px-3 py-1.5 rounded-lg font-medium transition-colors ${
-                activeTab === 'browse'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              Обзор файлов
-            </button>
-            <button
-              onClick={() => setActiveTab('add')}
-              className={`px-3 py-1.5 rounded-lg font-medium flex items-center space-x-1.5 transition-colors ${
-                activeTab === 'add'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Подключить SEP провайдер</span>
-            </button>
-          </div>
-
-          {activeTab === 'browse' && (
-            <button
-              onClick={() => selectedProviderId && loadFiles(selectedProviderId, currentFolderPath)}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 flex items-center space-x-1 transition-colors"
-              title="Обновить список"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isLoadingFiles ? 'animate-spin' : ''}`} />
-              <span>Обновить</span>
-            </button>
-          )}
-        </div>
-
-        {/* Main Content Area */}
-        <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
-          {activeTab === 'browse' ? (
-            <>
-              {/* Sidebar Provider List */}
-              <div className="w-full md:w-64 border-r border-slate-800 p-4 bg-slate-950/20 overflow-y-auto space-y-2">
-                <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 px-2 mb-2">
-                  Источники SEP
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto">
+          {/* ===== PROVIDERS LIST ===== */}
+          {view === 'providers' && (
+            <div className="p-6 space-y-4">
+              {isLoadingProviders ? (
+                <div className="py-12 text-center text-xs text-slate-500 flex flex-col items-center space-y-2">
+                  <RefreshCw className="w-5 h-5 animate-spin text-indigo-400" />
+                  <span>Загрузка провайдеров...</span>
                 </div>
-                {isLoadingProviders ? (
-                  <div className="p-4 text-center text-xs text-slate-500">Загрузка провайдеров...</div>
-                ) : providers.length === 0 ? (
-                  <div className="p-4 text-center text-xs text-slate-500">Нет подключенных провайдеров</div>
-                ) : (
-                  providers.map((p) => {
-                    const isSelected = p.provider_id === selectedProviderId;
-                    return (
+              ) : providers.length === 0 ? (
+                <div className="py-12 text-center space-y-3">
+                  <HardDrive className="w-10 h-10 text-slate-700 mx-auto" />
+                  <p className="text-sm text-slate-400">Нет подключённых хранилищ</p>
+                  <button
+                    onClick={() => setView('add')}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-xl inline-flex items-center space-x-2"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Подключить первое хранилище</span>
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {providers.map((p) => (
                       <button
                         key={p.provider_id}
-                        onClick={() => {
-                          setSelectedProviderId(p.provider_id);
-                          setCurrentFolderPath('/');
-                        }}
-                        className={`w-full flex items-center justify-between p-2.5 rounded-xl border text-left transition-all ${
-                          isSelected
-                            ? 'bg-indigo-500/10 border-indigo-500/30 text-white font-medium shadow-sm'
-                            : 'bg-slate-900/40 border-slate-800/80 text-slate-300 hover:bg-slate-800/60 hover:text-white'
-                        }`}
+                        onClick={() => handleOpenBrowser(p)}
+                        className="flex items-center justify-between p-4 rounded-xl border bg-slate-900/60 border-slate-800/80 hover:border-indigo-500/40 hover:bg-indigo-500/5 text-left transition-all group"
                       >
-                        <div className="flex items-center space-x-2.5 min-w-0">
+                        <div className="flex items-center space-x-3 min-w-0">
                           {getProviderIcon(p.sep_type)}
-                          <span className="text-xs truncate">{p.name}</span>
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-white truncate">{p.name}</div>
+                            <div className="text-[11px] text-slate-400">{getProviderTypeLabel(p.sep_type)}</div>
+                          </div>
                         </div>
-                        <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]" />
+                        <div className="flex items-center space-x-2 shrink-0">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]" />
+                          <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-indigo-400 transition-colors" />
+                        </div>
                       </button>
-                    );
-                  })
-                )}
-              </div>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => setView('add')}
+                    className="w-full p-3 rounded-xl border border-dashed border-slate-700 text-slate-400 hover:text-white hover:border-indigo-500/40 text-xs flex items-center justify-center space-x-2 transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Подключить ещё хранилище</span>
+                  </button>
+                </>
+              )}
+            </div>
+          )}
 
-              {/* Main File Explorer */}
-              <div className="flex-1 flex flex-col overflow-hidden bg-slate-900/20">
-                {/* Breadcrumbs */}
-                <div className="px-5 py-2.5 border-b border-slate-800/80 bg-slate-950/30 flex items-center space-x-2 text-xs text-slate-400">
-                  <span className="text-slate-400 font-medium">Путь:</span>
+          {/* ===== FILE BROWSER ===== */}
+          {view === 'browse' && selectedProvider && (
+            <div className="flex flex-col h-full">
+              {/* Breadcrumbs + refresh */}
+              <div className="px-5 py-2.5 border-b border-slate-800/80 bg-slate-950/30 flex items-center justify-between text-xs">
+                <div className="flex items-center space-x-2 text-slate-400">
+                  <span className="font-medium">Путь:</span>
                   <button
                     onClick={() => setCurrentFolderPath('/')}
                     className="hover:text-indigo-400 font-mono transition-colors"
@@ -316,10 +332,7 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
                         <React.Fragment key={idx}>
                           <ChevronRight className="w-3.5 h-3.5 text-slate-600" />
                           <button
-                            onClick={() => {
-                              const newPath = '/' + arr.slice(0, idx + 1).join('/');
-                              setCurrentFolderPath(newPath);
-                            }}
+                            onClick={() => setCurrentFolderPath('/' + arr.slice(0, idx + 1).join('/'))}
                             className="hover:text-indigo-400 font-mono transition-colors"
                           >
                             {part}
@@ -327,82 +340,97 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
                         </React.Fragment>
                       ))}
                 </div>
+                <button
+                  onClick={() => selectedProvider && loadFiles(selectedProvider.provider_id, currentFolderPath)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 flex items-center space-x-1 transition-colors"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingFiles ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
 
-                {/* File List */}
-                <div className="flex-1 overflow-y-auto p-4">
-                  {isLoadingFiles ? (
-                    <div className="py-12 text-center text-xs text-slate-500 flex flex-col items-center space-y-2">
-                      <RefreshCw className="w-5 h-5 animate-spin text-indigo-400" />
-                      <span>Чтение директории хранилища...</span>
-                    </div>
-                  ) : files.length === 0 ? (
-                    <div className="py-12 text-center text-xs text-slate-500 flex flex-col items-center space-y-2">
-                      <Folder className="w-8 h-8 text-slate-700" />
-                      <span>Папка пуста или недоступна</span>
-                    </div>
-                  ) : (
-                    <div className="space-y-1">
-                      {files.map((file) => {
-                        const isSelected = selectedFile?.file_id === file.file_id;
-                        return (
-                          <div
-                            key={file.file_id}
-                            onClick={() => {
-                              if (file.is_directory) {
-                                setCurrentFolderPath(file.path);
-                              } else {
-                                setSelectedFile(file);
-                              }
-                            }}
-                            className={`flex items-center justify-between p-2.5 rounded-xl border text-xs cursor-pointer transition-all ${
-                              isSelected
-                                ? 'bg-indigo-500/15 border-indigo-500/40 text-white'
-                                : 'bg-slate-900/50 border-slate-800/60 text-slate-300 hover:bg-slate-800/60 hover:text-white'
-                            }`}
-                          >
-                            <div className="flex items-center space-x-3 min-w-0">
-                              {file.is_directory ? (
-                                <Folder className="w-4 h-4 text-amber-400 shrink-0" />
-                              ) : (
-                                <FileText className="w-4 h-4 text-indigo-400 shrink-0" />
-                              )}
-                              <span className="font-mono text-slate-200 truncate">{file.name}</span>
-                            </div>
+              {/* File list */}
+              <div className="flex-1 overflow-y-auto p-4">
+                {isLoadingFiles ? (
+                  <div className="py-12 text-center text-xs text-slate-500 flex flex-col items-center space-y-2">
+                    <RefreshCw className="w-5 h-5 animate-spin text-indigo-400" />
+                    <span>Чтение директории...</span>
+                  </div>
+                ) : files.length === 0 ? (
+                  <div className="py-12 text-center text-xs text-slate-500 flex flex-col items-center space-y-2">
+                    <Folder className="w-8 h-8 text-slate-700" />
+                    <span>Папка пуста</span>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {files.map((file) => (
+                      <div
+                        key={file.file_id}
+                        onClick={() => {
+                          if (file.is_directory) {
+                            setCurrentFolderPath(file.path);
+                          } else {
+                            setConfirmImport(file);
+                          }
+                        }}
+                        className="flex items-center justify-between p-2.5 rounded-xl border bg-slate-900/50 border-slate-800/60 text-xs cursor-pointer hover:bg-slate-800/60 hover:text-white text-slate-300 transition-all"
+                      >
+                        <div className="flex items-center space-x-3 min-w-0">
+                          {file.is_directory ? (
+                            <Folder className="w-4 h-4 text-amber-400 shrink-0" />
+                          ) : (
+                            <FileText className="w-4 h-4 text-indigo-400 shrink-0" />
+                          )}
+                          <span className="font-mono text-slate-200 truncate">{file.name}</span>
+                        </div>
+                        <div className="flex items-center space-x-3 shrink-0 text-slate-400 text-[11px]">
+                          <span>{file.is_directory ? 'Папка' : formatBytes(file.size_bytes)}</span>
+                          {file.is_directory && <ChevronRight className="w-3.5 h-3.5" />}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
 
-                            <div className="flex items-center space-x-4 shrink-0 text-slate-400 text-[11px]">
-                              <span>{file.is_directory ? 'Папка' : formatBytes(file.size_bytes)}</span>
-                              {!file.is_directory && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleImportFile(file);
-                                  }}
-                                  disabled={isImporting}
-                                  className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg flex items-center space-x-1 transition-all disabled:opacity-50"
-                                >
-                                  <span>Импорт</span>
-                                  <ArrowRight className="w-3 h-3" />
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
+              {/* Import confirmation bar */}
+              {confirmImport && (
+                <div className="px-5 py-3 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between">
+                  <div className="flex items-center space-x-3 min-w-0 text-xs">
+                    <Download className="w-4 h-4 text-indigo-400 shrink-0" />
+                    <span className="text-slate-300 truncate">
+                      Импортировать <span className="text-white font-medium">{confirmImport.name}</span> ({formatBytes(confirmImport.size_bytes)}) в KAE?
+                    </span>
+                  </div>
+                  <div className="flex items-center space-x-2 shrink-0">
+                    <button
+                      onClick={() => setConfirmImport(null)}
+                      className="px-3 py-1.5 text-xs text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                    >
+                      Отмена
+                    </button>
+                    <button
+                      onClick={() => handleImportFile(confirmImport)}
+                      disabled={isImporting}
+                      className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg flex items-center space-x-1.5 transition-all disabled:opacity-50"
+                    >
+                      {isImporting ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <>
+                          <span>Импортировать</span>
+                          <ArrowRight className="w-3 h-3" />
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            </>
-          ) : (
-            /* Add SEP Provider Form */
-            <form onSubmit={handleCreateProvider} className="flex-1 p-6 overflow-y-auto space-y-5">
-              <div>
-                <h3 className="text-sm font-semibold text-white">Регистрация нового SEP Провайдера</h3>
-                <p className="text-xs text-slate-400">
-                  Подключите внешний или локальный источник данных для автоматической сборки KAE
-                </p>
-              </div>
+              )}
+            </div>
+          )}
 
+          {/* ===== ADD PROVIDER FORM ===== */}
+          {view === 'add' && (
+            <form onSubmit={handleCreateProvider} className="p-6 space-y-5">
               <div className="space-y-4 text-xs">
                 <div>
                   <label className="block text-slate-300 font-medium mb-1.5">Название подключения</label>
@@ -410,20 +438,20 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
                     type="text"
                     value={newProviderName}
                     onChange={(e) => setNewProviderName(e.target.value)}
-                    placeholder="например: Production MinIO Cluster"
+                    placeholder="например: RPi5 NVMe SSD"
                     required
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-slate-300 font-medium mb-1.5">Тип провайдера хранилища</label>
+                  <label className="block text-slate-300 font-medium mb-1.5">Тип хранилища</label>
                   <div className="grid grid-cols-2 gap-2">
                     {[
-                      { id: 's3_minio', label: 'S3 / MinIO Storage', icon: Database },
-                      { id: 'local_nvme', label: 'Local NVMe Storage', icon: HardDrive },
-                      { id: 'webdav', label: 'WebDAV Protocol', icon: Globe },
-                      { id: 'gdrive', label: 'Google Drive API', icon: Cloud },
+                      { id: 'local_nvme', label: 'Local NVMe SSD', icon: HardDrive },
+                      { id: 's3_minio', label: 'S3 / MinIO', icon: Database },
+                      { id: 'webdav', label: 'WebDAV', icon: Globe },
+                      { id: 'gdrive', label: 'Google Drive', icon: Cloud },
                     ].map((item) => {
                       const Icon = item.icon;
                       const isSel = newProviderType === item.id;
@@ -449,7 +477,7 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
                 {newProviderType === 's3_minio' && (
                   <div className="space-y-3 pt-2">
                     <div>
-                      <label className="block text-slate-300 font-medium mb-1">Имя S3 Баккета</label>
+                      <label className="block text-slate-300 font-medium mb-1">S3 Bucket</label>
                       <input
                         type="text"
                         value={newS3Bucket}
@@ -458,7 +486,7 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
                       />
                     </div>
                     <div>
-                      <label className="block text-slate-300 font-medium mb-1">S3 Endpoint URL</label>
+                      <label className="block text-slate-300 font-medium mb-1">Endpoint URL</label>
                       <input
                         type="text"
                         value={newS3Endpoint}
@@ -471,7 +499,7 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
 
                 {newProviderType === 'webdav' && (
                   <div className="pt-2">
-                    <label className="block text-slate-300 font-medium mb-1">WebDAV Server URL</label>
+                    <label className="block text-slate-300 font-medium mb-1">WebDAV URL</label>
                     <input
                       type="text"
                       value={newWebDavUrl}
@@ -483,7 +511,7 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
 
                 {newProviderType === 'local_nvme' && (
                   <div className="pt-2">
-                    <label className="block text-slate-300 font-medium mb-1">Путь к точке монтирования SSD</label>
+                    <label className="block text-slate-300 font-medium mb-1">Путь к хранилищу</label>
                     <input
                       type="text"
                       value={newLocalPath}
@@ -498,15 +526,15 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
               <div className="pt-4 flex items-center justify-end space-x-3 border-t border-slate-800">
                 <button
                   type="button"
-                  onClick={() => setActiveTab('browse')}
-                  className="px-4 py-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                  onClick={() => setView('providers')}
+                  className="px-4 py-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors text-xs"
                 >
                   Отмена
                 </button>
                 <button
                   type="submit"
                   disabled={isAddingProvider || !newProviderName.trim()}
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl flex items-center space-x-2 transition-all disabled:opacity-50"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl flex items-center space-x-2 transition-all disabled:opacity-50 text-xs"
                 >
                   {isAddingProvider ? (
                     <>
@@ -516,7 +544,7 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
                   ) : (
                     <>
                       <Plus className="w-4 h-4" />
-                      <span>Добавить провайдер</span>
+                      <span>Подключить</span>
                     </>
                   )}
                 </button>
