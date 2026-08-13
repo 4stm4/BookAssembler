@@ -207,11 +207,19 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                         grid.append([cell])
                         indices_to_remove.add(orig_idx)
 
+                    row_count = len(grid)
+                    cls_conf = min(0.90, 0.50 + row_count * 0.05)
+                    avg_ext = sum(
+                        b.extraction_confidence for _, b in run
+                    ) / len(run)
                     table = TableBlock(
                         grid=grid,
                         parent_container_id=container.id,
                         provenance_info=run[0][1].provenance_info,
                         visual_layout=run[0][1].visual_layout,
+                        extraction_confidence=avg_ext,
+                        classification_confidence=cls_conf,
+                        confidence_score=min(avg_ext, cls_conf),
                     )
                     replacements[first_idx] = table
 

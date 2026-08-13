@@ -109,9 +109,14 @@ class BaseKRMNode(ABC):
     id: str = field(default_factory=lambda: str(uuid4()))
     visual_layout: Optional[VisualLayout] = None
     confidence_score: float = 1.0
+    extraction_confidence: float = 1.0
+    classification_confidence: float = 1.0
     is_tombstoned: bool = False
     metadata: Dict[str, Any] = field(default_factory=dict)
     provenance_info: Optional[ProvenanceInfo] = None
+
+    def update_confidence(self) -> None:
+        self.confidence_score = min(self.extraction_confidence, self.classification_confidence)
 
 
 @dataclass
@@ -237,6 +242,18 @@ class FormulaBlock(StructuralUnit):
     formula_number: Optional[str] = None
 
 
+@dataclass
+class CaptionBlock(StructuralUnit):
+    """
+    Caption/label for a figure, table, or example.
+    E.g. "Figure 1-5 ASCII code." or "Table 2-3 Interrupt vectors."
+    """
+    caption_text: str = ""
+    target_type: str = ""
+    label_number: Optional[str] = None
+    target_block_id: Optional[str] = None
+
+
 # ============================================================================
 # 4. Semantic Layer (Knowledge Units)
 # ============================================================================
@@ -288,7 +305,8 @@ class ContainerUnit(BaseKRMNode):
     Hierarchical document container (Chapter, Section, Subsection, Appendix, etc.).
     """
     title: str = ""
-    level: int = 1  # 1 = Chapter, 2 = Section, etc.
+    level: int = 1
+    semantic_type: Optional[str] = None
     children: List[BaseKRMNode] = field(default_factory=list)
 
 
