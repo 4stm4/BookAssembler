@@ -13,6 +13,8 @@ from src.analyzers.base import (
     RGPermission,
     SecurityViolationError,
 )
+from src.analyzers.block_classifier import BlockClassifierAnalyzer
+from src.analyzers.caption_analyzer import CaptionAnalyzer
 from src.analyzers.entity_extractor import EntityExtractorAnalyzer
 from src.analyzers.heading import HeadingAnalyzer
 from src.analyzers.normalization import NormalizationAnalyzer
@@ -26,14 +28,18 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         NormalizationAnalyzer(),
         ReadingOrderAnalyzer(),
         HeadingAnalyzer(),
-        EntityExtractorAnalyzer(),
         TableDetectorAnalyzer(),
+        CaptionAnalyzer(),
+        BlockClassifierAnalyzer(),
+        EntityExtractorAnalyzer(),
     ]
 
 
 __all__ = [
     "AnalyzerManifest",
     "BaseAnalyzer",
+    "BlockClassifierAnalyzer",
+    "CaptionAnalyzer",
     "EntityExtractorAnalyzer",
     "HeadingAnalyzer",
     "KGPermission",

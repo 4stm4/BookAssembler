@@ -54,6 +54,32 @@ def _get_fallback_title(source_uri: str) -> str:
 
 MONOSPACE_FAMILIES = {"courier", "consolas", "mono", "source code", "fira code", "dejavu sans mono"}
 
+INITIAL_CLASSIFICATION_CONFIDENCE = 0.5
+
+
+def _extraction_confidence(text: str) -> float:
+    if not text.strip():
+        return 0.1
+    stripped = text.strip()
+    length = len(stripped)
+    printable = sum(c.isprintable() for c in stripped)
+    printable_ratio = printable / length if length else 0
+    alpha_count = sum(c.isalpha() for c in stripped)
+    alpha_ratio = alpha_count / length if length else 0
+    base = 0.55
+    if length >= 30:
+        base += 0.20
+    elif length >= 10:
+        base += 0.10
+    elif length < 3:
+        base -= 0.10
+    base += printable_ratio * 0.10
+    if alpha_ratio > 0.5:
+        base += 0.05
+    elif alpha_ratio < 0.15:
+        base -= 0.10
+    return max(0.10, min(0.95, base))
+
 
 def _is_monospace(font_name: str) -> bool:
     lower = font_name.lower()
@@ -282,22 +308,30 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     while len(container_stack) > 1 and container_stack[-1].level >= level:
                         container_stack.pop()
 
+                    ext_conf = _extraction_confidence(full_text)
                     new_container = ContainerUnit(
                         title=full_text,
                         level=level,
                         provenance_info=provenance,
                         visual_layout=layout,
+                        extraction_confidence=ext_conf,
+                        classification_confidence=0.75,
+                        confidence_score=min(ext_conf, 0.75),
                     )
                     container_stack[-1].children.append(new_container)
                     container_stack.append(new_container)
                     continue
 
                 if is_mono_block:
+                    ext_conf = _extraction_confidence(full_text)
                     code = CodeBlock(
                         code_text=full_text,
                         parent_container_id=container_stack[-1].id,
                         provenance_info=provenance,
                         visual_layout=layout,
+                        extraction_confidence=ext_conf,
+                        classification_confidence=0.80,
+                        confidence_score=min(ext_conf, 0.80),
                     )
                     container_stack[-1].children.append(code)
                 else:
@@ -309,11 +343,15 @@ class PdfSourceAdapter(BaseSourceAdapter):
                             style=style,
                         ),
                     )
+                    ext_conf = _extraction_confidence(full_text)
                     para = ParagraphBlock(
                         inlines=[TextLineInline(spans=[styled_span])],
                         parent_container_id=container_stack[-1].id,
                         provenance_info=provenance,
                         visual_layout=layout,
+                        extraction_confidence=ext_conf,
+                        classification_confidence=INITIAL_CLASSIFICATION_CONFIDENCE,
+                        confidence_score=min(ext_conf, INITIAL_CLASSIFICATION_CONFIDENCE),
                     )
                     container_stack[-1].children.append(para)
 
