@@ -113,7 +113,7 @@ const KRMNodeView: React.FC<{ node: KRMNode; depth: number; jobId?: string }> = 
             )}
             <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono border shrink-0 ${typeColor}`}>
               {node.type === 'ContainerUnit'
-                ? (node.semantic_type === 'example' ? 'Example' : `L${node.level || 1}`)
+                ? (node.semantic_type === 'toc' ? 'TOC' : node.semantic_type === 'example' ? 'Example' : `L${node.level || 1}`)
                 : node.type.replace('Block', '')}
             </span>
             <span className={`${expanded ? 'whitespace-pre-wrap break-words' : 'truncate'} ${isContainer ? 'font-semibold text-white' : 'text-slate-300'}`}>
