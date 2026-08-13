@@ -34,7 +34,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.adapters import create_default_registry
@@ -57,6 +57,7 @@ from src.jobs.manager import JobManager, JobRecord, JobStatus
 from src.jobs.pyjobkit_bridge import PyJobKitBridge
 from src.krm.models import (
     BaseKRMNode,
+    CaptionBlock,
     CodeBlock,
     ContainerUnit,
     FigureBlock,
@@ -212,14 +213,19 @@ def create_app() -> FastAPI:
     def _serialize_document(doc: KnowledgeDocument) -> Dict[str, Any]:
         def serialize_node(node: Any) -> Dict[str, Any]:
             if isinstance(node, ContainerUnit):
-                return {
+                result = {
                     "id": node.id,
                     "type": "ContainerUnit",
                     "title": node.title,
                     "level": node.level,
                     "confidence_score": node.confidence_score,
+                    "extraction_confidence": node.extraction_confidence,
+                    "classification_confidence": node.classification_confidence,
                     "children": [serialize_node(c) for c in node.children],
                 }
+                if node.semantic_type:
+                    result["semantic_type"] = node.semantic_type
+                return result
             elif isinstance(node, ParagraphBlock):
                 text_parts = []
                 for inline in (node.inlines or []):
@@ -227,12 +233,18 @@ def create_app() -> FastAPI:
                         for span in inline.spans:
                             if hasattr(span, "text"):
                                 text_parts.append(span.text)
-                return {
+                result = {
                     "id": node.id,
                     "type": "ParagraphBlock",
                     "text": " ".join(text_parts),
                     "confidence_score": node.confidence_score,
+                    "extraction_confidence": node.extraction_confidence,
+                    "classification_confidence": node.classification_confidence,
                 }
+                vl = getattr(node, "visual_layout", None)
+                if vl and hasattr(vl, "page_or_screen_index"):
+                    result["page_index"] = vl.page_or_screen_index
+                return result
             elif isinstance(node, CodeBlock):
                 return {
                     "id": node.id,
@@ -254,6 +266,22 @@ def create_app() -> FastAPI:
                     "text": node.latex_expression or "",
                     "confidence_score": node.confidence_score,
                 }
+            elif isinstance(node, CaptionBlock):
+                result = {
+                    "id": node.id,
+                    "type": "CaptionBlock",
+                    "text": node.caption_text,
+                    "target_type": node.target_type,
+                    "label_number": node.label_number,
+                    "target_block_id": node.target_block_id,
+                    "confidence_score": node.confidence_score,
+                    "extraction_confidence": node.extraction_confidence,
+                    "classification_confidence": node.classification_confidence,
+                }
+                vl = getattr(node, "visual_layout", None)
+                if vl and hasattr(vl, "page_or_screen_index"):
+                    result["page_index"] = vl.page_or_screen_index
+                return result
             elif isinstance(node, TableBlock):
                 rows = []
                 for row in node.grid:
@@ -268,12 +296,20 @@ def create_app() -> FastAPI:
                                             cell_text += span.text
                         cells.append(cell_text)
                     rows.append(cells)
-                return {
+                result = {
                     "id": node.id,
                     "type": "TableBlock",
                     "rows": rows,
                     "confidence_score": node.confidence_score,
                 }
+                vl = getattr(node, "visual_layout", None)
+                if vl:
+                    if hasattr(vl, "page_or_screen_index"):
+                        result["page_index"] = vl.page_or_screen_index
+                    bb = getattr(vl, "bounding_box", None)
+                    if bb:
+                        result["bbox"] = [bb.x0, bb.y0, bb.x1, bb.y1]
+                return result
             return {"id": getattr(node, "id", ""), "type": type(node).__name__}
 
         return {
@@ -325,6 +361,16 @@ def create_app() -> FastAPI:
                 )
                 fm.id = n.get("id", fm.id)
                 return fm
+            elif t == "CaptionBlock":
+                cap = CaptionBlock(
+                    caption_text=n.get("text", ""),
+                    target_type=n.get("target_type", ""),
+                    label_number=n.get("label_number"),
+                    target_block_id=n.get("target_block_id"),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                cap.id = n.get("id", cap.id)
+                return cap
             elif t == "TableBlock":
                 grid = []
                 for row in n.get("rows", []):
@@ -760,6 +806,34 @@ def create_app() -> FastAPI:
         if doc is None:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
         return _serialize_document(doc)
+
+    @app.get("/api/v1/jobs/{job_id}/page-image/{page_num}")
+    async def get_page_image(job_id: str, page_num: int) -> Response:
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+        source_uri = doc.source_uri or ""
+        if not source_uri.startswith("sep://"):
+            raise HTTPException(status_code=400, detail="Only SEP documents supported")
+        parts = source_uri.replace("sep://", "").split("/", 1)
+        if len(parts) != 2:
+            raise HTTPException(status_code=400, detail="Invalid source_uri")
+        provider_id, file_id = parts
+        try:
+            sep_provider = sep_manager.get_provider(provider_id)
+            file_stream = await sep_provider.get_file_stream(file_id)
+        except Exception:
+            raise HTTPException(status_code=404, detail="Cannot access source file")
+        import pymupdf as fitz
+        pdf_bytes = file_stream.read()
+        pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        if page_num < 0 or page_num >= len(pdf_doc):
+            raise HTTPException(status_code=400, detail=f"Page {page_num} out of range")
+        page = pdf_doc[page_num]
+        pix = page.get_pixmap(dpi=100)
+        img_bytes = pix.tobytes("jpeg")
+        pdf_doc.close()
+        return Response(content=img_bytes, media_type="image/jpeg")
 
     # --- SemanticChunker & Translation Endpoints ---
 

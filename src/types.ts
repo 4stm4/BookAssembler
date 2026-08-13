@@ -266,11 +266,19 @@ export interface KRMNode {
   id: string;
   type: string;
   confidence_score: number;
+  extraction_confidence?: number;
+  classification_confidence?: number;
   title?: string;
   text?: string;
   level?: number;
+  semantic_type?: string;
   children?: KRMNode[];
   rows?: string[][];
+  page_index?: number;
+  bbox?: [number, number, number, number];
+  target_type?: string;
+  label_number?: string;
+  target_block_id?: string;
 }
 
 export interface GraphVisualizationData {

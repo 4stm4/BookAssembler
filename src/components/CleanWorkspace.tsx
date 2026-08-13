@@ -32,11 +32,56 @@ const TYPE_COLORS: Record<string, string> = {
   FigureBlock: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
   FormulaBlock: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
   TableBlock: 'bg-pink-500/10 text-pink-400 border-pink-500/20',
+  CaptionBlock: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
 };
 
-const KRMNodeView: React.FC<{ node: KRMNode; depth: number }> = ({ node, depth }) => {
+const PagePreviewModal: React.FC<{
+  jobId: string;
+  pageIndex: number;
+  bbox?: [number, number, number, number];
+  onClose: () => void;
+}> = ({ jobId, pageIndex, bbox, onClose }) => {
+  const imgRef = React.useRef<HTMLImageElement>(null);
+  const [imgSize, setImgSize] = React.useState<{ w: number; h: number } | null>(null);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
+      <div className="relative max-w-[90vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute -top-3 -right-3 z-10 bg-slate-800 text-white rounded-full w-7 h-7 text-sm hover:bg-red-600 border border-slate-600">
+          ✕
+        </button>
+        <div className="relative inline-block">
+          <img
+            ref={imgRef}
+            src={`/api/v1/jobs/${jobId}/page-image/${pageIndex}`}
+            alt={`Страница ${pageIndex + 1}`}
+            className="max-w-[90vw] max-h-[90vh] rounded shadow-2xl"
+            onLoad={() => {
+              if (imgRef.current) setImgSize({ w: imgRef.current.naturalWidth, h: imgRef.current.naturalHeight });
+            }}
+          />
+          {bbox && imgSize && (
+            <div
+              className="absolute border-2 border-cyan-400 bg-cyan-400/10 rounded pointer-events-none"
+              style={{
+                left: `${bbox[0] * 100}%`,
+                top: `${bbox[1] * 100}%`,
+                width: `${(bbox[2] - bbox[0]) * 100}%`,
+                height: `${(bbox[3] - bbox[1]) * 100}%`,
+              }}
+            />
+          )}
+        </div>
+        <div className="text-center text-slate-400 text-xs mt-2">Страница {pageIndex + 1}</div>
+      </div>
+    </div>
+  );
+};
+
+const KRMNodeView: React.FC<{ node: KRMNode; depth: number; jobId?: string }> = ({ node, depth, jobId }) => {
   const [collapsed, setCollapsed] = useState(depth > 1);
   const [expanded, setExpanded] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
   const isContainer = node.type === 'ContainerUnit';
   const isTable = node.type === 'TableBlock';
   const hasChildren = node.children && node.children.length > 0;
@@ -46,6 +91,7 @@ const KRMNodeView: React.FC<{ node: KRMNode; depth: number }> = ({ node, depth }
   const confPct = (node.confidence_score * 100).toFixed(0);
   const isLow = node.confidence_score < 0.80;
   const typeColor = TYPE_COLORS[node.type] || 'bg-slate-500/10 text-slate-400 border-slate-500/20';
+  const hasPage = node.page_index !== undefined && node.page_index !== null;
 
   return (
     <div className={`${depth > 0 ? 'pl-4 border-l-2 border-slate-800/50' : ''}`}>
@@ -66,15 +112,31 @@ const KRMNodeView: React.FC<{ node: KRMNode; depth: number }> = ({ node, depth }
               </button>
             )}
             <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono border shrink-0 ${typeColor}`}>
-              {node.type === 'ContainerUnit' ? `L${node.level || 1}` : node.type.replace('Block', '')}
+              {node.type === 'ContainerUnit'
+                ? (node.semantic_type === 'example' ? 'Example' : `L${node.level || 1}`)
+                : node.type.replace('Block', '')}
             </span>
             <span className={`${expanded ? 'whitespace-pre-wrap break-words' : 'truncate'} ${isContainer ? 'font-semibold text-white' : 'text-slate-300'}`}>
               {isTable ? `Таблица (${node.rows?.length || 0} строк)` : (label || node.type)}
             </span>
           </div>
-          <span className={`text-[10px] font-mono shrink-0 mt-0.5 ${isLow ? 'text-amber-400' : 'text-emerald-400'}`}>
-            {confPct}%
-          </span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {hasPage && jobId && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowPreview(true); }}
+                className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20"
+                title={`Страница ${node.page_index! + 1}`}
+              >
+                стр.{node.page_index! + 1}
+              </button>
+            )}
+            <span
+              className={`text-[10px] font-mono mt-0.5 ${isLow ? 'text-amber-400' : 'text-emerald-400'}`}
+              title={`Извлечение: ${((node.extraction_confidence ?? 1) * 100).toFixed(0)}% | Классификация: ${((node.classification_confidence ?? 1) * 100).toFixed(0)}%`}
+            >
+              {confPct}%
+            </span>
+          </div>
         </div>
       </div>
       {isTable && node.rows && !collapsed && (
@@ -97,9 +159,17 @@ const KRMNodeView: React.FC<{ node: KRMNode; depth: number }> = ({ node, depth }
       {hasChildren && !collapsed && (
         <div className="space-y-1 mt-1">
           {node.children!.map((child: KRMNode) => (
-            <KRMNodeView key={child.id} node={child} depth={depth + 1} />
+            <KRMNodeView key={child.id} node={child} depth={depth + 1} jobId={jobId} />
           ))}
         </div>
+      )}
+      {showPreview && jobId && hasPage && (
+        <PagePreviewModal
+          jobId={jobId}
+          pageIndex={node.page_index!}
+          bbox={isTable ? node.bbox : undefined}
+          onClose={() => setShowPreview(false)}
+        />
       )}
     </div>
   );
@@ -424,7 +494,7 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
                   Иерархия узлов KRM (Knowledge Representation Model)
                 </div>
                 {krmNodes.map((node) => (
-                  <KRMNodeView key={node.id} node={node} depth={0} />
+                  <KRMNodeView key={node.id} node={node} depth={0} jobId={activeJobId || undefined} />
                 ))}
               </div>
             ) : (
