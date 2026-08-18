@@ -223,6 +223,21 @@ class FigureBlock(StructuralUnit):
 
 
 @dataclass
+class DiagramBlock(FigureBlock):
+    """
+    A diagram / schematic (e.g. block diagram, flowchart) detected on a scanned
+    page. Unlike a plain FigureBlock, it preserves the in-diagram text labels
+    (with their positions) so the diagram can be reconstructed faithfully, and
+    references the source page region it was cropped from.
+    The visual is rendered on demand from the source page region (bounding_box
+    of visual_layout), so all lines/arrows/labels are kept exactly as scanned.
+    """
+    # Each label: {"text": str, "x0","y0","x1","y1": normalized floats}
+    labels: List[Dict[str, Any]] = field(default_factory=list)
+    caption_text: str = ""
+
+
+@dataclass
 class CodeBlock(StructuralUnit):
     """
     Code listing or preformatted source code block.
