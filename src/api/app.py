@@ -63,6 +63,7 @@ from src.krm.models import (
     CaptionBlock,
     CodeBlock,
     ContainerUnit,
+    DiagramBlock,
     FigureBlock,
     FormulaBlock,
     KnowledgeDocument,
@@ -189,6 +190,8 @@ def create_app() -> FastAPI:
         nvme_config = SEPConfig(
             name="RPi5 NVMe SSD (HAT+)",
             sep_type=SEPType.LOCAL_FS,
+            # Stable id so sep:// source URIs survive restarts (was random uuid4).
+            provider_id="nvme-local",
             options={"root_path": kae_ssd_path},
         )
         sep_manager.register_provider(nvme_config)
@@ -352,6 +355,17 @@ def create_app() -> FastAPI:
                     "type": "CodeBlock",
                     "text": node.code_text or "",
                     "confidence_score": node.confidence_score,
+                }
+            elif isinstance(node, DiagramBlock):
+                # Must precede FigureBlock (DiagramBlock subclasses it).
+                return {
+                    "id": node.id,
+                    "type": "DiagramBlock",
+                    "caption_text": node.caption_text,
+                    "labels": node.labels,
+                    "confidence_score": node.confidence_score,
+                    "extraction_confidence": node.extraction_confidence,
+                    "classification_confidence": node.classification_confidence,
                 }
             elif isinstance(node, FigureBlock):
                 return {
@@ -531,6 +545,15 @@ def create_app() -> FastAPI:
                     tp.inlines = [TextLineInline(spans=[StyledTextSpan(text=text)])]
                 _restore_layout(tp, n)
                 return tp
+            elif t == "DiagramBlock":
+                dg = DiagramBlock(
+                    caption_text=n.get("caption_text", ""),
+                    labels=n.get("labels", []),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                dg.id = n.get("id", dg.id)
+                _restore_layout(dg, n)
+                return dg
             elif t == "FigureBlock":
                 fb = FigureBlock(
                     image_uri=n.get("image_uri", ""),
@@ -931,7 +954,7 @@ def create_app() -> FastAPI:
                 "job_type": "import", "progress": 0.0, "status": "RUNNING",
                 "stage": "Чтение файла...",
             })
-            sep_provider = sep_manager.get_provider(provider_id)
+            sep_provider = _resolve_sep_provider(provider_id)
             file_stream = await sep_provider.get_file_stream(file_id)
 
             progress_store[job_id] = {"step": 1, "total": 10, "stage": "Парсинг PDF..."}
@@ -1104,7 +1127,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail="Invalid source_uri")
         provider_id, file_id = parts
         try:
-            sep_provider = sep_manager.get_provider(provider_id)
+            sep_provider = _resolve_sep_provider(provider_id)
             file_stream = await sep_provider.get_file_stream(file_id)
         except Exception:
             raise HTTPException(status_code=404, detail="Cannot access source file")
@@ -1116,6 +1139,59 @@ def create_app() -> FastAPI:
         page = pdf_doc[page_num]
         pix = page.get_pixmap(dpi=100)
         img_bytes = pix.tobytes("jpeg")
+        pdf_doc.close()
+        return Response(content=img_bytes, media_type="image/jpeg")
+
+    def _resolve_sep_provider(provider_id: str) -> Any:
+        """Provider by id, falling back to any local provider (ids change on restart)."""
+        try:
+            return sep_manager.get_provider(provider_id)
+        except KeyError:
+            for pid, prov in getattr(sep_manager, "_providers", {}).items():
+                return prov
+            raise
+
+    def _find_node(doc_obj: KnowledgeDocument, node_id: str) -> Optional[Any]:
+        stack: list = list(doc_obj.root_containers)
+        while stack:
+            n = stack.pop()
+            if getattr(n, "id", None) == node_id:
+                return n
+            stack.extend(getattr(n, "children", []) or [])
+        return None
+
+    @app.get("/api/v1/jobs/{job_id}/diagram/{block_id}")
+    async def get_diagram_image(job_id: str, block_id: str) -> Response:
+        """Render a DiagramBlock's source page region as an image (scan crop)."""
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+        node = _find_node(doc, block_id)
+        if node is None or not isinstance(node, DiagramBlock):
+            raise HTTPException(status_code=404, detail="Diagram not found")
+        vl = node.visual_layout
+        if vl is None or vl.bounding_box is None:
+            raise HTTPException(status_code=400, detail="Diagram has no region")
+        source_uri = doc.source_uri or ""
+        if not source_uri.startswith("sep://"):
+            raise HTTPException(status_code=400, detail="Only SEP documents supported")
+        provider_id, file_id = source_uri.replace("sep://", "").split("/", 1)
+        try:
+            sep_provider = _resolve_sep_provider(provider_id)
+            file_stream = await sep_provider.get_file_stream(file_id)
+        except Exception:
+            raise HTTPException(status_code=404, detail="Cannot access source file")
+        import pymupdf as fitz
+        pdf_doc = fitz.open(stream=file_stream.read(), filetype="pdf")
+        pg = vl.page_or_screen_index
+        if pg < 0 or pg >= len(pdf_doc):
+            raise HTTPException(status_code=400, detail="Page out of range")
+        page = pdf_doc[pg]
+        pw, ph = page.rect.width, page.rect.height
+        bb = vl.bounding_box
+        clip = fitz.Rect(bb.x0 * pw, bb.y0 * ph, bb.x1 * pw, bb.y1 * ph)
+        pix = page.get_pixmap(clip=clip, dpi=72)
+        img_bytes = pix.tobytes("jpeg", jpg_quality=85)
         pdf_doc.close()
         return Response(content=img_bytes, media_type="image/jpeg")
 

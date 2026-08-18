@@ -99,7 +99,8 @@ const KRMNodeView: React.FC<{
   const isContainer = node.type === 'ContainerUnit';
   const isTable = node.type === 'TableBlock';
   const hasChildren = node.children && node.children.length > 0;
-  const fullText = node.title || node.text || '';
+  const isDiagram = node.type === 'DiagramBlock';
+  const fullText = node.title || node.text || (node as any).caption_text || (isDiagram ? 'Схема' : '');
   const isLong = !isContainer && fullText.length > 80;
   const label = expanded || !isLong ? fullText : fullText.slice(0, 80) + '…';
   const confPct = (node.confidence_score * 100).toFixed(0);
@@ -150,6 +151,7 @@ const KRMNodeView: React.FC<{
                 ? (node.semantic_type === 'toc' ? 'TOC' : node.semantic_type === 'example' ? 'Example' : `L${node.level || 1}`)
                 : node.type === 'TitlePageBlock' ? (node.page_role === 'cover' ? 'Обложка' : 'Title Page')
                 : node.type === 'BlankPageBlock' ? 'Blank'
+                : node.type === 'DiagramBlock' ? 'Схема'
                 : node.type.replace('Block', '')}
             </span>
             <span className={`${expanded ? 'whitespace-pre-wrap break-words' : 'truncate'} ${isContainer ? 'font-semibold text-white' : 'text-slate-300'}`}>
@@ -193,6 +195,19 @@ const KRMNodeView: React.FC<{
               <Edit3 className="w-3.5 h-3.5" />
               Редактировать
             </button>
+          </div>
+        )}
+        {isDiagram && jobId && (
+          <div className="mt-2 pl-6">
+            <img
+              src={`/api/v1/jobs/${jobId}/diagram/${node.id}`}
+              alt={fullText}
+              className="max-w-md w-full rounded-lg border border-slate-700 bg-white"
+              loading="lazy"
+            />
+            {(node as any).labels?.length > 0 && (
+              <div className="mt-1 text-[10px] text-slate-500">{(node as any).labels.length} надписей сохранено</div>
+            )}
           </div>
         )}
         {refineStatus === 'sending' && (

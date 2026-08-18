@@ -15,6 +15,7 @@ from src.analyzers.base import (
 )
 from src.analyzers.block_classifier import BlockClassifierAnalyzer
 from src.analyzers.caption_analyzer import CaptionAnalyzer
+from src.analyzers.diagram_detector import DiagramDetectorAnalyzer
 from src.analyzers.entity_extractor import EntityExtractorAnalyzer
 from src.analyzers.llm_refinement import LLMRefinementAnalyzer
 from src.analyzers.heading import HeadingAnalyzer
@@ -29,6 +30,7 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
     return [
         NormalizationAnalyzer(),
         ReadingOrderAnalyzer(),
+        DiagramDetectorAnalyzer(),
         HeadingAnalyzer(),
         TitlePageAnalyzer(),
         TableDetectorAnalyzer(),
