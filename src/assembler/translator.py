@@ -2,7 +2,7 @@
 Translator + PDF assembler.
 
 Walks the KRM tree, translates text blocks via ollama, then generates
-a new PDF with translated content using reportlab.
+a new PDF with translated content via XeLaTeX (RFC 0012 / 0021).
 """
 
 import asyncio
@@ -45,6 +45,43 @@ def _get_block_text(block: Any) -> str:
     return ""
 
 
+def _record_translation(block: Any, original: str, translated: str, target_lang: str) -> None:
+    """
+    Attach a TranslatedSegment to the block without mutating the source
+    (RFC 0021 §2.1, §5.1). Records lineage per RFC 0011: source node id, bbox,
+    content hashes, and the deterministic model configuration.
+    """
+    import hashlib
+
+    from src.analyzers.llm_refinement import OLLAMA_MODEL
+
+    vl = getattr(block, "visual_layout", None)
+    bb = getattr(vl, "bounding_box", None) if vl else None
+    bbox = (
+        {"page_or_screen_index": getattr(vl, "page_or_screen_index", 0),
+         "x0": bb.x0, "y0": bb.y0, "x1": bb.x1, "y1": bb.y1}
+        if bb else None
+    )
+    block.metadata = block.metadata or {}
+    segments = block.metadata.setdefault("translations", {})
+    segments[target_lang] = {
+        "source_node_id": block.id,
+        "target_lang": target_lang,
+        "target_text": translated,
+        "bbox": bbox,
+        "lineage": {
+            "input_hash": "sha256:" + hashlib.sha256(original.encode()).hexdigest(),
+            "output_hash": "sha256:" + hashlib.sha256(translated.encode()).hexdigest(),
+        },
+        "transformation": {
+            "agent_type": "llm_translator",
+            "model": OLLAMA_MODEL,
+            "temperature": 0.0,
+            "seed": 42,
+        },
+    }
+
+
 def _translate_text(text: str, target_lang: str) -> str:
     if not text.strip() or len(text.strip()) < 3:
         return text
@@ -57,6 +94,8 @@ def _translate_text(text: str, target_lang: str) -> str:
 
 
 def _collect_translatable(container: Any, result: list) -> None:
+    if getattr(container, "is_tombstoned", False):
+        return  # RFC 0001 §2.4: tombstoned nodes are excluded from output
     if isinstance(container, ContainerUnit):
         if container.title and len(container.title.strip()) > 2:
             result.append(("title", container))
@@ -87,8 +126,6 @@ def translate_and_assemble(
     log.info("Translating %d blocks to %s", total, target_lang)
     t_start = time.time()
 
-    translated_pages: dict = {}
-
     for i, (kind, block) in enumerate(blocks):
         elapsed = time.time() - t_start
         if elapsed > MAX_TRANSLATE_TIME:
@@ -97,28 +134,18 @@ def translate_and_assemble(
 
         if kind == "title":
             original = block.title
-            translated = _translate_text(original, target_lang)
-            block.metadata = block.metadata or {}
-            block.metadata["original_title"] = original
-            block.title = translated
         elif kind == "paragraph":
             original = _get_block_text(block)
-            translated = _translate_text(original, target_lang)
-            from src.krm.models import TextLineInline, StyledTextSpan
-            block.inlines = [TextLineInline(spans=[StyledTextSpan(text=translated)])]
-            block.metadata = block.metadata or {}
-            block.metadata["original_text"] = original
         elif kind == "caption":
             original = block.caption_text
-            translated = _translate_text(original, target_lang)
-            block.metadata = block.metadata or {}
-            block.metadata["original_caption"] = original
-            block.caption_text = translated
+        else:
+            original = ""
 
-        vl = getattr(block, "visual_layout", None)
-        pg = vl.page_or_screen_index if vl else 0
-        text = _get_block_text(block) if kind != "title" else block.title
-        translated_pages.setdefault(pg, []).append(text)
+        translated = _translate_text(original, target_lang)
+        # RFC 0021 §5.1 / 0001 §2.4: do NOT mutate the source. The translation is a
+        # new segment attached under metadata with lineage back to the source node
+        # (RFC 0011: source id, bbox, hashes, deterministic model config).
+        _record_translation(block, original, translated, target_lang)
 
         if pyjobkit_bridge and loop and i % 5 == 0:
             try:
@@ -137,103 +164,90 @@ def translate_and_assemble(
         if (i + 1) % 10 == 0:
             log.info("Translated %d/%d blocks (%.0fs)", i + 1, total, time.time() - t_start)
 
-    _generate_pdf(doc, translated_pages, output_path)
+    _generate_pdf(doc, target_lang, output_path, job_id)
     log.info("Translation complete: %d blocks in %.0fs → %s", total, time.time() - t_start, output_path)
     return output_path
 
 
-def _generate_pdf(doc: KnowledgeDocument, pages: dict, output_path: str) -> None:
-    try:
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
-        from reportlab.lib.units import cm
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
-    except ImportError:
-        log.warning("reportlab not installed, writing plain text instead")
-        with open(output_path.replace(".pdf", ".txt"), "w") as f:
-            for pg in sorted(pages.keys()):
-                f.write(f"\n--- Page {pg + 1} ---\n")
-                for text in pages[pg]:
-                    f.write(text + "\n")
-        return
+def _generate_pdf(doc: KnowledgeDocument, target_lang: str, output_path: str, job_id: str) -> None:
+    """
+    RFC 0012 / 0021: build a XeLaTeX document from the KRM tree and compile it to
+    PDF, then emit book.json + kae.lock with output hashes alongside the PDF.
+    """
+    import hashlib
+    import json
+    import shutil
+    from datetime import datetime, timezone
 
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    if os.path.exists(font_path):
-        pdfmetrics.registerFont(TTFont("DejaVu", font_path))
-        base_font = "DejaVu"
-    else:
-        base_font = "Helvetica"
+    from src.assembler.latex_builder import build_latex, compile_xelatex
 
-    pdf_doc = SimpleDocTemplate(
-        output_path,
-        pagesize=A4,
-        leftMargin=2 * cm,
-        rightMargin=2 * cm,
-        topMargin=2 * cm,
-        bottomMargin=2 * cm,
-    )
+    out_dir = os.path.dirname(output_path) or "."
+    os.makedirs(out_dir, exist_ok=True)
+    base = os.path.splitext(os.path.basename(output_path))[0]
+    tex_path = os.path.join(out_dir, f"{base}.tex")
 
-    styles = getSampleStyleSheet()
-    style_normal = ParagraphStyle(
-        "TransNormal", parent=styles["Normal"],
-        fontName=base_font, fontSize=11, leading=14,
-    )
-    style_heading = ParagraphStyle(
-        "TransHeading", parent=styles["Heading1"],
-        fontName=base_font, fontSize=16, leading=20, spaceAfter=12,
-    )
-    style_title = ParagraphStyle(
-        "TransTitle", parent=styles["Title"],
-        fontName=base_font, fontSize=22, leading=26, spaceAfter=20,
-    )
+    tex_source = build_latex(doc, target_lang)
+    with open(tex_path, "w", encoding="utf-8") as f:
+        f.write(tex_source)
 
-    story: list = []
+    pdf_path = compile_xelatex(tex_path, out_dir)
+    if os.path.abspath(pdf_path) != os.path.abspath(output_path):
+        shutil.move(pdf_path, output_path)
 
-    def _add_container(container: Any, depth: int = 0) -> None:
-        if isinstance(container, ContainerUnit):
-            if container.title:
-                s = style_title if depth == 0 else style_heading
-                safe = container.title.replace("&", "&amp;").replace("<", "&lt;")
-                story.append(Paragraph(safe, s))
-                story.append(Spacer(1, 6))
-            for child in container.children:
-                _add_container(child, depth + 1)
-        elif isinstance(container, BlankPageBlock):
-            story.append(PageBreak())
-        elif isinstance(container, TitlePageBlock):
-            title = getattr(container, "book_title", "") or ""
-            if title:
-                safe = title.replace("&", "&amp;").replace("<", "&lt;")
-                story.append(Paragraph(safe, style_title))
-            text = _get_block_text(container)
-            if text:
-                safe = text.replace("&", "&amp;").replace("<", "&lt;").replace("\n", "<br/>")
-                story.append(Paragraph(safe, style_normal))
-            story.append(PageBreak())
-        elif isinstance(container, ParagraphBlock):
-            text = _get_block_text(container)
-            if text:
-                safe = text.replace("&", "&amp;").replace("<", "&lt;").replace("\n", "<br/>")
-                story.append(Paragraph(safe, style_normal))
-                story.append(Spacer(1, 4))
-        elif isinstance(container, CaptionBlock):
-            text = container.caption_text or ""
-            if text:
-                safe = text.replace("&", "&amp;").replace("<", "&lt;")
-                story.append(Paragraph(f"<i>{safe}</i>", style_normal))
-        elif isinstance(container, CodeBlock):
-            text = container.code_text or ""
-            if text:
-                safe = text.replace("&", "&amp;").replace("<", "&lt;").replace("\n", "<br/>")
-                story.append(Paragraph(f"<font face='Courier' size='9'>{safe}</font>", style_normal))
-                story.append(Spacer(1, 4))
+    # RFC 0012: reproducibility manifest (book.json) + lock with output hashes.
+    def _sha256_file(path: str) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
 
-    for root in doc.root_containers:
-        _add_container(root)
+    from src.analyzers.llm_refinement import OLLAMA_MODEL
 
-    if story:
-        pdf_doc.build(story)
-    else:
-        log.warning("No content to build PDF")
+    lock = {
+        "lock_version": "1.0",
+        "build_id": f"build-{job_id}",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "target_lang": target_lang,
+        "input_artifacts": [{"source_uri": doc.source_uri}],
+        "analyzers": {"pdf_extractor": "PdfSourceAdapter"},
+        "llm_configuration": {
+            "provider": "ollama",
+            "model": OLLAMA_MODEL,
+            "temperature": 0.0,
+            "seed": 42,
+        },
+        "output_hashes": {
+            "latex_pdf": f"sha256:{_sha256_file(output_path)}",
+        },
+    }
+    lock_path = os.path.join(out_dir, "kae.lock")
+    book_path = os.path.join(out_dir, "book.json")
+    with open(lock_path, "w") as f:
+        json.dump(lock, f, indent=2)
+    with open(book_path, "w") as f:
+        json.dump({"title": doc.title, "target_lang": target_lang, "source_uri": doc.source_uri}, f, indent=2)
+
+    # RFC 0013: content-addressed .kap bundle (SHA-256-indexed archive) of the
+    # assembled artifacts, for offline deployment / dedup.
+    import tarfile
+
+    members = [(output_path, os.path.basename(output_path)),
+               (tex_path, os.path.basename(tex_path)),
+               (lock_path, "kae.lock"), (book_path, "book.json")]
+    manifest = {"artifacts": [], "created_at": lock["created_at"], "job_id": job_id}
+    for path, arcname in members:
+        if os.path.exists(path):
+            manifest["artifacts"].append({"name": arcname, "sha256": _sha256_file(path)})
+    manifest_path = os.path.join(out_dir, "manifest.json")
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+
+    bundle_sha = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    kap_path = os.path.join(out_dir, f"{bundle_sha[:16]}.kap")
+    with tarfile.open(kap_path, "w:gz") as tar:
+        tar.add(manifest_path, arcname="manifest.json")
+        for path, arcname in members:
+            if os.path.exists(path):
+                tar.add(path, arcname=arcname)
+    log.info("Assembled .kap bundle: %s", kap_path)
