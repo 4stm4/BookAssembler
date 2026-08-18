@@ -71,10 +71,10 @@ def _get_text(block: ParagraphBlock) -> str:
     return " ".join(parts)
 
 
-def _call_ollama(prompt: str) -> Optional[str]:
-    url = f"{OLLAMA_URL}/api/generate"
+def _call_ollama(prompt: str, host: Optional[str] = None, model: Optional[str] = None) -> Optional[str]:
+    url = f"{host or OLLAMA_URL}/api/generate"
     payload = json.dumps({
-        "model": OLLAMA_MODEL,
+        "model": model or OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
         # RFC 0012 §3.1: deterministic LLM calls (temperature=0, fixed seed).
