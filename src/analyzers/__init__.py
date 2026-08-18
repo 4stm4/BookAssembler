@@ -16,11 +16,13 @@ from src.analyzers.base import (
 from src.analyzers.block_classifier import BlockClassifierAnalyzer
 from src.analyzers.caption_analyzer import CaptionAnalyzer
 from src.analyzers.entity_extractor import EntityExtractorAnalyzer
+from src.analyzers.llm_refinement import LLMRefinementAnalyzer
 from src.analyzers.heading import HeadingAnalyzer
 from src.analyzers.normalization import NormalizationAnalyzer
 from src.analyzers.pipeline import PipelineRunner
 from src.analyzers.reading_order import ReadingOrderAnalyzer
 from src.analyzers.table_detector import TableDetectorAnalyzer
+from src.analyzers.title_page import TitlePageAnalyzer
 
 
 def create_default_pipeline() -> List[BaseAnalyzer]:
@@ -28,9 +30,11 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         NormalizationAnalyzer(),
         ReadingOrderAnalyzer(),
         HeadingAnalyzer(),
+        TitlePageAnalyzer(),
         TableDetectorAnalyzer(),
         CaptionAnalyzer(),
         BlockClassifierAnalyzer(),
+        LLMRefinementAnalyzer(),
         EntityExtractorAnalyzer(),
     ]
 
@@ -43,6 +47,7 @@ __all__ = [
     "EntityExtractorAnalyzer",
     "HeadingAnalyzer",
     "KGPermission",
+    "LLMRefinementAnalyzer",
     "KRMPermission",
     "NormalizationAnalyzer",
     "PipelineRunner",
@@ -50,5 +55,6 @@ __all__ = [
     "ReadingOrderAnalyzer",
     "SecurityViolationError",
     "TableDetectorAnalyzer",
+    "TitlePageAnalyzer",
     "create_default_pipeline",
 ]

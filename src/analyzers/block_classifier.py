@@ -21,9 +21,13 @@ from src.krm.models import (
     ContainerUnit,
     KnowledgeDocument,
     ParagraphBlock,
+    TextLineInline,
+    StyledTextSpan,
+    VisualLayout,
+    NormalizedRect,
 )
 
-_ENDS_WITH_PAGE_NUM = re.compile(r"\s(\d{1,4})\s*$")
+_ENDS_WITH_PAGE_NUM = re.compile(r"\s(\d{1,4}|[ivxlcdm]+|[IVXLCDM]+)\s*$")
 
 MIN_TOC_RUN = 4
 MAX_TOC_TEXT_LEN = 120
@@ -53,7 +57,7 @@ def _looks_like_toc_entry(text: str) -> bool:
         return False
     title_part = _ENDS_WITH_PAGE_NUM.sub("", stripped).strip()
     long_words = [w for w in title_part.split() if len(w) >= 3 and any(c.isalpha() for c in w)]
-    if len(long_words) < 2:
+    if len(long_words) < 1:
         return False
     return True
 
@@ -225,11 +229,30 @@ class BlockClassifierAnalyzer(BaseAnalyzer):
                 extraction_confidence=0.85,
                 confidence_score=min(0.85, run_confidence),
             )
+            toc_lines = []
+            first_page = None
             for orig_idx, block in run:
-                block.classification_confidence = run_confidence
-                block.update_confidence()
-                toc_container.children.append(block)
+                text = _get_text(block)
+                if text:
+                    toc_lines.append(text)
+                if first_page is None:
+                    vl = getattr(block, "visual_layout", None)
+                    if vl:
+                        first_page = vl.page_or_screen_index
                 indices_to_remove.add(orig_idx)
+            merged_text = "\n".join(toc_lines)
+            merged_block = ParagraphBlock(
+                inlines=[TextLineInline(spans=[StyledTextSpan(text=merged_text)])],
+                extraction_confidence=0.85,
+                classification_confidence=run_confidence,
+                confidence_score=min(0.85, run_confidence),
+            )
+            if first_page is not None:
+                merged_block.visual_layout = VisualLayout(
+                    bounding_box=NormalizedRect(0.0, 0.0, 1.0, 1.0),
+                    page_or_screen_index=first_page,
+                )
+            toc_container.children.append(merged_block)
 
             insertions[first_idx] = toc_container
 

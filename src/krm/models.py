@@ -243,6 +243,27 @@ class FormulaBlock(StructuralUnit):
 
 
 @dataclass
+class BlankPageBlock(StructuralUnit):
+    """
+    Intentionally blank page (no meaningful content).
+    """
+    pass
+
+
+@dataclass
+class TitlePageBlock(ParagraphBlock):
+    """
+    Title page of the book or a major division (half-title, series page, etc.).
+    Aggregates title, authors, publisher, and other front-matter metadata.
+    """
+    book_title: str = ""
+    authors: List[str] = field(default_factory=list)
+    publisher: str = ""
+    edition: str = ""
+    page_role: str = "title"  # title | half_title | series | copyright
+
+
+@dataclass
 class CaptionBlock(StructuralUnit):
     """
     Caption/label for a figure, table, or example.
