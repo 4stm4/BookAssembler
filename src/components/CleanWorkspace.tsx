@@ -33,6 +33,8 @@ const TYPE_COLORS: Record<string, string> = {
   FormulaBlock: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
   TableBlock: 'bg-pink-500/10 text-pink-400 border-pink-500/20',
   CaptionBlock: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  TitlePageBlock: 'bg-rose-500/10 text-rose-400 border-rose-500/20',
+  BlankPageBlock: 'bg-slate-600/10 text-slate-500 border-slate-600/20',
 };
 
 const PagePreviewModal: React.FC<{
@@ -78,10 +80,22 @@ const PagePreviewModal: React.FC<{
   );
 };
 
-const KRMNodeView: React.FC<{ node: KRMNode; depth: number; jobId?: string }> = ({ node, depth, jobId }) => {
+const NODE_TYPE_OPTIONS = [
+  'ParagraphBlock', 'CodeBlock', 'FigureBlock', 'FormulaBlock',
+  'TableBlock', 'CaptionBlock', 'TitlePageBlock', 'BlankPageBlock', 'ContainerUnit',
+];
+
+const KRMNodeView: React.FC<{
+  node: KRMNode; depth: number; jobId?: string;
+  onRefineRequest?: (nodeId: string, mode: 'agent' | 'manual', patch?: Partial<KRMNode>) => Promise<void>;
+}> = ({ node, depth, jobId, onRefineRequest }) => {
   const [collapsed, setCollapsed] = useState(depth > 1);
   const [expanded, setExpanded] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [editType, setEditType] = useState(node.type);
+  const [editText, setEditText] = useState(node.title || node.text || '');
+  const [refineStatus, setRefineStatus] = useState<'idle' | 'sending' | 'done'>('idle');
   const isContainer = node.type === 'ContainerUnit';
   const isTable = node.type === 'TableBlock';
   const hasChildren = node.children && node.children.length > 0;
@@ -89,9 +103,27 @@ const KRMNodeView: React.FC<{ node: KRMNode; depth: number; jobId?: string }> = 
   const isLong = !isContainer && fullText.length > 80;
   const label = expanded || !isLong ? fullText : fullText.slice(0, 80) + '…';
   const confPct = (node.confidence_score * 100).toFixed(0);
-  const isLow = node.confidence_score < 0.80;
+  const isLow = node.confidence_score < 0.85;
   const typeColor = TYPE_COLORS[node.type] || 'bg-slate-500/10 text-slate-400 border-slate-500/20';
   const hasPage = node.page_index !== undefined && node.page_index !== null;
+
+  const handleAgentRefine = async () => {
+    if (!onRefineRequest) return;
+    setRefineStatus('sending');
+    try {
+      await onRefineRequest(node.id, 'agent');
+      setRefineStatus('done');
+    } catch {
+      setRefineStatus('idle');
+    }
+  };
+
+  const handleManualSave = () => {
+    if (!onRefineRequest) return;
+    onRefineRequest(node.id, 'manual', { type: editType, text: editText, title: isContainer ? editText : undefined });
+    setEditMode(false);
+    setRefineStatus('done');
+  };
 
   return (
     <div className={`${depth > 0 ? 'pl-4 border-l-2 border-slate-800/50' : ''}`}>
@@ -111,9 +143,13 @@ const KRMNodeView: React.FC<{ node: KRMNode; depth: number; jobId?: string }> = 
                 {collapsed ? '▶' : '▼'}
               </button>
             )}
-            <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono border shrink-0 ${typeColor}`}>
-              {node.type === 'ContainerUnit'
+            <span className={`px-1.5 py-0.5 rounded text-[9px] font-mono border shrink-0 ${node.metadata?.llm_suggested_type ? 'bg-violet-500/15 text-violet-300 border-violet-500/30' : typeColor}`}>
+              {node.metadata?.llm_suggested_type
+                ? node.metadata.llm_suggested_type
+                : node.type === 'ContainerUnit'
                 ? (node.semantic_type === 'toc' ? 'TOC' : node.semantic_type === 'example' ? 'Example' : `L${node.level || 1}`)
+                : node.type === 'TitlePageBlock' ? 'Title Page'
+                : node.type === 'BlankPageBlock' ? 'Blank'
                 : node.type.replace('Block', '')}
             </span>
             <span className={`${expanded ? 'whitespace-pre-wrap break-words' : 'truncate'} ${isContainer ? 'font-semibold text-white' : 'text-slate-300'}`}>
@@ -124,9 +160,10 @@ const KRMNodeView: React.FC<{ node: KRMNode; depth: number; jobId?: string }> = 
             {hasPage && jobId && (
               <button
                 onClick={(e) => { e.stopPropagation(); setShowPreview(true); }}
-                className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20"
-                title={`Страница ${node.page_index! + 1}`}
+                className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 flex items-center gap-1"
+                title={`Открыть превью страницы ${node.page_index! + 1}`}
               >
+                <Eye className="w-3 h-3" />
                 стр.{node.page_index! + 1}
               </button>
             )}
@@ -138,6 +175,80 @@ const KRMNodeView: React.FC<{ node: KRMNode; depth: number; jobId?: string }> = 
             </span>
           </div>
         </div>
+        {isLow && refineStatus === 'idle' && (
+          <div className="flex items-center gap-1.5 mt-1.5 pl-6">
+            <button
+              onClick={(e) => { e.stopPropagation(); handleAgentRefine(); }}
+              className="px-2 py-1 rounded text-[10px] font-mono bg-violet-500/15 text-violet-400 border border-violet-500/30 hover:bg-violet-500/25 flex items-center gap-1"
+              title="Уточнить тип через LLM-агент"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Агент
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setEditMode(!editMode); }}
+              className="px-2 py-1 rounded text-[10px] font-mono bg-slate-700/50 text-slate-300 border border-slate-600/30 hover:bg-slate-700 flex items-center gap-1"
+              title="Исправить вручную"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              Редактировать
+            </button>
+          </div>
+        )}
+        {refineStatus === 'sending' && (
+          <div className="mt-1.5 pl-6 text-[10px] text-violet-400 animate-pulse">Запрос к агенту…</div>
+        )}
+        {refineStatus === 'done' && (
+          <div className="mt-1.5 pl-6 flex items-center gap-1.5 text-[10px] text-emerald-400">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            Уточнено
+            {node.metadata?.llm_suggested_type && (
+              <span className="px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-300 border border-violet-500/20">
+                LLM: {node.metadata.llm_suggested_type}
+              </span>
+            )}
+          </div>
+        )}
+        {editMode && (
+          <div className="mt-2 pt-2 border-t border-slate-800/50 space-y-2" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2">
+              <label className="text-[10px] text-slate-500 shrink-0">Тип:</label>
+              <select
+                value={editType}
+                onChange={(e) => setEditType(e.target.value)}
+                className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-indigo-500"
+              >
+                {NODE_TYPE_OPTIONS.map((t) => (
+                  <option key={t} value={t}>{t.replace('Block', '')}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-start gap-2">
+              <label className="text-[10px] text-slate-500 shrink-0 mt-1">Текст:</label>
+              <textarea
+                value={editText}
+                onChange={(e) => setEditText(e.target.value)}
+                rows={2}
+                className="flex-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-indigo-500 resize-none"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setEditMode(false)}
+                className="px-2 py-1 rounded text-[10px] bg-slate-800 text-slate-400 hover:text-white border border-slate-700"
+              >
+                Отмена
+              </button>
+              <button
+                onClick={handleManualSave}
+                className="px-2 py-1 rounded text-[10px] bg-indigo-600 text-white hover:bg-indigo-500 flex items-center gap-1"
+              >
+                <Check className="w-3 h-3" />
+                Сохранить
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       {isTable && node.rows && !collapsed && (
         <div className="overflow-x-auto mt-1 mb-1.5 ml-4">
@@ -159,7 +270,7 @@ const KRMNodeView: React.FC<{ node: KRMNode; depth: number; jobId?: string }> = 
       {hasChildren && !collapsed && (
         <div className="space-y-1 mt-1">
           {node.children!.map((child: KRMNode) => (
-            <KRMNodeView key={child.id} node={child} depth={depth + 1} jobId={jobId} />
+            <KRMNodeView key={child.id} node={child} depth={depth + 1} jobId={jobId} onRefineRequest={onRefineRequest} />
           ))}
         </div>
       )}
@@ -204,6 +315,36 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
   const [isCopied, setIsCopied] = useState<boolean>(false);
   const [isSepDialogOpen, setIsSepDialogOpen] = useState<boolean>(false);
 
+  const handleRefineRequest = async (nodeId: string, mode: 'agent' | 'manual', patch?: Partial<KRMNode>) => {
+    if (!activeJobId) return;
+    try {
+      const result = await kaeApi.refineNode(activeJobId, nodeId, mode, patch as Record<string, any>);
+      if (mode === 'manual' && patch) {
+        setKrmNodes((prev) => {
+          const updateNode = (nodes: KRMNode[]): KRMNode[] =>
+            nodes.map((n) => {
+              if (n.id === nodeId) return { ...n, ...patch, confidence_score: 1.0 };
+              if (n.children) return { ...n, children: updateNode(n.children) };
+              return n;
+            });
+          return updateNode(prev);
+        });
+      } else if (mode === 'agent' && result?.confidence) {
+        setKrmNodes((prev) => {
+          const updateNode = (nodes: KRMNode[]): KRMNode[] =>
+            nodes.map((n) => {
+              if (n.id === nodeId) return { ...n, confidence_score: result.confidence, metadata: { ...n.metadata, llm_suggested_type: result.llm_result?.type } };
+              if (n.children) return { ...n, children: updateNode(n.children) };
+              return n;
+            });
+          return updateNode(prev);
+        });
+      }
+    } catch (err) {
+      console.error('Refine failed:', err);
+    }
+  };
+
   useEffect(() => {
     if (initialJobId) {
       setActiveJobId(initialJobId);
@@ -213,15 +354,56 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
   // Fetch real KRM data when job is active
   useEffect(() => {
     if (!activeJobId) return;
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
     const fetchResult = async () => {
       try {
         const res = await fetch(`/api/v1/jobs/${activeJobId}/result`);
-        if (!res.ok) return;
+        if (!res.ok) {
+          // Job may still be processing — start polling progress
+          const progRes = await fetch(`/api/v1/jobs/${activeJobId}/progress`);
+          if (progRes.ok) {
+            const prog = await progRes.json();
+            setJobStatus(prog.status === 'COMPLETED' ? 'COMPLETED' : prog.status === 'FAILED' ? 'FAILED' : 'RUNNING');
+            setJobProgress(prog.total > 0 ? prog.step / prog.total : 0);
+            setJobMessage(prog.stage || 'Обработка...');
+
+            if (prog.status === 'RUNNING' && !pollTimer) {
+              pollTimer = setInterval(async () => {
+                if (cancelled) return;
+                try {
+                  const p = await fetch(`/api/v1/jobs/${activeJobId}/progress`);
+                  if (!p.ok) return;
+                  const pd = await p.json();
+                  setJobProgress(pd.total > 0 ? pd.step / pd.total : 0);
+                  setJobMessage(pd.stage || 'Обработка...');
+                  if (pd.status === 'COMPLETED') {
+                    setJobStatus('COMPLETED');
+                    setJobMessage('Обработка завершена');
+                    if (pollTimer) clearInterval(pollTimer);
+                    // Reload KRM data
+                    const r2 = await fetch(`/api/v1/jobs/${activeJobId}/result`);
+                    if (r2.ok) {
+                      const d2 = await r2.json();
+                      if (d2.containers) setKrmNodes(d2.containers);
+                    }
+                  } else if (pd.status === 'FAILED') {
+                    setJobStatus('FAILED');
+                    setJobMessage(pd.error || 'Ошибка');
+                    if (pollTimer) clearInterval(pollTimer);
+                  }
+                } catch {}
+              }, 3000);
+            }
+          }
+          return;
+        }
         const data = await res.json();
         if (data.containers) {
           setKrmNodes(data.containers);
         }
-        // Build source text from KRM tree
+        setJobStatus('COMPLETED');
         const texts: string[] = [];
         const extractText = (node: any) => {
           if (node.text) texts.push(node.text);
@@ -229,12 +411,16 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
         };
         (data.containers || []).forEach(extractText);
         setSourceText(texts.join('\n\n'));
-        setTargetMarkdown(''); // Translation not yet available in Phase 1
+        setTargetMarkdown('');
       } catch (err) {
         console.warn('Failed to fetch job result:', err);
       }
     };
     fetchResult();
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearInterval(pollTimer);
+    };
   }, [activeJobId]);
 
   // Subscribe to reactive SSE job stream
@@ -494,7 +680,7 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
                   Иерархия узлов KRM (Knowledge Representation Model)
                 </div>
                 {krmNodes.map((node) => (
-                  <KRMNodeView key={node.id} node={node} depth={0} jobId={activeJobId || undefined} />
+                  <KRMNodeView key={node.id} node={node} depth={0} jobId={activeJobId || undefined} onRefineRequest={handleRefineRequest} />
                 ))}
               </div>
             ) : (

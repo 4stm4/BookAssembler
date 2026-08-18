@@ -20,9 +20,12 @@ Guarantees:
 import asyncio
 import io
 import json
+import logging
 import os
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from uuid import uuid4
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 
 from fastapi import (
     FastAPI,
@@ -34,7 +37,7 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.adapters import create_default_registry
@@ -68,6 +71,8 @@ from src.krm.models import (
     TableBlock,
     TableCell,
     TextLineInline,
+    BlankPageBlock,
+    TitlePageBlock,
 )
 
 
@@ -226,6 +231,39 @@ def create_app() -> FastAPI:
                 if node.semantic_type:
                     result["semantic_type"] = node.semantic_type
                 return result
+            elif isinstance(node, BlankPageBlock):
+                result = {
+                    "id": node.id,
+                    "type": "BlankPageBlock",
+                    "text": "",
+                    "confidence_score": 1.0,
+                }
+                vl = getattr(node, "visual_layout", None)
+                if vl and hasattr(vl, "page_or_screen_index"):
+                    result["page_index"] = vl.page_or_screen_index
+                return result
+            elif isinstance(node, TitlePageBlock):
+                text_parts = []
+                for inline in (node.inlines or []):
+                    for span in getattr(inline, "spans", []):
+                        if hasattr(span, "text"):
+                            text_parts.append(span.text)
+                result = {
+                    "id": node.id,
+                    "type": "TitlePageBlock",
+                    "text": "\n".join(text_parts),
+                    "book_title": node.book_title,
+                    "authors": node.authors,
+                    "publisher": node.publisher,
+                    "page_role": node.page_role,
+                    "confidence_score": node.confidence_score,
+                    "extraction_confidence": node.extraction_confidence,
+                    "classification_confidence": node.classification_confidence,
+                }
+                vl = getattr(node, "visual_layout", None)
+                if vl and hasattr(vl, "page_or_screen_index"):
+                    result["page_index"] = vl.page_or_screen_index
+                return result
             elif isinstance(node, ParagraphBlock):
                 text_parts = []
                 for inline in (node.inlines or []):
@@ -321,6 +359,21 @@ def create_app() -> FastAPI:
         }
 
     def _rebuild_document(data: Dict[str, Any]) -> KnowledgeDocument:
+        def _restore_layout(node: Any, n: Dict[str, Any]) -> None:
+            pg = n.get("page_index")
+            if pg is not None:
+                from src.krm.models import VisualLayout, NormalizedRect
+                node.visual_layout = VisualLayout(
+                    bounding_box=NormalizedRect(0.0, 0.0, 1.0, 1.0),
+                    page_or_screen_index=pg,
+                )
+            ec = n.get("extraction_confidence")
+            if ec is not None:
+                node.extraction_confidence = ec
+            cc = n.get("classification_confidence")
+            if cc is not None:
+                node.classification_confidence = cc
+
         def rebuild_node(n: Dict[str, Any]) -> Any:
             t = n.get("type", "")
             if t == "ContainerUnit":
@@ -339,6 +392,7 @@ def create_app() -> FastAPI:
                     inlines=[TextLineInline(spans=[StyledTextSpan(text=n.get("text", ""))])],
                 )
                 p.id = n.get("id", p.id)
+                _restore_layout(p, n)
                 return p
             elif t == "CodeBlock":
                 cb = CodeBlock(
@@ -346,13 +400,34 @@ def create_app() -> FastAPI:
                     confidence_score=n.get("confidence_score", 1.0),
                 )
                 cb.id = n.get("id", cb.id)
+                _restore_layout(cb, n)
                 return cb
+            elif t == "BlankPageBlock":
+                bp = BlankPageBlock(confidence_score=1.0)
+                bp.id = n.get("id", bp.id)
+                _restore_layout(bp, n)
+                return bp
+            elif t == "TitlePageBlock":
+                tp = TitlePageBlock(
+                    book_title=n.get("book_title", ""),
+                    authors=n.get("authors", []),
+                    publisher=n.get("publisher", ""),
+                    page_role=n.get("page_role", "title"),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                tp.id = n.get("id", tp.id)
+                text = n.get("text", "")
+                if text:
+                    tp.inlines = [TextLineInline(spans=[StyledTextSpan(text=text)])]
+                _restore_layout(tp, n)
+                return tp
             elif t == "FigureBlock":
                 fb = FigureBlock(
                     image_uri=n.get("image_uri", ""),
                     confidence_score=n.get("confidence_score", 1.0),
                 )
                 fb.id = n.get("id", fb.id)
+                _restore_layout(fb, n)
                 return fb
             elif t == "FormulaBlock":
                 fm = FormulaBlock(
@@ -360,6 +435,7 @@ def create_app() -> FastAPI:
                     confidence_score=n.get("confidence_score", 1.0),
                 )
                 fm.id = n.get("id", fm.id)
+                _restore_layout(fm, n)
                 return fm
             elif t == "CaptionBlock":
                 cap = CaptionBlock(
@@ -370,6 +446,7 @@ def create_app() -> FastAPI:
                     confidence_score=n.get("confidence_score", 1.0),
                 )
                 cap.id = n.get("id", cap.id)
+                _restore_layout(cap, n)
                 return cap
             elif t == "TableBlock":
                 grid = []
@@ -385,6 +462,7 @@ def create_app() -> FastAPI:
                     grid.append(cells)
                 tb = TableBlock(grid=grid, confidence_score=n.get("confidence_score", 1.0))
                 tb.id = n.get("id", tb.id)
+                _restore_layout(tb, n)
                 return tb
             return ContainerUnit(title=n.get("title", "unknown"))
 
@@ -401,6 +479,7 @@ def create_app() -> FastAPI:
     # Persistent document store (L1 Local Disk per RFC 0013)
     docs_store: Dict[str, KnowledgeDocument] = {}
     graphs_store: Dict[str, Dict[str, Any]] = {}
+    progress_store: Dict[str, Dict[str, Any]] = {}
     _docs_dir = os.path.join(os.environ.get("KAE_DATA_DIR", ".kae"), "docs")
     os.makedirs(_docs_dir, exist_ok=True)
 
@@ -693,6 +772,112 @@ def create_app() -> FastAPI:
             for item in items
         ]
 
+    async def _process_import_background(
+        job: Any,
+        provider_id: str,
+        file_id: str,
+        ext: str,
+    ) -> None:
+        """Background task: parse PDF and run analyzer pipeline."""
+        job_id = job.job_id
+        adapter = adapter_registry.get_adapter_for_extension(ext)
+        if not adapter:
+            doc = KnowledgeDocument(source_uri=job.source_uri)
+            container = ContainerUnit(title="Unsupported Format", level=1)
+            container.children.append(
+                ParagraphBlock(
+                    inlines=[TextLineInline(spans=[StyledTextSpan(text=f"No adapter for .{ext}")])],
+                )
+            )
+            doc.root_containers.append(container)
+            docs_store[job_id] = doc
+            progress_store[job_id] = {"step": 1, "total": 1, "stage": "done", "error": f"No adapter for .{ext}"}
+            job_manager.update_status(job_id, JobStatus.FAILED, error=f"No adapter for .{ext}")
+            return
+
+        try:
+            progress_store[job_id] = {"step": 0, "total": 10, "stage": "Чтение файла..."}
+            await pyjobkit_bridge.publish_event({
+                "event": "job_started", "job_id": job_id,
+                "job_type": "import", "progress": 0.0, "status": "RUNNING",
+                "stage": "Чтение файла...",
+            })
+            sep_provider = sep_manager.get_provider(provider_id)
+            file_stream = await sep_provider.get_file_stream(file_id)
+
+            progress_store[job_id] = {"step": 1, "total": 10, "stage": "Парсинг PDF..."}
+            loop = asyncio.get_event_loop()
+            doc = await loop.run_in_executor(
+                None, adapter.parse, file_stream, job.source_uri
+            )
+            docs_store[job_id] = doc
+            _persist_doc(job_id, doc)
+
+            progress_store[job_id] = {"step": 2, "total": 10, "stage": "Запуск анализаторов..."}
+
+            rg = ReadingGraph()
+            kg = KnowledgeGraph()
+            pipeline = PipelineRunner(create_default_pipeline())
+
+            def on_progress(step: int, total: int, name: str) -> None:
+                current_step = 2 + step
+                total_steps = 2 + total
+                stage = name if name != "done" else "Завершение..."
+                progress_store[job_id] = {
+                    "step": current_step,
+                    "total": total_steps,
+                    "stage": stage,
+                    "analyzer": name,
+                }
+                asyncio.run_coroutine_threadsafe(
+                    pyjobkit_bridge.publish_event({
+                        "event": "job_progress", "job_id": job_id,
+                        "job_type": stage, "progress": current_step / total_steps,
+                        "status": "RUNNING", "stage": stage,
+                    }),
+                    loop,
+                )
+
+            await loop.run_in_executor(
+                None, lambda: pipeline.execute(doc, rg, kg, on_progress=on_progress)
+            )
+            graphs_store[job_id] = {"rg": rg, "kg": kg}
+            hitl_manager.flag_low_confidence_nodes(doc, threshold=0.80)
+            _persist_doc(job_id, doc)
+
+            audit_logger.log("DOCUMENT_IMPORTED", "system", {
+                "job_id": job_id, "source_uri": job.source_uri,
+            })
+            audit_logger.log("PIPELINE_EXECUTED", "system", {
+                "job_id": job_id,
+                "analyzers": [a.manifest.name for a in create_default_pipeline()],
+            })
+
+            job_manager.update_status(job_id, JobStatus.COMPLETED)
+            progress_store[job_id] = {"step": 10, "total": 10, "stage": "done"}
+            await pyjobkit_bridge.publish_event({
+                "event": "job_completed", "job_id": job_id,
+                "job_type": "import", "progress": 1.0, "status": "COMPLETED",
+            })
+        except Exception as parse_err:
+            logging.getLogger(__name__).exception("Import failed for %s", job_id)
+            doc = KnowledgeDocument(source_uri=job.source_uri)
+            container = ContainerUnit(title="Parse Error", level=1)
+            container.children.append(
+                ParagraphBlock(
+                    inlines=[TextLineInline(spans=[StyledTextSpan(text=f"Parse error: {parse_err}")])],
+                )
+            )
+            doc.root_containers.append(container)
+            docs_store[job_id] = doc
+            job_manager.update_status(job_id, JobStatus.FAILED, error=str(parse_err))
+            progress_store[job_id] = {"step": 0, "total": 1, "stage": "error", "error": str(parse_err)}
+            await pyjobkit_bridge.publish_event({
+                "event": "job_failed", "job_id": job_id,
+                "job_type": "import", "progress": 0.0, "status": "FAILED",
+                "error": str(parse_err),
+            })
+
     @app.post(
         "/api/v1/sep/providers/{provider_id}/import",
         response_model=SEPImportResponse,
@@ -704,6 +889,7 @@ def create_app() -> FastAPI:
     ) -> SEPImportResponse:
         """
         Imports selected file from SEP provider into KAE JobManager.
+        Returns immediately with PROCESSING status; work continues in background.
         """
         try:
             job = await sep_manager.import_file_to_kae(
@@ -722,63 +908,32 @@ def create_app() -> FastAPI:
                 detail=f"Failed to import file from SEP provider: {str(exc)}",
             )
 
-        # Parse imported file through adapter registry
         ext = os.path.splitext(body.file_id)[1].lstrip(".")
-        adapter = adapter_registry.get_adapter_for_extension(ext)
-        if adapter:
-            try:
-                sep_provider = sep_manager.get_provider(provider_id)
-                file_stream = await sep_provider.get_file_stream(body.file_id)
-                loop = asyncio.get_event_loop()
-                doc = await loop.run_in_executor(
-                    None, adapter.parse, file_stream, job.source_uri
-                )
-                docs_store[job.job_id] = doc
-                _persist_doc(job.job_id, doc)
+        job_manager.update_status(job.job_id, JobStatus.RUNNING)
+        progress_store[job.job_id] = {"step": 0, "total": 10, "stage": "Запуск..."}
 
-                rg = ReadingGraph()
-                kg = KnowledgeGraph()
-                pipeline = PipelineRunner(create_default_pipeline())
-                pipeline.execute(doc, rg, kg)
-                graphs_store[job.job_id] = {"rg": rg, "kg": kg}
-                hitl_manager.flag_low_confidence_nodes(doc, threshold=0.80)
-
-                audit_logger.log("DOCUMENT_IMPORTED", "system", {
-                    "job_id": job.job_id, "source_uri": job.source_uri,
-                })
-                audit_logger.log("PIPELINE_EXECUTED", "system", {
-                    "job_id": job.job_id,
-                    "analyzers": [a.manifest.name for a in create_default_pipeline()],
-                })
-
-                job_manager.update_status(job.job_id, JobStatus.COMPLETED)
-            except Exception as parse_err:
-                doc = KnowledgeDocument(source_uri=job.source_uri)
-                container = ContainerUnit(title="Parse Error", level=1)
-                container.children.append(
-                    ParagraphBlock(
-                        inlines=[TextLineInline(spans=[StyledTextSpan(text=f"Parse error: {parse_err}")])],
-                    )
-                )
-                doc.root_containers.append(container)
-                docs_store[job.job_id] = doc
-                job_manager.update_status(job.job_id, JobStatus.FAILED)
-        else:
-            doc = KnowledgeDocument(source_uri=job.source_uri)
-            container = ContainerUnit(title="Unsupported Format", level=1)
-            container.children.append(
-                ParagraphBlock(
-                    inlines=[TextLineInline(spans=[StyledTextSpan(text=f"No adapter for .{ext}")])],
-                )
-            )
-            doc.root_containers.append(container)
-            docs_store[job.job_id] = doc
+        asyncio.create_task(_process_import_background(job, provider_id, body.file_id, ext))
 
         return SEPImportResponse(
             job_id=job.job_id,
-            status=job.status.value,
+            status="PROCESSING",
             source_uri=job.source_uri,
         )
+
+    @app.get("/api/v1/jobs/{job_id}/progress")
+    async def get_job_progress(job_id: str) -> Dict[str, Any]:
+        job = job_manager.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        progress = progress_store.get(job_id, {})
+        return {
+            "job_id": job_id,
+            "status": job.status.value,
+            "step": progress.get("step", 0),
+            "total": progress.get("total", 1),
+            "stage": progress.get("stage", ""),
+            "error": progress.get("error"),
+        }
 
     # --- Document & Job Result Endpoints ---
 
@@ -837,6 +992,21 @@ def create_app() -> FastAPI:
 
     # --- SemanticChunker & Translation Endpoints ---
 
+    @app.delete("/api/v1/jobs/{job_id}")
+    async def delete_job(job_id: str) -> Dict[str, Any]:
+        if job_id in docs_store:
+            del docs_store[job_id]
+        if job_id in graphs_store:
+            del graphs_store[job_id]
+        json_path = os.path.join(_docs_dir, f"{job_id}.json")
+        if os.path.exists(json_path):
+            os.remove(json_path)
+        ssd_dir = os.path.join(SSD_PATH, job_id)
+        if os.path.isdir(ssd_dir):
+            import shutil
+            shutil.rmtree(ssd_dir, ignore_errors=True)
+        return {"status": "deleted", "job_id": job_id}
+
     @app.get("/api/v1/jobs/{job_id}/chunks")
     async def get_job_chunks(job_id: str) -> Dict[str, Any]:
         doc = docs_store.get(job_id)
@@ -850,19 +1020,240 @@ def create_app() -> FastAPI:
         return AIKnowledgeExporter.export_chunks_manifest(chunks)
 
     class TranslateRequest(BaseModel):
-        page_number: int
         source_text: str
+        target_lang: str = "Russian"
+        page_number: Optional[int] = None
 
     @app.post("/api/v1/jobs/{job_id}/translate")
     async def translate_page(job_id: str, body: TranslateRequest) -> Dict[str, Any]:
         doc = docs_store.get(job_id)
         if doc is None:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        from src.analyzers.llm_refinement import _call_ollama
+        prompt = (
+            f"Translate the following text to {body.target_lang}. "
+            f"Output ONLY the translation, nothing else.\n\n"
+            f"{body.source_text}"
+        )
+        translated = _call_ollama(prompt)
+        if not translated:
+            raise HTTPException(status_code=503, detail="LLM unavailable or timed out")
         audit_logger.log("TRANSLATION_REQUESTED", "api", {
             "job_id": job_id, "page_number": body.page_number,
+            "target_lang": body.target_lang,
         })
-        translated = f"[Translation pending — connect LLM API]\n\n{body.source_text}"
-        return {"translated_text": translated, "page_number": body.page_number}
+        return {"translated_text": translated.strip(), "page_number": body.page_number}
+
+    class AssembleRequest(BaseModel):
+        target_lang: str = "Russian"
+
+    @app.post("/api/v1/jobs/{job_id}/assemble")
+    async def assemble_translated_book(job_id: str, body: AssembleRequest) -> Dict[str, Any]:
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        from src.assembler.translator import translate_and_assemble
+        loop = asyncio.get_event_loop()
+        output_path = os.path.join(SSD_PATH, job_id, f"translated_{body.target_lang.lower()}.pdf")
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        def _run():
+            return translate_and_assemble(doc, body.target_lang, output_path, job_id, pyjobkit_bridge, loop)
+
+        await asyncio.to_thread(_run)
+        audit_logger.log("BOOK_ASSEMBLED", "api", {
+            "job_id": job_id, "target_lang": body.target_lang, "output": output_path,
+        })
+        return {"status": "completed", "download_url": f"/api/v1/jobs/{job_id}/download/translated"}
+
+    @app.get("/api/v1/jobs/{job_id}/download/translated")
+    async def download_translated(job_id: str):
+        import glob
+        pattern = os.path.join(SSD_PATH, job_id, "translated_*.pdf")
+        files = glob.glob(pattern)
+        if not files:
+            raise HTTPException(status_code=404, detail="No translated PDF found")
+        return FileResponse(files[0], filename=os.path.basename(files[0]), media_type="application/pdf")
+
+    # --- Agent Configuration ---
+
+    AGENTS_CONFIG_PATH = os.path.join(ssd_dir, "agents.json")
+
+    def _load_agents_config() -> List[Dict[str, str]]:
+        if os.path.exists(AGENTS_CONFIG_PATH):
+            with open(AGENTS_CONFIG_PATH) as f:
+                return json.load(f)
+        from src.analyzers.llm_refinement import OLLAMA_URL, OLLAMA_MODEL
+        defaults = [
+            {"name": "OrangePi", "host": OLLAMA_URL, "active_model": OLLAMA_MODEL},
+            {"name": "RPi5", "host": os.environ.get("LLM_AGENT_URL_2", "http://192.168.88.73:11434"), "active_model": ""},
+        ]
+        _save_agents_config(defaults)
+        return defaults
+
+    def _save_agents_config(agents: List[Dict[str, str]]) -> None:
+        with open(AGENTS_CONFIG_PATH, "w") as f:
+            json.dump(agents, f, indent=2)
+
+    def _probe_ollama(host: str) -> tuple:
+        import urllib.request
+        try:
+            req = urllib.request.Request(f"{host}/api/tags")
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                data = json.loads(resp.read())
+                return True, [m["name"] for m in data.get("models", [])]
+        except Exception:
+            return False, []
+
+    @app.get("/api/v1/agents/config")
+    async def get_agents_config() -> Dict[str, Any]:
+        saved = _load_agents_config()
+        result = []
+        for h in saved:
+            available, models = _probe_ollama(h["host"])
+            active = h.get("active_model", "")
+            if available and active and active not in models:
+                active = models[0] if models else ""
+            result.append({
+                "name": h["name"],
+                "host": h["host"],
+                "models": models,
+                "active_model": active,
+                "available": available,
+            })
+        return {"agents": result}
+
+    class AgentCreateRequest(BaseModel):
+        name: str
+        host: str
+        active_model: str = ""
+
+    @app.post("/api/v1/agents/config")
+    async def add_agent(body: AgentCreateRequest) -> Dict[str, Any]:
+        agents = _load_agents_config()
+        if any(a["host"] == body.host for a in agents):
+            raise HTTPException(400, "Agent with this host already exists")
+        agents.append({"name": body.name, "host": body.host, "active_model": body.active_model})
+        _save_agents_config(agents)
+        return {"status": "added", "name": body.name}
+
+    @app.put("/api/v1/agents/config")
+    async def update_agent(body: AgentCreateRequest) -> Dict[str, Any]:
+        agents = _load_agents_config()
+        for a in agents:
+            if a["host"] == body.host:
+                a["name"] = body.name
+                a["active_model"] = body.active_model
+                _save_agents_config(agents)
+                return {"status": "updated", "name": body.name}
+        raise HTTPException(404, "Agent not found")
+
+    @app.delete("/api/v1/agents/{host:path}")
+    async def delete_agent(host: str) -> Dict[str, Any]:
+        agents = _load_agents_config()
+        new = [a for a in agents if a["host"] != host]
+        if len(new) == len(agents):
+            raise HTTPException(404, "Agent not found")
+        _save_agents_config(new)
+        return {"status": "deleted"}
+
+    # --- Node Refinement (HITL / LLM Agent) ---
+
+    class RefineRequest(BaseModel):
+        node_id: str
+        mode: str  # 'agent' | 'manual'
+        patch: Optional[Dict[str, Any]] = None
+
+    @app.post("/api/v1/jobs/{job_id}/refine")
+    async def refine_node(job_id: str, body: RefineRequest) -> Dict[str, Any]:
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+
+        def find_node(containers, node_id):
+            for c in containers:
+                if getattr(c, 'id', None) == node_id:
+                    return c
+                for child in getattr(c, 'children', []):
+                    if getattr(child, 'id', None) == node_id:
+                        return child
+                found = find_node(getattr(c, 'children', []), node_id)
+                if found:
+                    return found
+            return None
+
+        target = find_node(doc.root_containers, body.node_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Node not found")
+
+        if body.mode == 'manual' and body.patch:
+            if 'type' in body.patch and hasattr(target, 'block_type'):
+                target.block_type = body.patch['type']
+            if 'text' in body.patch:
+                if hasattr(target, 'title'):
+                    target.title = body.patch['text']
+            target.classification_confidence = 1.0
+            target.extraction_confidence = 1.0
+            _persist_doc(job_id, doc)
+            audit_logger.log("HITL_CORRECTION", "user", {
+                "job_id": job_id, "node_id": body.node_id, "mode": "manual",
+            })
+            return {"status": "updated", "node_id": body.node_id}
+
+        if body.mode == 'agent':
+            from src.analyzers.llm_refinement import _call_ollama, VALID_TYPES, OLLAMA_MODEL
+            import re as _re
+            text_parts = []
+            if hasattr(target, 'inlines'):
+                for inline in (target.inlines or []):
+                    for span in getattr(inline, 'spans', []):
+                        if hasattr(span, 'text'):
+                            text_parts.append(span.text)
+            elif hasattr(target, 'title'):
+                text_parts.append(target.title or '')
+            node_text = " ".join(text_parts).strip()
+            if not node_text:
+                return {"status": "error", "detail": "Node has no text"}
+
+            snippet = node_text[:200]
+            prompt = (
+                f'Classify this text block from a book. Reply with ONLY one word from: '
+                f'paragraph, toc_entry, caption, heading, code, formula, list_item, table_cell.\n\n'
+                f'Text: "{snippet}"\n\nType:'
+            )
+            response = _call_ollama(prompt)
+            if not response:
+                return {"status": "error", "detail": "LLM unavailable or timed out"}
+
+            block_type = response.strip().lower().replace('"', '').replace("'", "").split()[0] if response.strip() else ""
+            block_type = block_type.rstrip(".,;:")
+            if block_type not in VALID_TYPES:
+                for vt in VALID_TYPES:
+                    if vt in response.lower():
+                        block_type = vt
+                        break
+
+            if block_type in VALID_TYPES:
+                target.classification_confidence = 0.85
+                target.update_confidence()
+                if not target.metadata:
+                    target.metadata = {}
+                target.metadata["llm_suggested_type"] = block_type
+                target.metadata["llm_model"] = OLLAMA_MODEL
+                _persist_doc(job_id, doc)
+
+            audit_logger.log("HITL_CORRECTION", "llm_agent", {
+                "job_id": job_id, "node_id": body.node_id, "mode": "agent",
+                "llm_type": block_type, "raw": response.strip()[:100],
+            })
+            return {
+                "status": "refined",
+                "node_id": body.node_id,
+                "llm_result": {"type": block_type, "confidence": target.confidence_score},
+                "confidence": target.confidence_score,
+            }
+
+        raise HTTPException(status_code=400, detail=f"Unknown mode: {body.mode}")
 
     # --- PyJobKit Reactive SSE and WebSocket Endpoints ---
 

@@ -22,8 +22,11 @@ interface TranslationStudioProps {
   onSelectPage: (pg: number) => void;
   onSaveManualTranslation: (pg: number, text: string) => void;
   onTranslateAi: (pg: number, sourceText: string) => Promise<void>;
+  onAssembleBook?: () => Promise<void>;
   glossary: Glossary;
   isAiTranslating: boolean;
+  isAssembling?: boolean;
+  assembleResult?: { status: string; download_url?: string } | null;
 }
 
 export const TranslationStudio: React.FC<TranslationStudioProps> = ({
@@ -32,8 +35,11 @@ export const TranslationStudio: React.FC<TranslationStudioProps> = ({
   onSelectPage,
   onSaveManualTranslation,
   onTranslateAi,
+  onAssembleBook,
   glossary,
   isAiTranslating,
+  isAssembling,
+  assembleResult,
 }) => {
   const pageList = Object.values(pages).sort((a, b) => a.page_number - b.page_number);
   const activePage = pages[currentPage] || pageList[0] || {
@@ -169,6 +175,32 @@ export const TranslationStudio: React.FC<TranslationStudioProps> = ({
             <Save className="w-3.5 h-3.5" />
             <span>{isSaved ? 'Saved!' : 'Save Page'}</span>
           </button>
+
+          {onAssembleBook && (
+            <button
+              onClick={onAssembleBook}
+              disabled={isAssembling}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white text-xs font-semibold transition shadow-md shadow-amber-500/20"
+            >
+              {isAssembling ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Layers className="w-3.5 h-3.5" />
+              )}
+              <span>{isAssembling ? 'Сборка…' : 'Собрать книгу'}</span>
+            </button>
+          )}
+          {assembleResult?.download_url && (
+            <a
+              href={assembleResult.download_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 text-xs font-semibold hover:bg-emerald-600/30 transition"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              Скачать PDF
+            </a>
+          )}
         </div>
       </div>
 

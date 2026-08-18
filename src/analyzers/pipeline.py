@@ -296,12 +296,18 @@ class PipelineRunner:
         rg: ReadingGraph,
         kg: KnowledgeGraph,
         context: Optional[Dict[str, Any]] = None,
+        on_progress: Optional[Any] = None,
     ) -> None:
         """
         Executes all analyzers in sequence with permission guards and records provenance.
+        on_progress: optional callback(step: int, total: int, analyzer_name: str)
         """
-        for analyzer in self._analyzers:
+        total = len(self._analyzers)
+        for step, analyzer in enumerate(self._analyzers):
             manifest = analyzer.manifest
+
+            if on_progress:
+                on_progress(step, total, manifest.name)
 
             guarded_doc = GuardedKnowledgeDocument(doc, manifest.krm_permissions)
             guarded_rg = GuardedReadingGraph(rg, manifest.rg_permissions)
@@ -313,3 +319,6 @@ class PipelineRunner:
             # Upon successful run, log analyzer in provenance info across KRM nodes
             if KRMPermission.READ in manifest.krm_permissions:
                 self._record_provenance_recursive(doc, manifest.name)
+
+        if on_progress:
+            on_progress(total, total, "done")

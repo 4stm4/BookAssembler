@@ -203,6 +203,29 @@ export class KAEApiClient {
     return res.json();
   }
 
+  async getJobProgress(jobId: string): Promise<{
+    job_id: string;
+    status: string;
+    step: number;
+    total: number;
+    stage: string;
+    error?: string;
+  }> {
+    const res = await fetch(`${API_BASE}/jobs/${jobId}/progress`);
+    if (!res.ok) throw new Error(`Failed to fetch progress: ${res.statusText}`);
+    return res.json();
+  }
+
+  async refineNode(jobId: string, nodeId: string, mode: 'agent' | 'manual', patch?: Record<string, any>): Promise<{ status: string; node_id: string; confidence?: number; llm_result?: { type: string; confidence: number } }> {
+    const res = await fetch(`${API_BASE}/jobs/${jobId}/refine`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ node_id: nodeId, mode, patch }),
+    });
+    if (!res.ok) throw new Error(`Failed to refine node: ${res.statusText}`);
+    return res.json();
+  }
+
   async translatePage(jobId: string, pageNumber: number, sourceText: string): Promise<{ translated_text: string; page_number: number }> {
     const res = await fetch(`${API_BASE}/jobs/${jobId}/translate`, {
       method: 'POST',
@@ -210,6 +233,44 @@ export class KAEApiClient {
       body: JSON.stringify({ page_number: pageNumber, source_text: sourceText }),
     });
     if (!res.ok) throw new Error(`Failed to translate: ${res.statusText}`);
+    return res.json();
+  }
+
+  async deleteJob(jobId: string): Promise<{ status: string }> {
+    const res = await fetch(`${API_BASE}/jobs/${jobId}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`Failed to delete: ${res.statusText}`);
+    return res.json();
+  }
+
+  async getAgentConfig(): Promise<{ agents: Array<{ name: string; host: string; models: string[]; active_model: string; available: boolean }> }> {
+    const res = await fetch(`${API_BASE}/agents/config`);
+    if (!res.ok) throw new Error(`Failed to get agent config: ${res.statusText}`);
+    return res.json();
+  }
+
+  async addAgent(name: string, host: string): Promise<{ status: string }> {
+    const res = await fetch(`${API_BASE}/agents/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, host }),
+    });
+    if (!res.ok) throw new Error(`Failed to add agent: ${res.statusText}`);
+    return res.json();
+  }
+
+  async updateAgent(name: string, host: string, active_model: string): Promise<{ status: string }> {
+    const res = await fetch(`${API_BASE}/agents/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, host, active_model }),
+    });
+    if (!res.ok) throw new Error(`Failed to update agent: ${res.statusText}`);
+    return res.json();
+  }
+
+  async deleteAgent(host: string): Promise<{ status: string }> {
+    const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(host)}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`Failed to delete agent: ${res.statusText}`);
     return res.json();
   }
 

@@ -355,11 +355,23 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     )
                     container_stack[-1].children.append(para)
 
-            if not page_has_text and page.get_images():
-                page_container = container_stack[-1]
-                if not page_container.metadata:
-                    page_container.metadata = {}
-                page_container.metadata["needs_ocr"] = True
+            if not page_has_text:
+                placeholder = ParagraphBlock(
+                    inlines=[TextLineInline(spans=[StyledTextSpan(text="")])],
+                    parent_container_id=container_stack[-1].id,
+                    provenance_info=provenance,
+                    visual_layout=VisualLayout(
+                        bounding_box=NormalizedRect(0.0, 0.0, 1.0, 1.0),
+                        page_or_screen_index=page_idx,
+                    ),
+                    extraction_confidence=1.0,
+                    classification_confidence=1.0,
+                )
+                container_stack[-1].children.append(placeholder)
+                if page.get_images():
+                    if not placeholder.metadata:
+                        placeholder.metadata = {}
+                    placeholder.metadata["needs_ocr"] = True
 
         pdf_doc.close()
 
