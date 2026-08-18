@@ -236,6 +236,17 @@ export class KAEApiClient {
     return res.json();
   }
 
+  /** Start a background page-by-page translation job (progress shows in the task queue). */
+  async startTranslation(jobId: string, targetLang = 'Russian'): Promise<{ status: string; total_pages: number; agent?: string; model?: string }> {
+    const res = await fetch(`${API_BASE}/jobs/${jobId}/translate/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_lang: targetLang }),
+    });
+    if (!res.ok) throw new Error(`Failed to start translation: ${res.statusText}`);
+    return res.json();
+  }
+
   async deleteJob(jobId: string): Promise<{ status: string }> {
     const res = await fetch(`${API_BASE}/jobs/${jobId}`, { method: 'DELETE' });
     if (!res.ok) throw new Error(`Failed to delete: ${res.statusText}`);

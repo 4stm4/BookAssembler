@@ -613,7 +613,9 @@ def create_app() -> FastAPI:
                 if not job:
                     job_manager.restore_job(job_id, data.get("_source_uri", ""), "COMPLETED")
             except Exception:
-                pass
+                logging.getLogger(__name__).exception(
+                    "Failed to restore persisted document '%s'; skipping", job_id
+                )
 
     @app.post(
         "/api/v1/documents/upload",
@@ -1158,7 +1160,16 @@ def create_app() -> FastAPI:
             f"Output ONLY the translation, nothing else.\n\n"
             f"{body.source_text}"
         )
-        translated = _call_ollama(prompt)
+        # Route to the first reachable agent configured in the agent manager,
+        # using its active model. Lets the user pick a fast host/model in the UI.
+        host, model = None, None
+        for a in _load_agents_config():
+            available, models = _probe_ollama(a["host"])
+            if available:
+                host = a["host"]
+                model = a.get("active_model") or (models[0] if models else None)
+                break
+        translated = _call_ollama(prompt, host=host, model=model)
         if not translated:
             raise HTTPException(status_code=503, detail="LLM unavailable or timed out")
         audit_logger.log("TRANSLATION_REQUESTED", "api", {
@@ -1189,6 +1200,94 @@ def create_app() -> FastAPI:
         })
         return {"status": "completed", "download_url": f"/api/v1/jobs/{job_id}/download/translated"}
 
+    def _pick_agent() -> tuple:
+        """First reachable agent + its active model, from the agent manager config."""
+        for a in _load_agents_config():
+            available, models = _probe_ollama(a["host"])
+            if available:
+                return a["host"], (a.get("active_model") or (models[0] if models else None))
+        return None, None
+
+    class TranslateAllRequest(BaseModel):
+        target_lang: str = "Russian"
+
+    @app.post("/api/v1/jobs/{job_id}/translate/start")
+    async def translate_all_start(job_id: str, body: TranslateAllRequest) -> Dict[str, Any]:
+        """
+        Start a background page-by-page translation job. Progress is published to
+        the task stream (visible in the task queue); translated segments are stored
+        on each block's metadata without mutating the source (RFC 0021 §5.1).
+        """
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+
+        from src.assembler.translator import _collect_translatable, _get_block_text, _record_translation
+        from src.analyzers.llm_refinement import _call_ollama
+
+        blocks: list = []
+        for container in doc.root_containers:
+            _collect_translatable(container, blocks)
+
+        # Group blocks by physical page for page-by-page progress.
+        pages: Dict[int, list] = {}
+        for kind, block in blocks:
+            vl = getattr(block, "visual_layout", None)
+            pg = getattr(vl, "page_or_screen_index", 0) if vl else 0
+            pages.setdefault(pg, []).append((kind, block))
+        ordered_pages = sorted(pages.keys())
+        total_pages = len(ordered_pages)
+
+        host, model = _pick_agent()
+        loop = asyncio.get_event_loop()
+
+        async def _emit(stage: str, step: int) -> None:
+            progress_store[job_id] = {"step": step, "total": total_pages, "stage": stage}
+            await pyjobkit_bridge.publish_event({
+                "event": "job_progress", "job_id": job_id, "job_type": "translate",
+                "stage": stage, "progress": (step / total_pages) if total_pages else 1.0,
+                "status": "RUNNING",
+            })
+
+        def _translate_page(page_blocks: list) -> None:
+            for kind, block in page_blocks:
+                if kind == "title":
+                    original = block.title
+                elif kind == "caption":
+                    original = block.caption_text
+                else:
+                    original = _get_block_text(block)
+                if not original or len(original.strip()) < 3:
+                    continue
+                prompt = (
+                    f"Translate the following text to {body.target_lang}. "
+                    f"Output ONLY the translation, nothing else.\n\n{original}"
+                )
+                translated = _call_ollama(prompt, host=host, model=model)
+                if translated:
+                    _record_translation(block, original, translated.strip(), body.target_lang)
+
+        async def _run_job() -> None:
+            try:
+                for i, pg in enumerate(ordered_pages):
+                    await _emit(f"Перевод страницы {i + 1}/{total_pages}", i)
+                    await asyncio.to_thread(_translate_page, pages[pg])
+                _persist_doc(job_id, doc)
+                progress_store[job_id] = {"step": total_pages, "total": total_pages, "stage": "done"}
+                await pyjobkit_bridge.publish_event({
+                    "event": "job_completed", "job_id": job_id, "job_type": "translate",
+                    "progress": 1.0, "status": "COMPLETED",
+                })
+                audit_logger.log("TRANSLATION_REQUESTED", "api", {
+                    "job_id": job_id, "target_lang": body.target_lang, "pages": total_pages,
+                })
+            except Exception as e:
+                logging.getLogger(__name__).exception("Translation job failed for %s", job_id)
+                progress_store[job_id] = {"step": 0, "total": total_pages, "stage": "error", "error": str(e)}
+
+        loop.create_task(_run_job())
+        return {"status": "started", "total_pages": total_pages, "agent": host, "model": model}
+
     @app.get("/api/v1/jobs/{job_id}/download/translated")
     async def download_translated(job_id: str):
         import glob
@@ -1207,9 +1306,11 @@ def create_app() -> FastAPI:
             with open(AGENTS_CONFIG_PATH) as f:
                 return json.load(f)
         from src.analyzers.llm_refinement import OLLAMA_URL, OLLAMA_MODEL
+        # RPi5 + small fast model first (default translation agent); OrangePi 7B
+        # is slower on CPU. Users can reorder/retarget via the agent manager.
         defaults = [
+            {"name": "RPi5", "host": os.environ.get("LLM_AGENT_URL_2", "http://192.168.88.71:11434"), "active_model": "llama3.2:1b"},
             {"name": "OrangePi", "host": OLLAMA_URL, "active_model": OLLAMA_MODEL},
-            {"name": "RPi5", "host": os.environ.get("LLM_AGENT_URL_2", "http://192.168.88.71:11434"), "active_model": ""},
         ]
         _save_agents_config(defaults)
         return defaults

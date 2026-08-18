@@ -76,15 +76,14 @@ export const App: React.FC = () => {
     }
   }, [activeJobId]);
 
-  const handleTranslateAi = async (pg: number, sourceText: string) => {
+  const handleTranslateAi = async (_pg: number, _sourceText: string) => {
     if (!activeJobId) return;
     setIsAiTranslating(true);
     try {
-      const result = await kaeApi.translatePage(activeJobId, pg, sourceText);
-      setTranslationPages((prev) => ({
-        ...prev,
-        [pg]: { ...prev[pg], original_translation: result.translated_text, final_translation: result.translated_text },
-      }));
+      // Kick off background page-by-page translation; progress appears in the
+      // task queue via SSE. Segments are stored per-block on the backend.
+      const res = await kaeApi.startTranslation(activeJobId, 'Russian');
+      console.info(`Перевод запущен: ${res.total_pages} стр. на ${res.model || res.agent}`);
     } finally {
       setIsAiTranslating(false);
     }
