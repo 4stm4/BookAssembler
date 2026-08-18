@@ -254,7 +254,10 @@ export class KAEApiClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, host }),
     });
-    if (!res.ok) throw new Error(`Failed to add agent: ${res.statusText}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || 'Failed to add agent');
+    }
     return res.json();
   }
 

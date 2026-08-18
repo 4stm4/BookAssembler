@@ -164,12 +164,24 @@ class TitlePageAnalyzer(BaseAnalyzer):
             if isinstance(child, ParagraphBlock) and not isinstance(child, TitlePageBlock):
                 text = _get_text(child).strip()
                 if len(text) <= 2:
-                    bp = BlankPageBlock()
-                    bp.id = child.id
-                    bp.visual_layout = child.visual_layout
-                    bp.extraction_confidence = 1.0
-                    bp.classification_confidence = 1.0
-                    container.children[i] = bp
+                    page = _page_of(child)
+                    if page == 0:
+                        # First page with no extractable text = scanned cover image.
+                        cover = TitlePageBlock()
+                        cover.id = child.id
+                        cover.visual_layout = child.visual_layout
+                        cover.inlines = child.inlines
+                        cover.page_role = "cover"
+                        cover.extraction_confidence = 1.0
+                        cover.classification_confidence = 1.0
+                        container.children[i] = cover
+                    else:
+                        bp = BlankPageBlock()
+                        bp.id = child.id
+                        bp.visual_layout = child.visual_layout
+                        bp.extraction_confidence = 1.0
+                        bp.classification_confidence = 1.0
+                        container.children[i] = bp
                     count += 1
             elif isinstance(child, ContainerUnit):
                 count += self._replace_blanks(child)

@@ -275,6 +275,7 @@ export interface KRMNode {
   children?: KRMNode[];
   rows?: string[][];
   page_index?: number;
+  page_role?: string;
   bbox?: [number, number, number, number];
   target_type?: string;
   label_number?: string;

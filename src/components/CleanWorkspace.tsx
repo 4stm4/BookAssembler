@@ -148,7 +148,7 @@ const KRMNodeView: React.FC<{
                 ? node.metadata.llm_suggested_type
                 : node.type === 'ContainerUnit'
                 ? (node.semantic_type === 'toc' ? 'TOC' : node.semantic_type === 'example' ? 'Example' : `L${node.level || 1}`)
-                : node.type === 'TitlePageBlock' ? 'Title Page'
+                : node.type === 'TitlePageBlock' ? (node.page_role === 'cover' ? 'Обложка' : 'Title Page')
                 : node.type === 'BlankPageBlock' ? 'Blank'
                 : node.type.replace('Block', '')}
             </span>
