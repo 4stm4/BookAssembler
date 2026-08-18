@@ -104,12 +104,13 @@ class BlockClassifierAnalyzer(BaseAnalyzer):
         super().__init__(
             AnalyzerManifest(
                 name="BlockClassifierAnalyzer",
-                version="1.0.0",
+                version="1.1.0",
                 description="Adjusts classification confidence, detects TOC entries",
                 krm_permissions={
                     KRMPermission.READ,
                     KRMPermission.TRANSFORM_NODE,
                     KRMPermission.INSERT,
+                    KRMPermission.TOMBSTONE,
                 },
                 rg_permissions=set(),
                 kg_permissions=set(),
@@ -256,10 +257,16 @@ class BlockClassifierAnalyzer(BaseAnalyzer):
 
             insertions[first_idx] = toc_container
 
+        # RFC 0001 §2.4 / 0005 §2: no physical deletion. Original TOC lines are
+        # tombstoned in place (exporters skip them); the merged TOC container is inserted.
         new_children = []
         for idx, child in enumerate(container.children):
             if idx in insertions:
                 new_children.append(insertions[idx])
-            elif idx not in indices_to_remove:
-                new_children.append(child)
+            if idx in indices_to_remove:
+                child.is_tombstoned = True
+                if not child.metadata:
+                    child.metadata = {}
+                child.metadata["tombstone_reason"] = "merged_into_toc"
+            new_children.append(child)
         container.children = new_children

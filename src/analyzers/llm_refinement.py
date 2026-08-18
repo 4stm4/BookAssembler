@@ -77,7 +77,8 @@ def _call_ollama(prompt: str) -> Optional[str]:
         "model": OLLAMA_MODEL,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": 0.1, "num_predict": 256},
+        # RFC 0012 §3.1: deterministic LLM calls (temperature=0, fixed seed).
+        "options": {"temperature": 0.0, "seed": 42, "num_predict": 256},
         "keep_alive": "10m",
     }).encode()
 
