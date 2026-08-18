@@ -43,38 +43,50 @@ export const App: React.FC = () => {
   const [agentsLoading, setAgentsLoading] = useState(false);
   const [addAgentForm, setAddAgentForm] = useState<{ name: string; host: string } | null>(null);
 
-  // Load KRM pages for translation when activeJobId changes
-  useEffect(() => {
-    if (activeJobId) {
-      kaeApi.getJobResult(activeJobId).then((result: any) => {
-        const pages: Record<number, TranslationPage> = {};
-        (result.containers || []).forEach((container: any, idx: number) => {
-          const pageNum = idx + 1;
-          const textParts: string[] = [];
-          const collectText = (node: any) => {
-            if (node.text) textParts.push(node.text);
-            if (node.children) node.children.forEach(collectText);
-          };
-          collectText(container);
-          pages[pageNum] = {
-            page_number: pageNum,
-            source_text: textParts.join('\n'),
-            original_translation: '',
-            autofix_translation: '',
-            manual_fixed_translation: '',
-            final_translation: '',
-            issues: [],
-            is_valid: true,
-            has_code: false,
-            has_table: false,
-            has_debug_session: false,
-          };
-        });
-        setTranslationPages(pages);
-        setCurrentTranslationPage(1);
-      }).catch(() => {});
-    }
+  // Load KRM pages for translation, grouping blocks by their physical page and
+  // pulling any stored translation segment (metadata.translations.ru).
+  const loadTranslationData = React.useCallback(() => {
+    if (!activeJobId) return;
+    kaeApi.getJobResult(activeJobId).then((result: any) => {
+      const src: Record<number, string[]> = {};
+      const trans: Record<number, string[]> = {};
+      const walk = (node: any) => {
+        const pg = (node.page_index ?? 0) + 1;
+        const text = node.text || node.title;
+        if (text) {
+          (src[pg] = src[pg] || []).push(text);
+          const t = node.translations?.ru?.target_text;
+          if (t) (trans[pg] = trans[pg] || []).push(t);
+        }
+        if (node.children) node.children.forEach(walk);
+      };
+      (result.containers || []).forEach(walk);
+
+      const pages: Record<number, TranslationPage> = {};
+      Object.keys(src).map(Number).sort((a, b) => a - b).forEach((pg) => {
+        const translated = (trans[pg] || []).join('\n');
+        pages[pg] = {
+          page_number: pg,
+          source_text: (src[pg] || []).join('\n'),
+          original_translation: translated,
+          autofix_translation: '',
+          manual_fixed_translation: '',
+          final_translation: translated,
+          issues: [],
+          is_valid: true,
+          has_code: false,
+          has_table: false,
+          has_debug_session: false,
+        };
+      });
+      setTranslationPages(pages);
+    }).catch(() => {});
   }, [activeJobId]);
+
+  useEffect(() => {
+    loadTranslationData();
+    setCurrentTranslationPage(1);
+  }, [loadTranslationData]);
 
   const handleTranslateAi = async (_pg: number, _sourceText: string) => {
     if (!activeJobId) return;
@@ -145,6 +157,7 @@ export const App: React.FC = () => {
         lastLoggedStage = '';
         setEventLog((prev) => [{ time, text: '✓ Завершено' }, ...prev].slice(0, 50));
         setTimeout(() => setGlobalJobStatus('Готов'), 3000);
+        if ((event as any).job_type === 'translate') loadTranslationData();
       } else if (event.event === 'job_failed') {
         setGlobalJobStatus('Ошибка');
         setIsJobRunning(false);
@@ -156,7 +169,7 @@ export const App: React.FC = () => {
     return () => {
       unsubscribe();
     };
-  }, []);
+  }, [loadTranslationData]);
 
   const handleOpenGraph = (jobId: string) => {
     setGraphModalJobId(jobId);
