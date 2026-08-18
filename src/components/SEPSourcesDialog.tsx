@@ -106,14 +106,10 @@ export const SEPSourcesDialog: React.FC<SEPSourcesDialogProps> = ({
     setConfirmImport(null);
     try {
       const res = await kaeApi.importFromSEP(selectedProvider.provider_id, fileItem.file_id);
-      setFeedbackMsg({
-        type: 'success',
-        text: `"${fileItem.name}" импортирован в KAE (Job: ${res.job_id.slice(0, 8)}…)`,
-      });
       if (onImportSuccess) {
         onImportSuccess(res.job_id, res.source_uri);
       }
-      setTimeout(onClose, 1500);
+      onClose();
     } catch (err: any) {
       setFeedbackMsg({
         type: 'error',

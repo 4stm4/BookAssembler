@@ -27,6 +27,8 @@ from src.krm.models import (
     TableBlock,
     TableCell,
     TextLineInline,
+    BlankPageBlock,
+    TitlePageBlock,
     VisualLayout,
     WarningSpec,
 )
@@ -56,6 +58,8 @@ __all__ = [
     "TableBlock",
     "TableCell",
     "TextLineInline",
+    "BlankPageBlock",
+    "TitlePageBlock",
     "VisualLayout",
     "WarningSpec",
 ]
