@@ -422,10 +422,14 @@ export const App: React.FC = () => {
                       <button
                         onClick={async () => {
                           if (!addAgentForm.name || !addAgentForm.host) return;
-                          await kaeApi.addAgent(addAgentForm.name, addAgentForm.host);
-                          setAddAgentForm(null);
-                          const data = await kaeApi.getAgentConfig();
-                          setAgentsData(data.agents);
+                          try {
+                            await kaeApi.addAgent(addAgentForm.name, addAgentForm.host);
+                            setAddAgentForm(null);
+                            const data = await kaeApi.getAgentConfig();
+                            setAgentsData(data.agents);
+                          } catch (err: any) {
+                            alert(err.message || 'Ошибка добавления агента');
+                          }
                         }}
                         className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium transition-colors"
                       >
