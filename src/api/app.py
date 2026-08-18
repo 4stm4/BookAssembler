@@ -267,6 +267,10 @@ def create_app() -> FastAPI:
                 cp = _first_page(node)
                 if cp is not None:
                     result["page_index"] = cp
+            # Expose translated segments so the UI can show translations per block.
+            md = getattr(node, "metadata", None) or {}
+            if md.get("translations"):
+                result["translations"] = md["translations"]
             return result
 
         def _serialize_body(node: Any) -> Dict[str, Any]:
