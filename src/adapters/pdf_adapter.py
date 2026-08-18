@@ -160,27 +160,16 @@ class PdfSourceAdapter(BaseSourceAdapter):
         opts = options or {}
         max_pages = opts.get("max_pages", min(50, len(pdf_doc)))
 
-        all_font_sizes: List[float] = []
-        for page_idx in range(min(max_pages, len(pdf_doc))):
-            page = pdf_doc.load_page(page_idx)
-            page_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_PRESERVE_WHITESPACE)
-            for block in page_dict.get("blocks", []):
-                if block.get("type") == 0:
-                    for line in block.get("lines", []):
-                        for span in line.get("spans", []):
-                            sz = span.get("size", 12.0)
-                            if sz > 0:
-                                all_font_sizes.append(sz)
-
-        heading_threshold = _detect_heading_threshold(all_font_sizes)
-
+        # RFC 0008 §5.2: the adapter performs no semantic analysis (no heading
+        # detection). It emits a flat block list under a single root container;
+        # HeadingAnalyzer builds the heading hierarchy downstream. Typography
+        # (font size, bold) is preserved in each block's StyleDescriptor.
         current_container = ContainerUnit(
             title=title,
             level=1,
             provenance_info=provenance,
         )
         doc.root_containers.append(current_container)
-        container_stack: List[ContainerUnit] = [current_container]
 
         for page_idx in range(min(max_pages, len(pdf_doc))):
             page = pdf_doc.load_page(page_idx)
@@ -218,14 +207,14 @@ class PdfSourceAdapter(BaseSourceAdapter):
                         image_uri=image_uri,
                         mime_type=mime,
                         alt_text="",
-                        parent_container_id=container_stack[-1].id,
+                        parent_container_id=current_container.id,
                         provenance_info=provenance,
                         visual_layout=VisualLayout(
                             bounding_box=norm_rect,
                             page_or_screen_index=page_idx,
                         ),
                     )
-                    container_stack[-1].children.append(fig)
+                    current_container.children.append(fig)
                     continue
 
                 if btype != 0:
@@ -288,52 +277,18 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     style=style,
                 )
 
-                is_plausible_heading = (
-                    max_font_size >= heading_threshold
-                    and not is_mono_block
-                    and len(full_text) < 200
-                    and len(full_text.strip()) >= 3
-                    and any(c.isalpha() for c in full_text)
-                )
-
-                if is_plausible_heading:
-                    ratio = max_font_size / heading_threshold
-                    if ratio >= 1.4:
-                        level = 1
-                    elif ratio >= 1.15:
-                        level = 2
-                    else:
-                        level = 3
-
-                    while len(container_stack) > 1 and container_stack[-1].level >= level:
-                        container_stack.pop()
-
-                    ext_conf = _extraction_confidence(full_text)
-                    new_container = ContainerUnit(
-                        title=full_text,
-                        level=level,
-                        provenance_info=provenance,
-                        visual_layout=layout,
-                        extraction_confidence=ext_conf,
-                        classification_confidence=0.75,
-                        confidence_score=min(ext_conf, 0.75),
-                    )
-                    container_stack[-1].children.append(new_container)
-                    container_stack.append(new_container)
-                    continue
-
                 if is_mono_block:
                     ext_conf = _extraction_confidence(full_text)
                     code = CodeBlock(
                         code_text=full_text,
-                        parent_container_id=container_stack[-1].id,
+                        parent_container_id=current_container.id,
                         provenance_info=provenance,
                         visual_layout=layout,
                         extraction_confidence=ext_conf,
                         classification_confidence=0.80,
                         confidence_score=min(ext_conf, 0.80),
                     )
-                    container_stack[-1].children.append(code)
+                    current_container.children.append(code)
                 else:
                     styled_span = StyledTextSpan(
                         text=full_text,
@@ -346,19 +301,19 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     ext_conf = _extraction_confidence(full_text)
                     para = ParagraphBlock(
                         inlines=[TextLineInline(spans=[styled_span])],
-                        parent_container_id=container_stack[-1].id,
+                        parent_container_id=current_container.id,
                         provenance_info=provenance,
                         visual_layout=layout,
                         extraction_confidence=ext_conf,
                         classification_confidence=INITIAL_CLASSIFICATION_CONFIDENCE,
                         confidence_score=min(ext_conf, INITIAL_CLASSIFICATION_CONFIDENCE),
                     )
-                    container_stack[-1].children.append(para)
+                    current_container.children.append(para)
 
             if not page_has_text:
                 placeholder = ParagraphBlock(
                     inlines=[TextLineInline(spans=[StyledTextSpan(text="")])],
-                    parent_container_id=container_stack[-1].id,
+                    parent_container_id=current_container.id,
                     provenance_info=provenance,
                     visual_layout=VisualLayout(
                         bounding_box=NormalizedRect(0.0, 0.0, 1.0, 1.0),
@@ -367,7 +322,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     extraction_confidence=1.0,
                     classification_confidence=1.0,
                 )
-                container_stack[-1].children.append(placeholder)
+                current_container.children.append(placeholder)
                 if page.get_images():
                     if not placeholder.metadata:
                         placeholder.metadata = {}

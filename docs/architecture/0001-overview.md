@@ -84,7 +84,7 @@ KAE меняет целевой артефакт обработки:
 - Генерация финальных представлений (Markdown, LaTeX, RAG JSON) происходит без повторного анализа исходных файлов.
 
 ## 4. Карта документов RFC
-Система спецификаций KAE состоит из 10 базовых RFC:
+Система спецификаций KAE состоит из следующих RFC:
 - **RFC 0001: Overview & Vision** (текущий документ) — концепция, границы и архитектурные принципы KAE.
 - **RFC 0002: Knowledge Representation Model (KRM)** — спецификация классов данных, слоев представления и семантики.
 - **RFC 0003: Knowledge Graph Specification** — граф связей, сущности, типы рёбер, cross-references.
@@ -95,3 +95,14 @@ KAE меняет целевой артефакт обработки:
 - **RFC 0008: Source Adapters Architecture** — спецификация адаптеров (PDF, DOCX, HTML, Repo, Notebook).
 - **RFC 0009: Benchmark & Corpus Specification** — метрики качества (TEDS, WER, Link Recall), состав эталонного корпуса `tests/benchmark/`.
 - **RFC 0010: Plugin API & Sandbox Execution** — система внешних плагинов, изоляция выполнения и версионирование.
+- **RFC 0011: Provenance and Lineage Tracking** — криптографическая трассируемость узлов и переведённых сегментов (bbox `[0,1]`, page, SHA-256).
+- **RFC 0012: Reproducible Builds (`kae.lock`)** — детерминированная сборка, XeLaTeX в locked Docker, `book.json`/`kae.lock`.
+- **RFC 0013: Artifact & Content-Addressed Cache Store (`.kap`)** — CAS, дедупликация, пакеты `.kap`.
+- **RFC 0014: Contract Testing** — контракты схем анализаторов, идемпотентность (двойной прогон → идентичный хеш).
+- **RFC 0015: Error Taxonomy** — классификация ошибок обработки.
+- **RFC 0016: Human-in-the-Loop** — верификация и коррекция низкоуверенных узлов.
+- **RFC 0017: Confidence Calibration** — двойная уверенность (extraction/classification).
+- **RFC 0018: Retrieval & Dataset Eval** — оценка поиска и датасетов.
+- **RFC 0019: Job & Resource Manager** — управление заданиями и ресурсами.
+- **RFC 0020: Security & Trust** — подписи плагинов (Ed25519), доверенные ключи.
+- **RFC 0021: Target Document Assembly & Translation** — выходной слой: перевод и гибридная сборка целевого документа.

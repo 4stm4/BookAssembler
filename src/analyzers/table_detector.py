@@ -134,12 +134,13 @@ class TableDetectorAnalyzer(BaseAnalyzer):
         super().__init__(
             AnalyzerManifest(
                 name="TableDetectorAnalyzer",
-                version="1.0.0",
+                version="1.1.0",
                 description="Detects tabular structures by spatial alignment of blocks",
                 krm_permissions={
                     KRMPermission.READ,
                     KRMPermission.TRANSFORM_NODE,
                     KRMPermission.INSERT,
+                    KRMPermission.TOMBSTONE,
                 },
                 rg_permissions=set(),
                 kg_permissions=set(),
@@ -226,10 +227,16 @@ class TableDetectorAnalyzer(BaseAnalyzer):
         if not indices_to_remove:
             return
 
+        # RFC 0001 §2.4 / 0005 §2: no physical deletion. Rows absorbed into the table
+        # are tombstoned in place (exporters skip them); the table block is inserted.
         new_children = []
         for idx, child in enumerate(container.children):
             if idx in replacements:
                 new_children.append(replacements[idx])
-            elif idx not in indices_to_remove:
-                new_children.append(child)
+            if idx in indices_to_remove:
+                child.is_tombstoned = True
+                if not child.metadata:
+                    child.metadata = {}
+                child.metadata["tombstone_reason"] = "merged_into_table"
+            new_children.append(child)
         container.children = new_children

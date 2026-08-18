@@ -12,6 +12,8 @@ Guarantees:
 - Strict typing (100% mypy --strict compatible)
 """
 
+import copy
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
@@ -309,16 +311,71 @@ class PipelineRunner:
             if on_progress:
                 on_progress(step, total, manifest.name)
 
+            # RFC 0005 §6.1 Failure Isolation: snapshot doc/rg/kg before the run so
+            # a crashing analyzer is rolled back and the pipeline continues from the
+            # pre-run state instead of leaving a half-mutated document.
+            doc_snap = copy.deepcopy(doc)
+            rg_snap = copy.deepcopy(rg)
+            kg_snap = copy.deepcopy(kg)
+
             guarded_doc = GuardedKnowledgeDocument(doc, manifest.krm_permissions)
             guarded_rg = GuardedReadingGraph(rg, manifest.rg_permissions)
             guarded_kg = GuardedKnowledgeGraph(kg, manifest.kg_permissions)
 
-            # Run the analyzer with guarded proxies
-            analyzer.run(guarded_doc, guarded_rg, guarded_kg, context)
+            try:
+                analyzer.run(guarded_doc, guarded_rg, guarded_kg, context)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Analyzer '%s' failed; rolling back to pre-run state (RFC 0005 §6.1)",
+                    manifest.name,
+                )
+                self._restore_state(doc, doc_snap)
+                self._restore_state(rg, rg_snap)
+                self._restore_state(kg, kg_snap)
+                continue
 
             # Upon successful run, log analyzer in provenance info across KRM nodes
             if KRMPermission.READ in manifest.krm_permissions:
                 self._record_provenance_recursive(doc, manifest.name)
 
+        # RFC 0003 §5.1: verify no dangling KG edges after the pipeline completes.
+        krm_ids = self._collect_krm_ids(doc)
+        violations = kg.validate_integrity(krm_ids)
+        if violations:
+            logging.getLogger(__name__).warning(
+                "KG integrity: %d dangling edge endpoint(s): %s",
+                len(violations), "; ".join(violations[:10]),
+            )
+
         if on_progress:
             on_progress(total, total, "done")
+
+    def _collect_krm_ids(self, doc: KnowledgeDocument) -> Set[str]:
+        ids: Set[str] = set()
+
+        def walk(node: BaseKRMNode) -> None:
+            ids.add(node.id)
+            if isinstance(node, ContainerUnit):
+                for child in node.children:
+                    walk(child)
+            elif isinstance(node, ParagraphBlock):
+                for inline in node.inlines:
+                    ids.add(inline.id)
+                    for span in inline.spans:
+                        ids.add(span.id)
+            elif isinstance(node, TableBlock):
+                for row in node.grid:
+                    for cell in row:
+                        ids.add(cell.id)
+                        for block in cell.content:
+                            walk(block)
+
+        for container in doc.root_containers:
+            walk(container)
+        return ids
+
+    @staticmethod
+    def _restore_state(target: Any, snapshot: Any) -> None:
+        """Restore a live object in place from a deep-copied snapshot (rollback)."""
+        target.__dict__.clear()
+        target.__dict__.update(snapshot.__dict__)

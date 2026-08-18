@@ -134,9 +134,9 @@ class TitlePageAnalyzer(BaseAnalyzer):
         super().__init__(
             AnalyzerManifest(
                 name="TitlePageAnalyzer",
-                version="1.1.0",
+                version="1.2.0",
                 description="Detects title pages, blank pages",
-                krm_permissions={KRMPermission.READ, KRMPermission.TRANSFORM_NODE, KRMPermission.INSERT},
+                krm_permissions={KRMPermission.READ, KRMPermission.TRANSFORM_NODE, KRMPermission.INSERT, KRMPermission.TOMBSTONE},
                 depends_on=["NormalizationAnalyzer"],
             )
         )
@@ -226,22 +226,28 @@ class TitlePageAnalyzer(BaseAnalyzer):
 
             first_parent: Optional[ContainerUnit] = None
             first_index = 999999
-            removed_ids: Set[str] = set()
+            tombstoned_ids: Set[str] = set()
 
+            # RFC 0001 §2.4 / 0005 §2: no physical deletion. Nodes merged into the
+            # title page are tombstoned in place; exporters and Reading Graph skip them.
             for node, parent, idx in sorted(locs, key=lambda x: -x[2]):
                 if isinstance(node, ContainerUnit):
                     continue
                 nid = getattr(node, 'id', '')
-                if nid in removed_ids:
+                if nid in tombstoned_ids:
                     continue
-                removed_ids.add(nid)
+                tombstoned_ids.add(nid)
+                node.is_tombstoned = True
+                if not node.metadata:
+                    node.metadata = {}
+                node.metadata["tombstone_reason"] = f"merged_into_title_page:{tp.id}"
                 try:
-                    parent.children.remove(node)
+                    child_idx = parent.children.index(node)
                 except ValueError:
-                    pass
-                if first_parent is None or idx < first_index:
+                    child_idx = idx
+                if first_parent is None or child_idx < first_index:
                     first_parent = parent
-                    first_index = idx
+                    first_index = child_idx
 
             if first_parent is not None:
                 insert_at = min(first_index, len(first_parent.children))
