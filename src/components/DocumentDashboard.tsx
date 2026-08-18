@@ -14,8 +14,10 @@ import {
   BarChart2,
   Clock,
   RefreshCw,
+  Trash2,
 } from 'lucide-react';
 import { KAEDocumentItem } from '../types';
+import kaeApi from '../api/client';
 import SEPSourcesDialog from './SEPSourcesDialog';
 
 interface DocumentDashboardProps {
@@ -205,6 +207,18 @@ export const DocumentDashboard: React.FC<DocumentDashboardProps> = ({
                 >
                   <span>Открыть в Редакторе</span>
                   <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={async () => {
+                    if (confirm(`Удалить "${doc.title}"?`)) {
+                      await kaeApi.deleteJob(doc.job_id);
+                      setDocuments(prev => prev.filter(d => d.job_id !== doc.job_id));
+                    }
+                  }}
+                  className="px-2 py-2 bg-red-900/30 hover:bg-red-800/50 text-red-400 hover:text-red-300 rounded-xl text-xs transition-colors border border-red-800/30"
+                  title="Удалить документ"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>

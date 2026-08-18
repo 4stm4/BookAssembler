@@ -216,6 +216,20 @@ def create_app() -> FastAPI:
         return count
 
     def _serialize_document(doc: KnowledgeDocument) -> Dict[str, Any]:
+        def _first_page(node: Any) -> Optional[int]:
+            """Smallest page index found anywhere in this node's subtree."""
+            vl = getattr(node, "visual_layout", None)
+            if vl is not None:
+                pi = getattr(vl, "page_or_screen_index", None)
+                if isinstance(pi, int):
+                    return pi
+            best: Optional[int] = None
+            for child in getattr(node, "children", []) or []:
+                cp = _first_page(child)
+                if cp is not None and (best is None or cp < best):
+                    best = cp
+            return best
+
         def serialize_node(node: Any) -> Dict[str, Any]:
             if isinstance(node, ContainerUnit):
                 result = {
@@ -230,6 +244,9 @@ def create_app() -> FastAPI:
                 }
                 if node.semantic_type:
                     result["semantic_type"] = node.semantic_type
+                cp = _first_page(node)
+                if cp is not None:
+                    result["page_index"] = cp
                 return result
             elif isinstance(node, BlankPageBlock):
                 result = {
@@ -348,14 +365,32 @@ def create_app() -> FastAPI:
                     if bb:
                         result["bbox"] = [bb.x0, bb.y0, bb.x1, bb.y1]
                 return result
-            return {"id": getattr(node, "id", ""), "type": type(node).__name__}
+            fallback = {"id": getattr(node, "id", ""), "type": type(node).__name__}
+            cp = _first_page(node)
+            if cp is not None:
+                fallback["page_index"] = cp
+            return fallback
+
+        # Forward-fill page numbers: every element sits on a physical page, so any
+        # node missing an explicit page_index inherits the last one seen in reading order.
+        def _fill_pages(nodes: List[Dict[str, Any]], last: List[Optional[int]]) -> None:
+            for n in nodes:
+                if isinstance(n.get("page_index"), int):
+                    last[0] = n["page_index"]
+                elif last[0] is not None:
+                    n["page_index"] = last[0]
+                if n.get("children"):
+                    _fill_pages(n["children"], last)
+
+        serialized = [serialize_node(c) for c in doc.root_containers]
+        _fill_pages(serialized, [None])
 
         return {
             "title": doc.title,
             "source_uri": doc.source_uri,
             "source_type": doc.source_type,
             "page_count": doc.metadata.get("page_count", 0) if doc.metadata else 0,
-            "containers": [serialize_node(c) for c in doc.root_containers],
+            "containers": serialized,
         }
 
     def _rebuild_document(data: Dict[str, Any]) -> KnowledgeDocument:
@@ -383,6 +418,9 @@ def create_app() -> FastAPI:
                     confidence_score=n.get("confidence_score", 1.0),
                 )
                 c.id = n.get("id", c.id)
+                if n.get("semantic_type"):
+                    c.semantic_type = n["semantic_type"]
+                _restore_layout(c, n)
                 for ch in n.get("children", []):
                     c.children.append(rebuild_node(ch))
                 return c
@@ -673,6 +711,23 @@ def create_app() -> FastAPI:
             )
 
         graphs = graphs_store.get(job_id, {})
+        # Lazy rebuild: graphs live only in memory and are lost on restart.
+        # If the document was restored from JSON, regenerate its graphs on demand.
+        if "kg" not in graphs or "rg" not in graphs:
+            doc = docs_store.get(job_id)
+            if doc is not None:
+                try:
+                    rg = ReadingGraph()
+                    kg = KnowledgeGraph()
+                    pipeline = PipelineRunner(create_default_pipeline())
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: pipeline.execute(doc, rg, kg)
+                    )
+                    graphs = {"rg": rg, "kg": kg}
+                    graphs_store[job_id] = graphs
+                except Exception:
+                    logging.exception("Failed to rebuild graphs for job %s", job_id)
+
         kg_data = graphs["kg"].to_json_dict() if "kg" in graphs else {"graph_version": "1.0.0", "entities": [], "edges": []}
         rg_data = graphs["rg"].to_json_dict() if "rg" in graphs else {"graph_version": "1.0.0", "edges": []}
 
@@ -1001,7 +1056,7 @@ def create_app() -> FastAPI:
         json_path = os.path.join(_docs_dir, f"{job_id}.json")
         if os.path.exists(json_path):
             os.remove(json_path)
-        ssd_dir = os.path.join(SSD_PATH, job_id)
+        ssd_dir = os.path.join(kae_ssd_path, job_id)
         if os.path.isdir(ssd_dir):
             import shutil
             shutil.rmtree(ssd_dir, ignore_errors=True)
@@ -1054,7 +1109,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
         from src.assembler.translator import translate_and_assemble
         loop = asyncio.get_event_loop()
-        output_path = os.path.join(SSD_PATH, job_id, f"translated_{body.target_lang.lower()}.pdf")
+        output_path = os.path.join(kae_ssd_path, job_id, f"translated_{body.target_lang.lower()}.pdf")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
         def _run():
@@ -1069,7 +1124,7 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/jobs/{job_id}/download/translated")
     async def download_translated(job_id: str):
         import glob
-        pattern = os.path.join(SSD_PATH, job_id, "translated_*.pdf")
+        pattern = os.path.join(kae_ssd_path, job_id, "translated_*.pdf")
         files = glob.glob(pattern)
         if not files:
             raise HTTPException(status_code=404, detail="No translated PDF found")
@@ -1077,7 +1132,7 @@ def create_app() -> FastAPI:
 
     # --- Agent Configuration ---
 
-    AGENTS_CONFIG_PATH = os.path.join(ssd_dir, "agents.json")
+    AGENTS_CONFIG_PATH = os.path.join(kae_ssd_path, "agents.json")
 
     def _load_agents_config() -> List[Dict[str, str]]:
         if os.path.exists(AGENTS_CONFIG_PATH):
@@ -1086,7 +1141,7 @@ def create_app() -> FastAPI:
         from src.analyzers.llm_refinement import OLLAMA_URL, OLLAMA_MODEL
         defaults = [
             {"name": "OrangePi", "host": OLLAMA_URL, "active_model": OLLAMA_MODEL},
-            {"name": "RPi5", "host": os.environ.get("LLM_AGENT_URL_2", "http://192.168.88.73:11434"), "active_model": ""},
+            {"name": "RPi5", "host": os.environ.get("LLM_AGENT_URL_2", "http://192.168.88.71:11434"), "active_model": ""},
         ]
         _save_agents_config(defaults)
         return defaults

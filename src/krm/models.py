@@ -260,7 +260,7 @@ class TitlePageBlock(ParagraphBlock):
     authors: List[str] = field(default_factory=list)
     publisher: str = ""
     edition: str = ""
-    page_role: str = "title"  # title | half_title | series | copyright
+    page_role: str = "title"  # cover | title | half_title | series | copyright
 
 
 @dataclass
