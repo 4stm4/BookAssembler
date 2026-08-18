@@ -207,10 +207,14 @@ def create_app() -> FastAPI:
         def walk(children: list) -> None:  # type: ignore[type-arg]
             nonlocal count
             for child in children:
+                if getattr(child, "is_tombstoned", False):
+                    continue
                 count += 1
                 if isinstance(child, ContainerUnit):
                     walk(child.children)
         for c in doc.root_containers:
+            if getattr(c, "is_tombstoned", False):
+                continue
             count += 1
             walk(c.children)
         return count
@@ -225,12 +229,47 @@ def create_app() -> FastAPI:
                     return pi
             best: Optional[int] = None
             for child in getattr(node, "children", []) or []:
+                if getattr(child, "is_tombstoned", False):
+                    continue
                 cp = _first_page(child)
                 if cp is not None and (best is None or cp < best):
                     best = cp
             return best
 
+        def _layout_into(result: Dict[str, Any], node: Any) -> None:
+            """Persist real bounding box + typography so page layout survives round-trip."""
+            vl = getattr(node, "visual_layout", None)
+            if vl is None:
+                return
+            pi = getattr(vl, "page_or_screen_index", None)
+            if isinstance(pi, int):
+                result["page_index"] = pi
+            bb = getattr(vl, "bounding_box", None)
+            if bb is not None:
+                result["bbox"] = [bb.x0, bb.y0, bb.x1, bb.y1]
+            st = getattr(vl, "style", None)
+            if st is not None:
+                result["style"] = {
+                    "font_family": st.font_family,
+                    "font_size_pt": st.font_size_pt,
+                    "is_bold": st.is_bold,
+                    "is_italic": st.is_italic,
+                    "is_monospace": st.is_monospace,
+                    "text_color_rgb": list(st.text_color_rgb),
+                }
+
         def serialize_node(node: Any) -> Dict[str, Any]:
+            result = _serialize_body(node)
+            # Uniformly attach real page/bbox/style from visual_layout (RFC 0002),
+            # falling back to subtree's first page so every node keeps a page number.
+            _layout_into(result, node)
+            if "page_index" not in result:
+                cp = _first_page(node)
+                if cp is not None:
+                    result["page_index"] = cp
+            return result
+
+        def _serialize_body(node: Any) -> Dict[str, Any]:
             if isinstance(node, ContainerUnit):
                 result = {
                     "id": node.id,
@@ -240,7 +279,10 @@ def create_app() -> FastAPI:
                     "confidence_score": node.confidence_score,
                     "extraction_confidence": node.extraction_confidence,
                     "classification_confidence": node.classification_confidence,
-                    "children": [serialize_node(c) for c in node.children],
+                    "children": [
+                        serialize_node(c) for c in node.children
+                        if not getattr(c, "is_tombstoned", False)
+                    ],
                 }
                 if node.semantic_type:
                     result["semantic_type"] = node.semantic_type
@@ -382,7 +424,10 @@ def create_app() -> FastAPI:
                 if n.get("children"):
                     _fill_pages(n["children"], last)
 
-        serialized = [serialize_node(c) for c in doc.root_containers]
+        serialized = [
+            serialize_node(c) for c in doc.root_containers
+            if not getattr(c, "is_tombstoned", False)
+        ]
         _fill_pages(serialized, [None])
 
         return {
@@ -397,10 +442,33 @@ def create_app() -> FastAPI:
         def _restore_layout(node: Any, n: Dict[str, Any]) -> None:
             pg = n.get("page_index")
             if pg is not None:
-                from src.krm.models import VisualLayout, NormalizedRect
+                from src.krm.models import VisualLayout, NormalizedRect, StyleDescriptor
+                bb = n.get("bbox")
+                if isinstance(bb, list) and len(bb) == 4:
+                    # Clamp to KRM invariant #3: coords in [0,1], x0<=x1, y0<=y1.
+                    x0, y0, x1, y1 = (max(0.0, min(1.0, float(v))) for v in bb)
+                    if x0 > x1:
+                        x0, x1 = x1, x0
+                    if y0 > y1:
+                        y0, y1 = y1, y0
+                    rect = NormalizedRect(x0, y0, x1, y1)
+                else:
+                    rect = NormalizedRect(0.0, 0.0, 1.0, 1.0)
+                style = None
+                sd = n.get("style")
+                if isinstance(sd, dict):
+                    style = StyleDescriptor(
+                        font_family=sd.get("font_family", "sans-serif"),
+                        font_size_pt=float(sd.get("font_size_pt", 12.0)),
+                        is_bold=bool(sd.get("is_bold", False)),
+                        is_italic=bool(sd.get("is_italic", False)),
+                        is_monospace=bool(sd.get("is_monospace", False)),
+                        text_color_rgb=tuple(sd.get("text_color_rgb", [0, 0, 0])),
+                    )
                 node.visual_layout = VisualLayout(
-                    bounding_box=NormalizedRect(0.0, 0.0, 1.0, 1.0),
+                    bounding_box=rect,
                     page_or_screen_index=pg,
+                    style=style,
                 )
             ec = n.get("extraction_confidence")
             if ec is not None:

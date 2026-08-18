@@ -14,7 +14,7 @@ Guarantees:
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import uuid4
 
 
@@ -162,6 +162,25 @@ class KnowledgeGraph:
         if relation_type is None:
             return list(edges)
         return [e for e in edges if e.relation_type == relation_type]
+
+    def validate_integrity(self, krm_node_ids: Set[str]) -> List[str]:
+        """
+        RFC 0003 §5.1 (No Dangling Edges): every edge endpoint must resolve to an
+        existing KRM node id or a registered KG entity. Returns a list of human-
+        readable violation descriptions (empty if the graph is consistent).
+        """
+        known = set(krm_node_ids) | set(self._entities.keys())
+        violations: List[str] = []
+        for edge in self._edges:
+            if edge.source_id not in known:
+                violations.append(
+                    f"dangling source '{edge.source_id}' ({edge.relation_type.value})"
+                )
+            if edge.target_id not in known:
+                violations.append(
+                    f"dangling target '{edge.target_id}' ({edge.relation_type.value})"
+                )
+        return violations
 
     def to_json_dict(self) -> Dict[str, Any]:
         """

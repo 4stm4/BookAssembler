@@ -16,6 +16,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-get install -y --no-install-recommends nodejs && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# RFC 0012 §3.3: XeLaTeX toolchain for target-document assembly (Cyrillic-capable).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    texlive-xetex texlive-latex-recommended texlive-lang-cyrillic \
+    texlive-fonts-recommended fonts-dejavu && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY requirements.txt ./
