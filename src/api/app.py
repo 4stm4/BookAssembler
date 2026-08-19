@@ -621,6 +621,9 @@ def create_app() -> FastAPI:
         data = _serialize_document(doc)
         data["_source_uri"] = doc.source_uri
         data["_source_type"] = doc.source_type
+        job = job_manager.get_job(job_id)
+        if job:
+            data["_created_at"] = job.created_at
         with open(path, "w") as f:
             json.dump(data, f)
 
@@ -638,7 +641,10 @@ def create_app() -> FastAPI:
                 docs_store[job_id] = doc
                 job = job_manager.get_job(job_id)
                 if not job:
-                    job_manager.restore_job(job_id, data.get("_source_uri", ""), "COMPLETED")
+                    job_manager.restore_job(
+                        job_id, data.get("_source_uri", ""), "COMPLETED",
+                        created_at=data.get("_created_at", ""),
+                    )
             except Exception:
                 logging.getLogger(__name__).exception(
                     "Failed to restore persisted document '%s'; skipping", job_id
