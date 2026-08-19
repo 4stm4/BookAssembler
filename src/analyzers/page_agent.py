@@ -117,18 +117,23 @@ class PageAgentAnalyzer(BaseAnalyzer):
             if len(blocks) < MIN_BLOCKS:
                 continue
             texts = [_text(b) for b, _ in blocks]
+            joined = " ".join(texts).lower()
             numeric = sum(1 for t in texts if _looks_numeric(t))
             short = sum(1 for t in texts if len(t) <= 40)
-            no_sentence = not any("." in t and len(t) > 60 for t in texts)  # no running paragraphs
+            # Explicit table-title on page: "Table N", "Figure/Table 1", "Analysis of"
+            titled = ("table " in joined or " analysis of" in joined
+                      or " cost of " in joined or "monthly use" in joined)
             looks_table = (
-                numeric / len(blocks) >= MIN_NUMERIC_RATIO
-                or (short / len(blocks) >= MIN_SHORT_RATIO and no_sentence)
+                titled
+                or numeric / len(blocks) >= MIN_NUMERIC_RATIO
+                or short / len(blocks) >= MIN_SHORT_RATIO
             )
             if not looks_table:
                 continue
 
-            log.info("PageAgent: page %d looks like a table (%d/%d numeric, %d/%d short)",
-                     pg, numeric, len(blocks), short, len(blocks))
+            log.info("PageAgent: page %d looks like a table "
+                     "(titled=%s, %d/%d numeric, %d/%d short)",
+                     pg, titled, numeric, len(blocks), short, len(blocks))
             latex = self._recognize_table(pdf_path, pg, host, blocks)
             if not latex:
                 continue
@@ -162,7 +167,13 @@ class PageAgentAnalyzer(BaseAnalyzer):
         latex = call_infer(host, "table", png)
         if not latex or "tabular" not in latex.lower():
             return None
-        return latex.strip()
+        # Strip markdown fences the LLM often wraps around code.
+        s = latex.strip()
+        if s.startswith("```"):
+            s = s.split("\n", 1)[1] if "\n" in s else s[3:]
+            if s.rstrip().endswith("```"):
+                s = s.rstrip()[:-3].rstrip()
+        return s
 
     def _replace_with_table(
         self, blocks: List[Tuple[Any, ContainerUnit]], latex: str, page_index: int,
