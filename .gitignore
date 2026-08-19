@@ -30,3 +30,12 @@ ch*_figures/
 ch*_compiled.pdf
 glossary_suggestions.json
 *.pdfhash
+
+# Claude Code / IDE local config
+.claude/
+.vscode/
+.idea/
+
+# Scratch / temp
+scratchpad/
+*.tmp
