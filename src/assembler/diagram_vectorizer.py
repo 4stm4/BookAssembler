@@ -346,7 +346,9 @@ def _ollama_vision_tikz(img, inside, header, boxes) -> str:
     import cv2
 
     host = os.environ.get("VISION_OLLAMA_URL", "http://192.168.88.71:11434")
-    model = os.environ.get("VISION_OLLAMA_MODEL", "llava:7b")
+    # Stronger vision models (llama3.2-vision / qwen2.5vl) beat llava for diagram→TikZ;
+    # run them on a GPU agent (e.g. Colab) — see colab/kae_gpu_agent.ipynb.
+    model = os.environ.get("VISION_OLLAMA_MODEL", "llama3.2-vision:11b")
     ok, buf = cv2.imencode(".png", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
     if not ok:
         return ""
