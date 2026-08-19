@@ -185,6 +185,17 @@ export const DocumentDashboard: React.FC<DocumentDashboardProps> = ({
                     <span>KRM Узлов: {doc.node_count}</span>
                     <span>•</span>
                     <span>Avg Conf: {((doc.confidence_avg || 0.9) * 100).toFixed(0)}%</span>
+                    {doc.created_at && (
+                      <>
+                        <span>•</span>
+                        <span title={doc.created_at}>
+                          {new Date(doc.created_at).toLocaleString('ru-RU', {
+                            day: '2-digit', month: '2-digit', year: 'numeric',
+                            hour: '2-digit', minute: '2-digit',
+                          })}
+                        </span>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
