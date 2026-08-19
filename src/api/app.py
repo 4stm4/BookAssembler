@@ -1440,14 +1440,16 @@ def create_app() -> FastAPI:
             return False, []
 
     def _probe_agent(host: str, kind: str) -> tuple:
-        """Health-check an agent. ollama: /api/tags → models; got-ocr: /health."""
-        if kind == "got-ocr":
+        """Health-check an agent. ollama: /api/tags → models; got-ocr/multimodel:
+        /health → declared tasks (used as the 'models' list in the UI)."""
+        if kind in ("got-ocr", "multimodel"):
             import urllib.request
             try:
                 req = urllib.request.Request(f"{host}/health")
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     data = json.loads(resp.read())
-                    return True, [data.get("model", "GOT-OCR2.0")]
+                    tasks = data.get("tasks") or [data.get("model", kind)]
+                    return True, tasks
             except Exception:
                 return False, []
         return _probe_ollama(host)

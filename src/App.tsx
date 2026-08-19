@@ -377,6 +377,9 @@ export const App: React.FC = () => {
                         {agent.kind === 'got-ocr' && (
                           <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-amber-500/15 text-amber-300 border border-amber-500/30">OCR</span>
                         )}
+                        {agent.kind === 'multimodel' && (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-fuchsia-500/15 text-fuchsia-300 border border-fuchsia-500/30">MULTI</span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${agent.available ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
