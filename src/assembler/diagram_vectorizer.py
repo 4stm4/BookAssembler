@@ -336,6 +336,20 @@ def _extract_tikz(text: str) -> str:
     return text[s:e]
 
 
+def _encode_png_b64(img, max_side: int = 1288) -> str:
+    """PNG+base64 of the image, downscaled so vision models accept it
+    (llama3.2-vision works around ~1120px; huge crops cause 500/OOM)."""
+    import base64
+    import cv2
+
+    h, w = img.shape[:2]
+    scale = max_side / max(h, w)
+    if scale < 1.0:
+        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    ok, buf = cv2.imencode(".png", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+    return base64.b64encode(buf.tobytes()).decode() if ok else ""
+
+
 def _ollama_vision_tikz(img, inside, header, boxes) -> str:
     """tikz_vectorization via a local ollama vision model (llava/qwen-vl)."""
     import base64
@@ -348,11 +362,12 @@ def _ollama_vision_tikz(img, inside, header, boxes) -> str:
     host = os.environ.get("VISION_OLLAMA_URL", "http://192.168.88.71:11434")
     # Stronger vision models (llama3.2-vision / qwen2.5vl) beat llava for diagram→TikZ;
     # run them on a GPU agent (e.g. Colab) — see colab/kae_gpu_agent.ipynb.
-    model = os.environ.get("VISION_OLLAMA_MODEL", "llama3.2-vision:11b")
-    ok, buf = cv2.imencode(".png", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-    if not ok:
+    # llava/minicpm-v are supported by ollama's llama-server; llama3.2-vision
+    # (mllama) is not in some builds — see colab/kae_gpu_agent.ipynb.
+    model = os.environ.get("VISION_OLLAMA_MODEL", "llava:13b")
+    b64 = _encode_png_b64(img)
+    if not b64:
         return ""
-    b64 = base64.b64encode(buf.tobytes()).decode()
     hint = "\nDetected boxes (id: text/title): " + "; ".join(
         f"{i}:{inside.get(i, '')!r}/{header.get(i, '')!r}" for i in range(len(boxes)))
     payload = _json.dumps({
@@ -376,17 +391,13 @@ def _vision_tikz(img, boxes, inside, header, iw, ih) -> str:
     RFC 0011 tikz_vectorization with a strong model. Requires OPENAI_API_KEY or
     ANTHROPIC_API_KEY. The CV facts are appended as a hint to anchor the layout.
     """
-    import base64
     import json as _json
     import os
     import urllib.request
 
-    import cv2
-
-    ok, buf = cv2.imencode(".png", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-    if not ok:
+    b64 = _encode_png_b64(img)
+    if not b64:
         return ""
-    b64 = base64.b64encode(buf.tobytes()).decode()
     hint = "\nDetected boxes (id: text / title): " + "; ".join(
         f"{i}: {inside.get(i, '')!r}/{header.get(i, '')!r}" for i in range(len(boxes))
     )
