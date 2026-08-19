@@ -39,7 +39,7 @@ export const App: React.FC = () => {
   const [isAssembling, setIsAssembling] = useState(false);
   const [assembleResult, setAssembleResult] = useState<{ status: string; download_url?: string } | null>(null);
   const [isAgentsOpen, setIsAgentsOpen] = useState(false);
-  const [agentsData, setAgentsData] = useState<Array<{ name: string; host: string; kind?: string; models: string[]; active_model: string; available: boolean }>>([]);
+  const [agentsData, setAgentsData] = useState<Array<{ name: string; host: string; kind?: string; roles?: string[]; models: string[]; active_model: string; available: boolean }>>([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
   const [addAgentForm, setAddAgentForm] = useState<{ name: string; host: string } | null>(null);
 
@@ -402,7 +402,7 @@ export const App: React.FC = () => {
                           <button
                             key={m}
                             onClick={async () => {
-                              await kaeApi.updateAgent(agent.name, agent.host, m);
+                              await kaeApi.updateAgent(agent.name, agent.host, m, agent.roles, agent.kind);
                               setAgentsData(prev => prev.map(a => a.host === agent.host ? { ...a, active_model: m } : a));
                             }}
                             className={`px-2 py-0.5 rounded text-[10px] font-mono border cursor-pointer transition-colors ${m === agent.active_model ? 'bg-violet-500/20 text-violet-300 border-violet-500/30' : 'bg-slate-700/50 text-slate-400 border-slate-600/30 hover:border-slate-500'}`}
@@ -412,6 +412,25 @@ export const App: React.FC = () => {
                         ))}
                       </div>
                     )}
+                    <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                      <span className="text-[9px] text-slate-500 uppercase mr-1">Роли:</span>
+                      {['translate', 'refine', 'table', 'vision', 'formula'].map((role) => {
+                        const on = (agent.roles || []).includes(role);
+                        return (
+                          <button
+                            key={role}
+                            onClick={async () => {
+                              const next = on ? (agent.roles || []).filter(r => r !== role) : [...(agent.roles || []), role];
+                              await kaeApi.updateAgent(agent.name, agent.host, agent.active_model, next, agent.kind);
+                              setAgentsData(prev => prev.map(a => a.host === agent.host ? { ...a, roles: next } : a));
+                            }}
+                            className={`px-2 py-0.5 rounded text-[10px] font-mono border transition-colors ${on ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30' : 'bg-slate-800/50 text-slate-500 border-slate-700/40 hover:border-slate-500'}`}
+                          >
+                            {role}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 ))}
                 {agentsData.length === 0 && !addAgentForm && (

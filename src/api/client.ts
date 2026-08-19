@@ -260,7 +260,7 @@ export class KAEApiClient {
     return res.json();
   }
 
-  async getAgentConfig(): Promise<{ agents: Array<{ name: string; host: string; models: string[]; active_model: string; available: boolean }> }> {
+  async getAgentConfig(): Promise<{ agents: Array<{ name: string; host: string; kind?: string; roles?: string[]; models: string[]; active_model: string; available: boolean }> }> {
     const res = await fetch(`${API_BASE}/agents/config`);
     if (!res.ok) throw new Error(`Failed to get agent config: ${res.statusText}`);
     return res.json();
@@ -279,11 +279,11 @@ export class KAEApiClient {
     return res.json();
   }
 
-  async updateAgent(name: string, host: string, active_model: string): Promise<{ status: string }> {
+  async updateAgent(name: string, host: string, active_model: string, roles?: string[], kind?: string): Promise<{ status: string }> {
     const res = await fetch(`${API_BASE}/agents/config`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, host, active_model }),
+      body: JSON.stringify({ name, host, active_model, roles, kind }),
     });
     if (!res.ok) throw new Error(`Failed to update agent: ${res.statusText}`);
     return res.json();
