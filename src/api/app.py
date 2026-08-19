@@ -1241,7 +1241,9 @@ def create_app() -> FastAPI:
         pw, ph = page.rect.width, page.rect.height
         bb = vl.bounding_box
         clip = fitz.Rect(bb.x0 * pw, bb.y0 * ph, bb.x1 * pw, bb.y1 * ph)
-        data = page.get_pixmap(clip=clip, dpi=150).tobytes("png")
+        # 100dpi is enough for vision-LLMs to read tables; higher dpi triggers
+        # OOM in Qwen2.5-VL on T4 (visual token explosion).
+        data = page.get_pixmap(clip=clip, dpi=100).tobytes("png")
         pdf_doc.close()
         return data
 
