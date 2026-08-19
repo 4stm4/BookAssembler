@@ -1437,18 +1437,33 @@ def create_app() -> FastAPI:
         except Exception:
             return False, []
 
+    def _probe_agent(host: str, kind: str) -> tuple:
+        """Health-check an agent. ollama: /api/tags → models; got-ocr: /health."""
+        if kind == "got-ocr":
+            import urllib.request
+            try:
+                req = urllib.request.Request(f"{host}/health")
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read())
+                    return True, [data.get("model", "GOT-OCR2.0")]
+            except Exception:
+                return False, []
+        return _probe_ollama(host)
+
     @app.get("/api/v1/agents/config")
     async def get_agents_config() -> Dict[str, Any]:
         saved = _load_agents_config()
         result = []
         for h in saved:
-            available, models = _probe_ollama(h["host"])
+            kind = h.get("kind", "ollama")
+            available, models = _probe_agent(h["host"], kind)
             active = h.get("active_model", "")
             if available and active and active not in models:
                 active = models[0] if models else ""
             result.append({
                 "name": h["name"],
                 "host": h["host"],
+                "kind": kind,
                 "models": models,
                 "active_model": active,
                 "available": available,
@@ -1459,13 +1474,15 @@ def create_app() -> FastAPI:
         name: str
         host: str
         active_model: str = ""
+        kind: str = "ollama"
 
     @app.post("/api/v1/agents/config")
     async def add_agent(body: AgentCreateRequest) -> Dict[str, Any]:
         agents = _load_agents_config()
         if any(a["host"] == body.host for a in agents):
             raise HTTPException(400, "Agent with this host already exists")
-        agents.append({"name": body.name, "host": body.host, "active_model": body.active_model})
+        agents.append({"name": body.name, "host": body.host,
+                       "active_model": body.active_model, "kind": body.kind})
         _save_agents_config(agents)
         return {"status": "added", "name": body.name}
 

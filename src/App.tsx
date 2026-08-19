@@ -39,7 +39,7 @@ export const App: React.FC = () => {
   const [isAssembling, setIsAssembling] = useState(false);
   const [assembleResult, setAssembleResult] = useState<{ status: string; download_url?: string } | null>(null);
   const [isAgentsOpen, setIsAgentsOpen] = useState(false);
-  const [agentsData, setAgentsData] = useState<Array<{ name: string; host: string; models: string[]; active_model: string; available: boolean }>>([]);
+  const [agentsData, setAgentsData] = useState<Array<{ name: string; host: string; kind?: string; models: string[]; active_model: string; available: boolean }>>([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
   const [addAgentForm, setAddAgentForm] = useState<{ name: string; host: string } | null>(null);
 
@@ -374,6 +374,9 @@ export const App: React.FC = () => {
                       <div className="flex items-center gap-2">
                         {agent.available ? <Wifi className="w-4 h-4 text-emerald-400" /> : <WifiOff className="w-4 h-4 text-red-400" />}
                         <span className="font-semibold text-white">{agent.name}</span>
+                        {agent.kind === 'got-ocr' && (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-amber-500/15 text-amber-300 border border-amber-500/30">OCR</span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${agent.available ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
