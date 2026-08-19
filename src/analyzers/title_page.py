@@ -31,6 +31,17 @@ log = logging.getLogger(__name__)
 
 MAX_SCAN_PAGES = 12
 MIN_SCORE = 3
+# Title/copyright pages live at the very front. Beyond this, ALL-CAPS section
+# headings (CONTENTS, SECTION 1, …) must NOT be mistaken for title pages.
+TITLE_MAX_PAGES = 3
+# A title page is short centered lines; a content page has running paragraphs.
+MAX_TITLE_BLOCK_LEN = 150
+
+_RE_STRONG = re.compile(
+    r"\b(university|college|institute|laborator|press|publisher|inc\.|"
+    r"annual\s+report|thesis|dissertation|proceedings|edition|isbn|copyright)\b",
+    re.IGNORECASE,
+)
 
 _RE_COPYRIGHT = re.compile(r"(?:©|\bcopyright\b|\bcopr\b)", re.IGNORECASE)
 _RE_PUBLISHER = re.compile(
@@ -195,7 +206,8 @@ class TitlePageAnalyzer(BaseAnalyzer):
         page_groups: Dict[int, List[_NodeLoc]] = {}
         for loc in all_locs:
             page = _page_of(loc[0])
-            if page is not None and page < MAX_SCAN_PAGES:
+            # Only the front matter can hold title/copyright pages.
+            if page is not None and page < TITLE_MAX_PAGES:
                 page_groups.setdefault(page, []).append(loc)
 
         title_page_count = 0
@@ -205,6 +217,13 @@ class TitlePageAnalyzer(BaseAnalyzer):
             score = _score_page_blocks(texts)
             log.info("TitlePageAnalyzer: page %d — %d nodes, score=%d", page, len(locs), score)
             if score < MIN_SCORE:
+                continue
+            # A title page has no running paragraphs (only short centered lines).
+            if any(len(t) > MAX_TITLE_BLOCK_LEN for t in texts):
+                continue
+            # Beyond the very first page, require a strong front-matter signal so
+            # ALL-CAPS section headings (CONTENTS, SECTION 1) are not caught.
+            if page > 0 and not any(_RE_STRONG.search(t) for t in texts):
                 continue
 
             meta = _extract_metadata(texts)

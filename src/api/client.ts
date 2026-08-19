@@ -226,6 +226,13 @@ export class KAEApiClient {
     return res.json();
   }
 
+  /** Page-level agent refine: reclassifies and rebuilds (title/table/diagram) a whole page. */
+  async refinePage(jobId: string, page: number): Promise<{ status: string; page: number; role?: string; blocks?: number; refined?: number; rebuilt?: string | null }> {
+    const res = await fetch(`${API_BASE}/jobs/${jobId}/refine-page/${page}`, { method: 'POST' });
+    if (!res.ok) throw new Error(`Failed to refine page: ${res.statusText}`);
+    return res.json();
+  }
+
   async translatePage(jobId: string, pageNumber: number, sourceText: string): Promise<{ translated_text: string; page_number: number }> {
     const res = await fetch(`${API_BASE}/jobs/${jobId}/translate`, {
       method: 'POST',
