@@ -1346,7 +1346,7 @@ def create_app() -> FastAPI:
         ordered_pages = sorted(pages.keys())
         total_pages = len(ordered_pages)
 
-        host, model = _pick_agent()
+        host, model, _ = _pick_agent_for_role("translate")
         loop = asyncio.get_event_loop()
 
         async def _emit(stage: str, step: int) -> None:
@@ -1417,8 +1417,10 @@ def create_app() -> FastAPI:
         # RPi5 + small fast model first (default translation agent); OrangePi 7B
         # is slower on CPU. Users can reorder/retarget via the agent manager.
         defaults = [
-            {"name": "RPi5", "host": os.environ.get("LLM_AGENT_URL_2", "http://192.168.88.71:11434"), "active_model": "llama3.2:1b"},
-            {"name": "OrangePi", "host": OLLAMA_URL, "active_model": OLLAMA_MODEL},
+            {"name": "RPi5", "host": os.environ.get("LLM_AGENT_URL_2", "http://192.168.88.71:11434"),
+             "active_model": "llama3.1:8b", "kind": "ollama", "roles": ["translate", "refine"]},
+            {"name": "OrangePi", "host": OLLAMA_URL, "active_model": OLLAMA_MODEL,
+             "kind": "ollama", "roles": []},
         ]
         _save_agents_config(defaults)
         return defaults
@@ -1464,6 +1466,7 @@ def create_app() -> FastAPI:
                 "name": h["name"],
                 "host": h["host"],
                 "kind": kind,
+                "roles": h.get("roles", []),
                 "models": models,
                 "active_model": active,
                 "available": available,
@@ -1475,6 +1478,7 @@ def create_app() -> FastAPI:
         host: str
         active_model: str = ""
         kind: str = "ollama"
+        roles: List[str] = Field(default_factory=list)
 
     @app.post("/api/v1/agents/config")
     async def add_agent(body: AgentCreateRequest) -> Dict[str, Any]:
@@ -1482,7 +1486,8 @@ def create_app() -> FastAPI:
         if any(a["host"] == body.host for a in agents):
             raise HTTPException(400, "Agent with this host already exists")
         agents.append({"name": body.name, "host": body.host,
-                       "active_model": body.active_model, "kind": body.kind})
+                       "active_model": body.active_model, "kind": body.kind,
+                       "roles": body.roles})
         _save_agents_config(agents)
         return {"status": "added", "name": body.name}
 
@@ -1493,9 +1498,29 @@ def create_app() -> FastAPI:
             if a["host"] == body.host:
                 a["name"] = body.name
                 a["active_model"] = body.active_model
+                a["roles"] = body.roles
                 _save_agents_config(agents)
                 return {"status": "updated", "name": body.name}
         raise HTTPException(404, "Agent not found")
+
+    def _pick_agent_for_role(role: str) -> tuple:
+        """First reachable agent that declares `role`, else any reachable ollama.
+        Returns (host, model, kind)."""
+        cfg = _load_agents_config()
+        for a in cfg:
+            if role in (a.get("roles") or []):
+                kind = a.get("kind", "ollama")
+                available, models = _probe_agent(a["host"], kind)
+                if available:
+                    model = a.get("active_model") or (models[0] if models else None)
+                    return a["host"], model, kind
+        # Fallback: any reachable ollama agent (keeps old behaviour working).
+        for a in cfg:
+            if a.get("kind", "ollama") == "ollama":
+                available, models = _probe_ollama(a["host"])
+                if available:
+                    return a["host"], (a.get("active_model") or (models[0] if models else None)), "ollama"
+        return None, None, "ollama"
 
     @app.delete("/api/v1/agents/{host:path}")
     async def delete_agent(host: str) -> Dict[str, Any]:
