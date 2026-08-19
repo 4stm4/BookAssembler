@@ -239,6 +239,22 @@ def create_app() -> FastAPI:
                     best = cp
             return best
 
+        def _last_page(node: Any) -> Optional[int]:
+            """Largest page index anywhere in this node's subtree."""
+            vl = getattr(node, "visual_layout", None)
+            best: Optional[int] = None
+            if vl is not None:
+                pi = getattr(vl, "page_or_screen_index", None)
+                if isinstance(pi, int):
+                    best = pi
+            for child in getattr(node, "children", []) or []:
+                if getattr(child, "is_tombstoned", False):
+                    continue
+                cp = _last_page(child)
+                if cp is not None and (best is None or cp > best):
+                    best = cp
+            return best
+
         def _layout_into(result: Dict[str, Any], node: Any) -> None:
             """Persist real bounding box + typography so page layout survives round-trip."""
             vl = getattr(node, "visual_layout", None)
@@ -270,6 +286,12 @@ def create_app() -> FastAPI:
                 cp = _first_page(node)
                 if cp is not None:
                     result["page_index"] = cp
+            # Containers span a page range — expose the last page so the UI can
+            # show "стр.N–M" instead of just the first page.
+            if isinstance(node, ContainerUnit):
+                lp = _last_page(node)
+                if lp is not None and lp != result.get("page_index"):
+                    result["page_end"] = lp
             # Expose translated segments so the UI can show translations per block.
             md = getattr(node, "metadata", None) or {}
             if md.get("translations"):
@@ -1564,6 +1586,159 @@ def create_app() -> FastAPI:
             }
 
         raise HTTPException(status_code=400, detail=f"Unknown mode: {body.mode}")
+
+    @app.post("/api/v1/jobs/{job_id}/refine-page/{page}")
+    async def refine_page(job_id: str, page: int) -> Dict[str, Any]:
+        """
+        Page-level agent refinement: the agent looks at every block on one page at
+        once (with its text and page image) and classifies the undetermined ones.
+        More context than per-block refine, so it fixes what single blocks miss.
+        """
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        from src.analyzers.llm_refinement import _call_ollama, VALID_TYPES
+
+        def _text(n: Any) -> str:
+            if hasattr(n, "inlines"):
+                return " ".join(s.text for i in (n.inlines or [])
+                                for s in getattr(i, "spans", []) if hasattr(s, "text")).strip()
+            return (getattr(n, "title", "") or "").strip()
+
+        # Collect non-tombstoned leaf blocks on this page.
+        blocks: List[Any] = []
+        def walk(nodes: list) -> None:  # type: ignore[type-arg]
+            for n in nodes:
+                if getattr(n, "is_tombstoned", False):
+                    continue
+                vl = getattr(n, "visual_layout", None)
+                pg = getattr(vl, "page_or_screen_index", None) if vl else None
+                if pg == page and not isinstance(n, ContainerUnit) and _text(n):
+                    blocks.append(n)
+                if getattr(n, "children", None):
+                    walk(n.children)
+        for c in doc.root_containers:
+            walk([c])
+
+        if not blocks:
+            return {"status": "empty", "page": page, "refined": 0}
+
+        listing = "\n".join(f'{i+1}. "{_text(b)[:120]}"' for i, b in enumerate(blocks))
+        host, model = _pick_agent()
+        prompt = (
+            "This is one page of a scanned book, given as its text blocks in order. "
+            "First decide the PAGE ROLE: one of title, toc, table, diagram, text. "
+            "Then classify EACH block: paragraph, toc_entry, caption, heading, code, "
+            "formula, list_item, table_cell, title.\n"
+            'Reply with ONLY JSON: {"role":"...","blocks":[{"n":1,"type":"..."},...]}.\n\n'
+            f"Blocks:\n{listing}"
+        )
+        resp = _call_ollama(prompt, host=host, model=model)
+        if not resp:
+            raise HTTPException(status_code=503, detail="Agent unavailable or timed out")
+
+        import re as _re, json as _json
+        role = "text"
+        types: Dict[int, str] = {}
+        m = _re.search(r"\{.*\}", resp, _re.DOTALL)
+        if m:
+            try:
+                data = _json.loads(m.group())
+                role = str(data.get("role", "text")).lower().strip()
+                for item in data.get("blocks", []):
+                    idx = int(item.get("n", 0)) - 1
+                    bt = str(item.get("type", "")).lower().strip()
+                    if 0 <= idx < len(blocks) and bt in VALID_TYPES:
+                        types[idx] = bt
+            except Exception:
+                pass
+
+        rebuilt = None
+        # Rebuild the page structure per the agent's role decision (RFC 0001 §2.4:
+        # absorbed blocks are tombstoned, not deleted).
+        if role in ("title", "diagram", "table"):
+            rebuilt = _rebuild_page(doc, blocks, role, page)
+
+        refined = 0
+        for idx, bt in types.items():
+            b = blocks[idx]
+            if getattr(b, "is_tombstoned", False):
+                continue
+            b.classification_confidence = 0.85
+            b.update_confidence()
+            if not b.metadata:
+                b.metadata = {}
+            b.metadata["llm_suggested_type"] = bt
+            b.metadata["llm_model"] = model or ""
+            refined += 1
+
+        _persist_doc(job_id, doc)
+        audit_logger.log("HITL_CORRECTION", "llm_agent", {
+            "job_id": job_id, "mode": "page", "page": page,
+            "role": role, "refined": refined, "rebuilt": rebuilt,
+        })
+        return {"status": "refined", "page": page, "role": role,
+                "blocks": len(blocks), "refined": refined, "rebuilt": rebuilt}
+
+    def _rebuild_page(doc: KnowledgeDocument, blocks: List[Any], role: str, page: int) -> Optional[str]:
+        """Reassemble a page's blocks into a title / diagram / table structure."""
+        from src.krm.models import (TitlePageBlock, DiagramBlock, TextLineInline,
+                                     StyledTextSpan, VisualLayout, NormalizedRect)
+
+        def _text(n: Any) -> str:
+            if hasattr(n, "inlines"):
+                return " ".join(s.text for i in (n.inlines or [])
+                                for s in getattr(i, "spans", []) if hasattr(s, "text")).strip()
+            return (getattr(n, "title", "") or "").strip()
+
+        # Locate the parent container + insertion index of the first block.
+        parent, first_idx = None, 0
+        for c in doc.root_containers:
+            stack = [(c, None)]
+            while stack:
+                node, par = stack.pop()
+                if node is blocks[0] and par is not None:
+                    parent = par
+                    first_idx = par.children.index(node)
+                for ch in getattr(node, "children", []) or []:
+                    stack.append((ch, node))
+        if parent is None:
+            parent = doc.root_containers[0]
+
+        region = NormalizedRect(0.0, 0.0, 1.0, 1.0)
+        bbs = [getattr(getattr(b, "visual_layout", None), "bounding_box", None) for b in blocks]
+        bbs = [b for b in bbs if b]
+        if bbs:
+            region = NormalizedRect(
+                max(0.0, min(b.x0 for b in bbs) - 0.02), max(0.0, min(b.y0 for b in bbs) - 0.02),
+                min(1.0, max(b.x1 for b in bbs) + 0.05), min(1.0, max(b.y1 for b in bbs) + 0.03))
+
+        if role == "title":
+            new = TitlePageBlock(page_role="title")
+            new.inlines = [TextLineInline(spans=[StyledTextSpan(text="\n".join(_text(b) for b in blocks if _text(b)))])]
+            new.visual_layout = VisualLayout(bounding_box=region, page_or_screen_index=page)
+        elif role == "diagram":
+            new = DiagramBlock(
+                labels=[{"text": _text(b), **{k: getattr(bb, k) for k in ("x0", "y0", "x1", "y1")}}
+                        for b, bb in zip(blocks, bbs) if _text(b)],
+                visual_layout=VisualLayout(bounding_box=region, page_or_screen_index=page))
+        else:  # table — mark cells; spatial table build stays with TableDetector
+            for b in blocks:
+                if not b.metadata:
+                    b.metadata = {}
+                b.metadata["llm_suggested_type"] = "table_cell"
+            return "table_cells_marked"
+
+        new.extraction_confidence = 0.9
+        new.classification_confidence = 0.9
+        new.confidence_score = 0.9
+        parent.children.insert(min(first_idx, len(parent.children)), new)
+        for b in blocks:
+            b.is_tombstoned = True
+            if not b.metadata:
+                b.metadata = {}
+            b.metadata["tombstone_reason"] = f"page_agent_rebuilt:{role}:{new.id}"
+        return f"{role}:{new.id}"
 
     # --- PyJobKit Reactive SSE and WebSocket Endpoints ---
 

@@ -88,7 +88,8 @@ const NODE_TYPE_OPTIONS = [
 const KRMNodeView: React.FC<{
   node: KRMNode; depth: number; jobId?: string;
   onRefineRequest?: (nodeId: string, mode: 'agent' | 'manual', patch?: Partial<KRMNode>) => Promise<void>;
-}> = ({ node, depth, jobId, onRefineRequest }) => {
+  onRefinePage?: (page: number) => Promise<void>;
+}> = ({ node, depth, jobId, onRefineRequest, onRefinePage }) => {
   const [collapsed, setCollapsed] = useState(depth > 1);
   const [expanded, setExpanded] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -96,6 +97,7 @@ const KRMNodeView: React.FC<{
   const [editType, setEditType] = useState(node.type);
   const [editText, setEditText] = useState(node.title || node.text || '');
   const [refineStatus, setRefineStatus] = useState<'idle' | 'sending' | 'done'>('idle');
+  const [pageAgent, setPageAgent] = useState<'idle' | 'running' | 'done'>('idle');
   const isContainer = node.type === 'ContainerUnit';
   const isTable = node.type === 'TableBlock';
   const hasChildren = node.children && node.children.length > 0;
@@ -166,7 +168,23 @@ const KRMNodeView: React.FC<{
                 title={`Открыть превью страницы ${node.page_index! + 1}`}
               >
                 <Eye className="w-3 h-3" />
-                стр.{node.page_index! + 1}
+                стр.{node.page_index! + 1}{node.page_end != null && node.page_end !== node.page_index ? `–${node.page_end + 1}` : ''}
+              </button>
+            )}
+            {hasPage && jobId && onRefinePage && (
+              <button
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  setPageAgent('running');
+                  try { await onRefinePage(node.page_index!); setPageAgent('done'); }
+                  catch { setPageAgent('idle'); }
+                }}
+                disabled={pageAgent === 'running'}
+                className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-violet-500/10 text-violet-300 border border-violet-500/20 hover:bg-violet-500/20 flex items-center gap-1 disabled:opacity-50"
+                title="Агент: пересобрать и уточнить эту страницу"
+              >
+                <Sparkles className="w-3 h-3" />
+                {pageAgent === 'running' ? '…' : pageAgent === 'done' ? '✓' : 'Агент стр.'}
               </button>
             )}
             <span
@@ -285,7 +303,7 @@ const KRMNodeView: React.FC<{
       {hasChildren && !collapsed && (
         <div className="space-y-1 mt-1">
           {node.children!.map((child: KRMNode) => (
-            <KRMNodeView key={child.id} node={child} depth={depth + 1} jobId={jobId} onRefineRequest={onRefineRequest} />
+            <KRMNodeView key={child.id} node={child} depth={depth + 1} jobId={jobId} onRefineRequest={onRefineRequest} onRefinePage={onRefinePage} />
           ))}
         </div>
       )}
@@ -358,6 +376,14 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
     } catch (err) {
       console.error('Refine failed:', err);
     }
+  };
+
+  const handleRefinePage = async (page: number) => {
+    if (!activeJobId) return;
+    await kaeApi.refinePage(activeJobId, page);
+    // Reload the KRM tree so rebuilt structures (title/diagram/table) show up.
+    const data = await kaeApi.getJobResult(activeJobId);
+    if (data?.containers) setKrmNodes(data.containers);
   };
 
   useEffect(() => {
@@ -695,7 +721,7 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
                   Иерархия узлов KRM (Knowledge Representation Model)
                 </div>
                 {krmNodes.map((node) => (
-                  <KRMNodeView key={node.id} node={node} depth={0} jobId={activeJobId || undefined} onRefineRequest={handleRefineRequest} />
+                  <KRMNodeView key={node.id} node={node} depth={0} jobId={activeJobId || undefined} onRefineRequest={handleRefineRequest} onRefinePage={handleRefinePage} />
                 ))}
               </div>
             ) : (
