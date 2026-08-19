@@ -20,6 +20,7 @@ from src.analyzers.entity_extractor import EntityExtractorAnalyzer
 from src.analyzers.llm_refinement import LLMRefinementAnalyzer
 from src.analyzers.heading import HeadingAnalyzer
 from src.analyzers.normalization import NormalizationAnalyzer
+from src.analyzers.page_agent import PageAgentAnalyzer
 from src.analyzers.pipeline import PipelineRunner
 from src.analyzers.reading_order import ReadingOrderAnalyzer
 from src.analyzers.table_detector import TableDetectorAnalyzer
@@ -34,6 +35,9 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         HeadingAnalyzer(),
         TitlePageAnalyzer(),
         TableDetectorAnalyzer(),
+        # Ask a vision agent about table-like pages TableDetector missed
+        # (calls the "table"-role agent; no-op if none is reachable).
+        PageAgentAnalyzer(),
         CaptionAnalyzer(),
         BlockClassifierAnalyzer(),
         LLMRefinementAnalyzer(),
