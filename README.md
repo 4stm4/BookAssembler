@@ -1,210 +1,189 @@
 # Knowledge Assembly Engine (KAE)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.13+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.13+">
-  <img src="https://img.shields.io/badge/React-18.3.1-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React 18">
-  <img src="https://img.shields.io/badge/TypeScript-5.6.3-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript 5.6">
-  <img src="https://img.shields.io/badge/Tailwind_CSS-4.0-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white" alt="Tailwind CSS 4.0">
-  <img src="https://img.shields.io/badge/FastAPI-0.115-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI">
-  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
+  <img src="https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.13">
+  <img src="https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/React-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React">
+  <img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker">
 </p>
 
-**Knowledge Assembly Engine (KAE)** — детерминированная высокопроизводительная система сборки, анализа и трансфигурации знаний из сложной технической документации (книги, PDF-сканы, даташиты, спецификации микропроцессорных архитектур и стандарты).
+**Knowledge Assembly Engine (KAE)** превращает неструктурированные документы (в первую
+очередь PDF-сканы технических книг и даташитов) в структурированную **Knowledge
+Representation Model (KRM)** — дерево типизированных блоков с графами связей, из
+которого можно строить переводы и целевые документы.
 
-KAE преобразует неструктурированные и отсканированные первичные материалы в строго структурированные электронные артефакты, графы знаний, интерактивные векторизованные схемы TikZ и печатный LaTeX со сквозной криптографической прослеживаемостью (**Provenance**).
+Вместо парадигмы «PDF → плоский текст» KAE сохраняет структуру: заголовки, таблицы,
+подписи, схемы, титульные страницы, порядок чтения и семантические связи — с
+привязкой каждого блока к координатам на странице.
 
----
-
-## 🌟 Ключевые возможности
-
-- **Content-Addressed Storage (`.kap` bundles):** Кэширование и упаковывание готовых книг и разделов в иммутабельные архивы с обращением по SHA-256 хэшу содержимого.
-- **Сквозная прослеживаемость (SHA-256 Provenance):** Каждое утверждение, формула, таблица и график привязаны к координатам страницы и оригинальному блоку исходного документа.
-- **Storage Endpoint Providers (SEP Engine):** Унифицированный протокол абстракции источников данных для работы с NVMe SSD, корпоративными S3/MinIO бакетами, WebDAV артефактами и Google Drive.
-- **Гибридный роутер нейросетей (`HybridLLMRouter`):** Автоматическое распределение тяжелых задач между облачными ускорителями (Google Colab T4/L4 GPU) и локальными энергоэффективными edge-узлами (Ollama, llama.cpp, ARM64 Pi 5 / Orange Pi CM5).
-- **Реактивный HITL (Human-In-The-Loop):** Непрерывная валидация с интеграцией всплывающего интерактивного баннера для модерации и исправления узлов с низким `confidence_score` в 1 клик.
-- **Компьютерное зрение и векторизация схем:** Автоматическое выделение структурных диаграмм из PDF, распознавание топологии и реконструирование чистых векторов TikZ / LaTeX.
-- **Детерминированные сборки (`kae.lock`):** Полная воспроизводимость процесса сборки документации с фиксацией версий промптов, моделей и словарей.
+Архитектура описана в наборе RFC (`docs/architecture/`, [аудит соответствия
+кода](docs/architecture/COMPLIANCE_AUDIT.md)).
 
 ---
 
-## 📐 Архитектура пайплайна KAE
+## Возможности
+
+| Область | Что реализовано | Статус |
+|---|---|---|
+| **Извлечение (PDF)** | `PdfSourceAdapter` на PyMuPDF: блоки, стиль, bbox, фильтр OCR-мусора | ✅ |
+| **Пайплайн анализа** | 10 анализаторов: нормализация, порядок чтения, заголовки, титул, таблицы, подписи, классификация, LLM-уточнение, извлечение сущностей, детекция схем | ✅ |
+| **Графы** | Knowledge Graph (сущности/связи) + Reading Graph (DAG порядка чтения) | ✅ |
+| **KRM round-trip** | Сохранение bbox+стиля+перевода в JSON, восстановление без потерь (RFC 0002/0011) | ✅ |
+| **HITL** | Баннер low-confidence узлов, ручная правка, агент-уточнение отдельного блока | ✅ |
+| **Агент на страницу** | Переклассификация и **пересборка** страницы по роли (титул/схема/таблица) | ✅ |
+| **Менеджер агентов** | Несколько ollama-хостов (edge/GPU/Colab), выбор модели, роутинг | ✅ |
+| **Перевод** | Постраничный фоновый перевод через ollama; источник не мутируется, lineage (RFC 0021) | ✅ |
+| **Сборка книги** | XeLaTeX в Docker (кириллица) + `kae.lock`/`book.json` + `.kap` bundle (RFC 0012/0013) | ✅ |
+| **Векторизация схем** | Скан-схема → TikZ: CV (OpenCV) + vision-LLM (RFC 0011 `tikz_vectorization`) | 🧪 эксперим. |
+| **SEP-хранилища** | LocalFS (NVMe) рабочий; S3/MinIO, WebDAV, GoogleDrive — классы-заготовки | 🔶 частично |
+
+---
+
+## Пайплаин обработки
 
 ```mermaid
 flowchart TD
-    A[Первичный документ / PDF скан] --> B[SEP Engine: MinIO / NVMe / WebDAV]
-    B --> C[1. Extract: PyMuPDF / OCR]
-    C --> D[2. Manifest: Инвентаризация элементов]
-    D --> E[3. CV Figures: Анализ и TikZ рендер]
-    E --> F[4. Hybrid LLM Router: Colab T4 / Ollama]
-    F --> G{5. Confidence Check}
-    G -- "Confidence < 0.8" --> H[Реактивный HITL Banner]
-    H -- "Одобрение / Коррекция" --> I[KRM Tree Node]
-    G -- "Confidence >= 0.8" --> I
-    I --> J[6. Knowledge & Reading Graph]
-    J --> K[7. AutoFix & LaTeX Build Engine]
-    K --> L[8. XeLaTeX / Docker Compilation]
-    L --> M[Готовый PDF & .kap Knowledge Archive]
+    A[PDF скан] --> B[PdfSourceAdapter<br/>блоки + bbox + стиль]
+    B --> C[NormalizationAnalyzer]
+    C --> D[ReadingOrderAnalyzer<br/>Reading Graph DAG]
+    D --> E[DiagramDetectorAnalyzer]
+    E --> F[HeadingAnalyzer<br/>дерево контейнеров]
+    F --> G[TitlePageAnalyzer]
+    G --> H[TableDetector / Caption]
+    H --> I[BlockClassifier]
+    I --> J[LLMRefinement<br/>ollama-агент]
+    J --> K[EntityExtractor<br/>Knowledge Graph]
+    K --> L{confidence < 0.85?}
+    L -- да --> M[HITL / Агент стр.]
+    L -- нет --> N[KRM + persist JSON]
+    M --> N
+    N --> O[Перевод ollama]
+    O --> P[XeLaTeX сборка → PDF + .kap]
 ```
+
+Пайплайн собирается в [`src/analyzers/pipeline.py`](src/analyzers/pipeline.py)
+(`PipelineRunner` с проверкой прав анализаторов и rollback при сбое, RFC 0005).
 
 ---
 
-## 📑 Спецификации и стандарты (RFC 0001–0020)
+## Архитектурные RFC (`docs/architecture/`)
 
-Архитектура системы KAE полностью регламентирована набором стандартов RFC:
+| RFC | Тема |
+|---|---|
+| 0001 | Overview & Vision |
+| 0002 | Knowledge Representation Model (KRM) |
+| 0003 | Knowledge Graph |
+| 0004 | Reading Graph |
+| 0005 | Analyzer API & Permissions Matrix |
+| 0006 | Skills & Recipes |
+| 0007 | AI Knowledge Layer & Chunking |
+| 0008 | Source Adapters |
+| 0009 | Benchmark & Corpus |
+| 0010 | Plugin API & Sandbox |
+| 0011 | Provenance & Lineage |
+| 0012 | Reproducible Builds (`kae.lock`) |
+| 0013 | Artifact & Content-Addressed Store (`.kap`) |
+| 0014 | Contract Testing |
+| 0015 | Error Taxonomy |
+| 0016 | Human-in-the-Loop |
+| 0017 | Confidence Calibration |
+| 0018 | Retrieval & Dataset Eval |
+| 0019 | Job & Resource Manager |
+| 0020 | Security & Trust |
+| 0021 | Target Document Assembly & Translation |
 
-| RFC | Модуль / Спецификация | Описание |
-| :--- | :--- | :--- |
-| **RFC 0001** | `KRM Tree Core` | Иерархическое представление модели знаний (Knowledge Representation Model) |
-| **RFC 0002** | `Knowledge Graph` | Семантический граф сущностей, мнемоник, регистров и связей |
-| **RFC 0003** | `Reading Graph` | Педагогический граф последовательности прочтения и усвоения тем |
-| **RFC 0004** | `Reproducible Builds` | Спецификация файла блокировки сборок `kae.lock` и детерминированных хэшей |
-| **RFC 0005** | `Storage Endpoint Providers` | Абстракция протокола SEP для S3, MinIO, NVMe, WebDAV, GDrive |
-| **RFC 0006** | `Content-Addressed Archive` | Формат контейнера знаний `.kap` (Knowledge Assembly Package) |
-| **RFC 0007** | `pyjobkit Task Engine` | Идемпотентная распределенная очередь задач на базе SQLite/Postgres |
-| **RFC 0008** | `Hybrid LLM Router` | Динамическая маршрутизация запросов (Colab GPU + Local Ollama / Claude) |
-| **RFC 0009** | `CV Diagram Reconstruction` | Алгоритмы извлечения топологии схем и генерации кодовой базы TikZ |
-| **RFC 0010** | `Reactive HITL Protocol` | Всплывающий протокол интервенции оператора при низком качестве сегментации |
-| **RFC 0011** | `Live Glossary Engine` | Динамический словарь терминов с поддержкой Keep-As-Is правил |
-| **RFC 0012** | `LaTeX Compilation Engine` | Изолированная компиляция XeLaTeX через Docker и SSH контейнеры |
-| **RFC 0013** | `Provenance Audit Trail` | Дерево Меркла и SHA-256 цепочки подтверждения исходных цитат |
-| **RFC 0014** | `Real-time Event SSE` | Потоковая трансляция прогресса сборки и состояния рабочей области по SSE |
-| **RFC 0015** | `Unified API Gateway` | Скоростной прокси-сервер Express/FastAPI с поддержкой CORS и REST v1 |
-| **RFC 0016** | `Clean Workspace Frontend` | Минималистичный двухпанельный React UI без избыточной перегруженности |
-| **RFC 0017** | `Multi-Layer Translation Merge`| Слойный мёрдж переводов (Base -> AutoFix Diff -> Manual Overrides) |
-| **RFC 0018** | `Code & ASM Auto-Fixer` | Автоматическая коррекция синтаксиса ассемблера 8086 и табуляций кода |
-| **RFC 0019** | `Security Command Sandbox` | Песочница исполнения shell-команд и компиляции TeX документов |
-| **RFC 0020** | `Remote Worker Node Specs` | Протокол подключения Colab GPU и ARM64 Edge воркеров в единую сеть |
+Степень соответствия кода каждому RFC — в [`COMPLIANCE_AUDIT.md`](docs/architecture/COMPLIANCE_AUDIT.md).
 
 ---
 
-## 📂 Структура проекта
+## Структура проекта
 
 ```
-kae-platform/
-├── server.ts                    # Единый Express Gateway & API Вход (Port 3000)
-├── package.json                 # Node.js зависимости & npm скрипты
-├── vite.config.ts               # Конфигурация сборки Vite & React
-├── pyproject.toml               # Python 3.13 конфигурация и зависимости
-├── Dockerfile                   # Docker образ с XeLaTeX и кириллическими шрифтами
+BookAssembler/
+├── Dockerfile               # backend (FastAPI) + frontend (Vite) + XeLaTeX (texlive)
+├── docker-compose.yml       # kae-engine: порт 3000 (UI) / 8000 (API), volume /data
+├── requirements.txt         # Python зависимости (fastapi, pymupdf, opencv, reportlab…)
+├── server.ts                # Node gateway: раздаёт SPA + проксирует /api на FastAPI
 │
-├── src/                         # Исходный код приложения
-│   ├── api/                     # REST & SSE API Клиенты и Серверный роутер
-│   │   ├── client.ts            # Typed KAE API Client (REST & SSE subscriptions)
-│   │   └── app.py               # Python FastAPI backend подсистема
-│   │
-│   ├── components/              # React Компоненты Clean Workspace UI
-│   │   ├── CleanWorkspace.tsx   # Двухпанельный сплит-редактор KRM & Markdown
-│   │   ├── DocumentDashboard.tsx# Мониторинг документов и запуск сборок pyjobkit
-│   │   ├── SEPSourcesDialog.tsx # Модальное окно подключения хранилищ SEP
-│   │   ├── PipelineStepper.tsx  # Компактный индикатор выполнения пайплайна
-│   │   ├── KnowledgeGraphModal.tsx # Визуализация графов знаний и связей
-│   │   ├── LatexBuildView.tsx   # Предпросмотр скомпилированного LaTeX PDF
-│   │   └── Header.tsx           # Лаконичная шапка с переключением экранов
-│   │
-│   ├── core/                    # Ядро обработки данных
-│   │   ├── pipeline.py          # Оркестратор стадий сборки
-│   │   ├── state.py             # Управление чекпоинтами и состоянием
-│   │   ├── translator.py        # Клиент гибридного перевода и генерации
-│   │   ├── validate_chapter.py  # 11 категорий автоматической валидации
-│   │   ├── build_latex.py       # Генератор документов XeLaTeX
-│   │   └── diagram_extract.py   # CV-модуль анализа иллюстраций и схем
-│   │
-│   ├── types.ts                 # Общие TypeScript интерфейсы и типы KAE
-│   └── main.tsx                 # Точка входа React SPA
+├── src/
+│   ├── adapters/            # PdfSourceAdapter + SEP-провайдеры (LocalFS, S3, WebDAV…)
+│   ├── analyzers/           # пайплайн: normalization, reading_order, heading,
+│   │                        #   title_page, table_detector, caption_analyzer,
+│   │                        #   block_classifier, llm_refinement, entity_extractor,
+│   │                        #   diagram_detector, pipeline (PipelineRunner)
+│   ├── krm/                 # models.py — типы KRM (ContainerUnit, ParagraphBlock,
+│   │                        #   TitlePageBlock, DiagramBlock, TableBlock…)
+│   ├── graph/               # knowledge_graph.py, reading_graph.py
+│   ├── assembler/           # translator.py, latex_builder.py, diagram_vectorizer.py
+│   ├── ai_layer/            # semantic chunker + exporter (RAG)
+│   ├── hitl/ jobs/ audit/   # HITL-менеджер, задачи (pyjobkit-мост), audit-лог
+│   ├── api/
+│   │   ├── app.py           # FastAPI: импорт, пайплайн, графы, перевод, сборка, агенты
+│   │   └── client.ts        # типизированный REST/SSE клиент
+│   ├── components/          # React UI (CleanWorkspace, DocumentDashboard, …)
+│   └── App.tsx              # SPA
 │
-├── project.example/             # Шаблон конфигурации книги и словарей
-└── colab/                       # Jupyter Notebooks для Colab GPU
-    └── bookassembler_agent.ipynb
+├── docs/architecture/       # RFC 0001–0021 + COMPLIANCE_AUDIT.md
+└── colab/                   # GPU-агенты на Colab (см. ниже)
+    ├── kae_gpu_agent.ipynb  # ollama (vision/coder) через cloudflared-туннель
+    └── kae_got_ocr.ipynb    # GOT-OCR2.0 (таблицы/формулы) как HTTP-сервис
 ```
 
 ---
 
-## 🚀 Быстрый старт
+## Запуск (Docker)
 
-### Требования к окружению
-- **Node.js:** `>= 18.0`
-- **Python:** `>= 3.13` (обязательно для `pyjobkit`)
-- **Docker:** (для локальной компиляции XeLaTeX)
+Backend, frontend и XeLaTeX собираются в один образ.
 
-### 1. Клонирование и настройка зависимостей
 ```bash
-# Клонирование репозитория
-git clone https://github.com/your-org/kae-platform.git
-cd kae-platform
-
-# Настройка виртуального окружения Python 3.13
-python3.13 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[api,dev]"
-
-# Установка npm пакетов frontend
-npm install
+docker compose up -d --build
 ```
 
-### 2. Конфигурация окружения
-Скопируйте примеры конфигурационных файлов:
-```bash
-cp .env.example .env
-cp -r project.example project
-```
+- UI: `http://<host>:3000`
+- API: `http://<host>:8000/api/v1`
+- Данные (импортированные PDF, KRM-JSON, сборки): volume `/data`
 
-Отредактируйте `.env`:
-```env
-TRANSLATE_MODE=api
-AI_PROVIDER=openai
-AI_API_KEY=sk-your-api-key-here
-AI_MODEL=gpt-4o
-COMPILE_MODE=docker
-```
+Импорт: в UI **«Импорт из SEP»** → выбери PDF из подключённого LocalFS-провайдера
+(по умолчанию — каталог данных на диске) → пайплайн запустится, прогресс идёт по SSE.
 
-### 3. Запуск платформы (Full-Stack)
-Запустите единый сервер разработки на порту `3000`:
-```bash
-npm run dev
-```
-После запуска интерфейс KAE Clean Workspace будет доступен по адресу:
-👉 `http://localhost:3000`
+> Сборка фронтенда выполняется **внутри Docker** (`npm install` + `vite build` в
+> Dockerfile). Локально `npm install` не требуется.
 
 ---
 
-## 🤖 Гибридный воркер (Google Colab & Edge Nodes)
+## GPU-агенты (Google Colab)
 
-Для экономии средств и ускорения работы с тяжелыми моделями KAE поддерживает подключение внешних GPU-ускорителей:
+Тяжёлые модели (vision-векторизация схем, OCR таблиц/формул) выносятся на бесплатный
+Colab-GPU и подключаются как обычный агент в менеджере агентов.
 
-1. Откройте `colab/bookassembler_agent.ipynb` в **Google Colab**.
-2. Подключите runtime **T4 GPU** или **L4 GPU**.
-3. Смонтируйте Google Drive для сохранения кэша `.kap` и промежуточных результатов.
-4. Включите режим `Ollama` / `llama.cpp` серверной трансляции и укажите URL в `.env`:
-   ```env
-   AI_BASE_URL=https://your-colab-tunnel-url.ngrok-free.app/v1
-   ```
+- [`colab/kae_gpu_agent.ipynb`](colab/kae_gpu_agent.ipynb) — поднимает **ollama** с
+  vision-моделью (`qwen2.5vl` / `llava`) на T4 и отдаёт публичный URL через
+  cloudflared. URL добавляется в менеджер агентов KAE.
+- [`colab/kae_got_ocr.ipynb`](colab/kae_got_ocr.ipynb) — **GOT-OCR2.0** через
+  transformers как HTTP-сервис `/ocr` (текст + Markdown/LaTeX для таблиц и формул).
 
----
-
-## 📡 API Endpoints & Event Streaming
-
-KAE предоставляют REST API `/api/v1/*` и поддержку Server-Sent Events (SSE):
-
-### Хранилища SEP (Storage Endpoint Providers)
-- `GET /api/v1/sep/providers` — Список подключенных источников (S3, NVMe, WebDAV).
-- `POST /api/v1/sep/providers` — Регистрация нового SEP провайдера.
-- `GET /api/v1/sep/providers/:id/browse` — Навигация по каталогам хранилища.
-- `POST /api/v1/sep/providers/:id/import` — Запуск импорта файла в пайплайн.
-
-### Задачи и Пайплайн (`pyjobkit`)
-- `POST /api/v1/documents/upload` — Загрузка документа.
-- `GET /api/v1/jobs/:job_id/status` — Текущий статус выполнения сборки.
-- `GET /api/v1/jobs/stream` — SSE Поток обновлений статусов и прогресса сборок в реальном времени.
-
-### HITL Валидация (Human-In-The-Loop)
-- `GET /api/v1/hitl/pending` — Получение списка спорных узлов с низким `confidence_score`.
-- `POST /api/v1/hitl/correct` — Отправка одобрения или ручной коррекции узла KRM.
-
-### Графы знаний и структуры
-- `GET /api/v1/graph/:job_id` — Получение структуры Knowledge Graph и Reading Graph.
+Локальные ollama-агенты (Raspberry Pi / Orange Pi) работают на CPU — годятся для
+классификации/перевода; для vision-задач нужен GPU (Colab).
 
 ---
 
-## 📜 Лицензия
+## API (основное, `/api/v1`)
 
-Проект распространяется под лицензией **MIT**. Подробности в файле [LICENSE](LICENSE).
+| Метод | Endpoint | Назначение |
+|---|---|---|
+| `GET` | `/sep/providers` · `/sep/providers/{id}/browse` | список/навигация хранилищ |
+| `POST` | `/sep/providers/{id}/import` | импорт PDF в пайплайн |
+| `GET` | `/documents` · `/jobs/{id}/result` · `/jobs/{id}/progress` | документы, KRM, прогресс |
+| `GET` | `/jobs/stream` | SSE-поток прогресса |
+| `GET` | `/graph/{id}` | Knowledge Graph + Reading Graph |
+| `POST` | `/jobs/{id}/refine` · `/jobs/{id}/refine-page/{page}` | агент: блок / вся страница |
+| `POST` | `/jobs/{id}/translate/start` · `/jobs/{id}/assemble` | перевод / сборка книги |
+| `GET` | `/jobs/{id}/diagram/{block}` | рендер региона схемы |
+| `GET`/`POST`/`PUT`/`DELETE` | `/agents/config` | менеджер агентов |
+
+---
+
+## Лицензия
+
+MIT.
