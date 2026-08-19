@@ -160,7 +160,15 @@ def build_latex(doc: KnowledgeDocument, target_lang: str = "") -> str:
 
 
 def _render_table(table: TableBlock) -> str:
-    """Render a table atomically (RFC 0007 §5.2)."""
+    """Render a table atomically (RFC 0007 §5.2).
+
+    If a table agent (GOT-OCR/MinerU) recognized it, use that LaTeX verbatim;
+    otherwise fall back to the spatial grid from TableDetector.
+    """
+    md = getattr(table, "metadata", None) or {}
+    recognized = md.get("latex")
+    if recognized:
+        return "\\begin{center}\n" + recognized + "\n\\end{center}\n"
     grid = getattr(table, "grid", None)
     if not grid:
         return ""

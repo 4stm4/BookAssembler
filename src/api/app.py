@@ -1223,6 +1223,76 @@ def create_app() -> FastAPI:
         pdf_doc.close()
         return Response(content=img_bytes, media_type="image/jpeg")
 
+    async def _render_block_png(doc: KnowledgeDocument, node: Any) -> bytes:
+        """Render a block's source page region to PNG bytes (for /infer agents)."""
+        vl = getattr(node, "visual_layout", None)
+        if vl is None or vl.bounding_box is None:
+            raise HTTPException(400, "Block has no region")
+        source_uri = doc.source_uri or ""
+        if not source_uri.startswith("sep://"):
+            raise HTTPException(400, "Only SEP documents supported")
+        provider_id, file_id = source_uri.replace("sep://", "").split("/", 1)
+        prov = _resolve_sep_provider(provider_id)
+        stream = await prov.get_file_stream(file_id)
+        import pymupdf as fitz
+        pdf_doc = fitz.open(stream=stream.read(), filetype="pdf")
+        pg = vl.page_or_screen_index
+        page = pdf_doc[pg]
+        pw, ph = page.rect.width, page.rect.height
+        bb = vl.bounding_box
+        clip = fitz.Rect(bb.x0 * pw, bb.y0 * ph, bb.x1 * pw, bb.y1 * ph)
+        data = page.get_pixmap(clip=clip, dpi=150).tobytes("png")
+        pdf_doc.close()
+        return data
+
+    def _call_infer(host: str, task: str, image_b64: str) -> Optional[str]:
+        """POST an image region to a multimodel/got-ocr agent → recognized text."""
+        import urllib.request
+        endpoint = "/infer"
+        body = json.dumps({"image_b64": image_b64, "task": task}).encode()
+        try:
+            req = urllib.request.Request(f"{host}{endpoint}", data=body,
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=180) as r:
+                return json.loads(r.read()).get("text", "")
+        except Exception:
+            # Backwards-compat: old GOT-OCR agents expose /ocr instead of /infer.
+            try:
+                req = urllib.request.Request(f"{host}/ocr", data=body,
+                                             headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=180) as r:
+                    return json.loads(r.read()).get("text", "")
+            except Exception:
+                logging.getLogger(__name__).exception("infer call failed")
+                return None
+
+    @app.post("/api/v1/jobs/{job_id}/table/{block_id}/recognize")
+    async def recognize_table(job_id: str, block_id: str) -> Dict[str, Any]:
+        """Send a table region to the `table`-role agent (GOT-OCR/MinerU) and store
+        the returned LaTeX on the TableBlock (used as-is at book assembly)."""
+        import base64
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(404, "Document not found")
+        node = _find_node(doc, block_id)
+        if node is None or not isinstance(node, TableBlock):
+            raise HTTPException(404, "Table not found")
+        host, _model, _kind = _pick_agent_for_role("table")
+        if not host:
+            raise HTTPException(503, "No agent with role 'table' available")
+        png = await _render_block_png(doc, node)
+        latex = await asyncio.to_thread(_call_infer, host, "table", base64.b64encode(png).decode())
+        if not latex:
+            raise HTTPException(503, "Table agent failed")
+        if not node.metadata:
+            node.metadata = {}
+        node.metadata["latex"] = latex.strip()
+        node.classification_confidence = 0.95
+        node.update_confidence()
+        _persist_doc(job_id, doc)
+        audit_logger.log("TABLE_RECOGNIZED", "agent", {"job_id": job_id, "block_id": block_id})
+        return {"status": "recognized", "block_id": block_id, "latex": latex.strip()}
+
     # --- SemanticChunker & Translation Endpoints ---
 
     @app.delete("/api/v1/jobs/{job_id}")
