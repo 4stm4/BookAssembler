@@ -81,6 +81,24 @@ def _extraction_confidence(text: str) -> float:
     return max(0.10, min(0.95, base))
 
 
+def _is_ocr_garbage(text: str) -> bool:
+    """Detect OCR noise from non-text regions (logos, crests, scan artifacts),
+    e.g. ", 1IIIIiK,8I ,..i!C\"'-". Real text has a decent letter ratio and at
+    least one proper word; garbage is mostly punctuation/digits and letter debris.
+    """
+    import re
+    t = text.strip()
+    if len(t) < 4:
+        return False  # too short to judge; blank-page logic handles these
+    letters = sum(c.isalpha() for c in t)
+    if letters / len(t) < 0.5:
+        return True
+    # A proper word: 3+ letters containing a vowel and not all the same letter.
+    words = re.findall(r"[A-Za-z]{3,}", t)
+    proper = [w for w in words if re.search(r"[aeiouAEIOUyY]", w) and len(set(w.lower())) >= 2]
+    return len(proper) == 0
+
+
 def _is_monospace(font_name: str) -> bool:
     lower = font_name.lower()
     return any(m in lower for m in MONOSPACE_FAMILIES)
@@ -263,6 +281,13 @@ class PdfSourceAdapter(BaseSourceAdapter):
 
                 full_text = " ".join(line_texts).strip()
                 if not full_text:
+                    continue
+                # Drop OCR noise from non-text regions (logos/crests/artifacts) so
+                # it doesn't pollute paragraphs or title pages.
+                if not is_mono_block and _is_ocr_garbage(full_text):
+                    page_flags = doc.root_containers[0].metadata.setdefault("ocr_garbage_pages", [])
+                    if page_idx not in page_flags:
+                        page_flags.append(page_idx)
                     continue
 
                 style = StyleDescriptor(
