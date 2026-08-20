@@ -14,6 +14,9 @@ class Metrics:
     infer_total: int = 0
     infer_errors_total: int = 0
     backend_errors_total: int = 0
+    auth_fail_total: int = 0
+    announce_total: int = 0
+    announce_rejected_total: int = 0
     queue_high_water: int = 0
     infer_duration_sum: float = 0.0     # seconds
     infer_duration_count: int = 0
@@ -53,6 +56,15 @@ def render(metrics: Metrics, gpu_seconds_used: float, queue_depth: int) -> str:
         f"# HELP kae_backend_errors_total Runner backend (Kaggle/etc) start failures.",
         f"# TYPE kae_backend_errors_total counter",
         f"kae_backend_errors_total {metrics.backend_errors_total}",
+        f"# HELP kae_auth_fail_total Bearer/secret auth failures.",
+        f"# TYPE kae_auth_fail_total counter",
+        f"kae_auth_fail_total {metrics.auth_fail_total}",
+        f"# HELP kae_announce_total /runner/announce calls (accepted or unchanged).",
+        f"# TYPE kae_announce_total counter",
+        f"kae_announce_total {metrics.announce_total}",
+        f"# HELP kae_announce_rejected_total /runner/announce calls rejected (400/401/429).",
+        f"# TYPE kae_announce_rejected_total counter",
+        f"kae_announce_rejected_total {metrics.announce_rejected_total}",
         f"# HELP kae_infer_duration_avg_seconds Average end-to-end /infer duration.",
         f"# TYPE kae_infer_duration_avg_seconds gauge",
         f"kae_infer_duration_avg_seconds {avg:.3f}",

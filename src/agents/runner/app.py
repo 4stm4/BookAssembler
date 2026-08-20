@@ -20,13 +20,15 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator, List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
+from src.agents.audit import AgentAudit
 from src.agents.runner.announce import announce_to_manager
 from src.agents.runner.config import RunnerConfig
 from src.agents.runner.idle import run_watchdog
 from src.agents.runner.loaders.base import EchoLoader, ModelLoader
+from src.agents.runner.metrics import RunnerMetrics, render as render_metrics
 from src.agents.runner.pool import ModelPool
 
 log = logging.getLogger(__name__)
@@ -51,13 +53,16 @@ def _decode_png(b64: str) -> bytes:
 
 
 def create_app(cfg: Optional[RunnerConfig] = None,
-               loaders: Optional[List[ModelLoader]] = None) -> FastAPI:
+               loaders: Optional[List[ModelLoader]] = None,
+               audit: Optional[AgentAudit] = None) -> FastAPI:
     """Build a Runner app.
 
     `loaders` — the real loaders (Qwen2.5-VL, GOT-OCR, ...). If None, an
     EchoLoader is registered so tests and dev-mode notebooks work without a GPU.
     """
     cfg = cfg or RunnerConfig()
+    audit = audit or AgentAudit("runner")
+    metrics = RunnerMetrics()
     pool = ModelPool(vram_budget_mb=cfg.vram_budget_mb)
     for ldr in (loaders or [EchoLoader()]):
         pool.register(ldr)
@@ -66,12 +71,16 @@ def create_app(cfg: Optional[RunnerConfig] = None,
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        audit.runner_started(warmup=list(cfg.warmup_tasks))
         # Warmup declared set (RFC 0022 §5.3).
         for task in cfg.warmup_tasks:
             try:
-                await pool.ensure_loaded(task)
-            except Exception:
+                loader = await pool.ensure_loaded(task)
+                metrics.model_loads_total += 1
+                audit.model_loaded(loader.name, loader.vram_mb)
+            except Exception as e:
                 log.exception("warmup of task %r failed", task)
+                audit.runner_error(f"warmup {task}: {e}")
         state["ready"] = True
 
         # Push discovery (RFC 0022 §5.2).
@@ -126,31 +135,38 @@ def create_app(cfg: Optional[RunnerConfig] = None,
             "vram_budget_mb": pool.vram_budget_mb,
         }
 
-    @app.post("/infer", dependencies=[Depends(_require_token)])
-    async def infer(body: InferRequest) -> dict:
-        png = _decode_png(body.image_b64)
+    @app.get("/metrics", response_class=PlainTextResponse)
+    async def metrics_endpoint() -> str:
+        return render_metrics(metrics, pool.loaded_names(), pool.vram_used_mb())
+
+    async def _do_infer(task: str, png: bytes, prompt: Optional[str]) -> str:
         state["in_flight"] += 1
+        t0 = time.time()
+        ok = False
         try:
             _bump()
-            text = await pool.infer(body.task, png, prompt=body.prompt)
+            text = await pool.infer(task, png, prompt=prompt)
             _bump()
-            return {"text": text}
+            ok = True
+            return text
         except KeyError as e:
             raise HTTPException(400, str(e)) from e
         finally:
+            duration = time.time() - t0
+            metrics.record_infer(task, duration, ok)
             state["in_flight"] -= 1
+
+    @app.post("/infer", dependencies=[Depends(_require_token)])
+    async def infer(body: InferRequest) -> dict:
+        png = _decode_png(body.image_b64)
+        text = await _do_infer(body.task, png, body.prompt)
+        return {"text": text}
 
     @app.post("/ocr", dependencies=[Depends(_require_token)])
     async def ocr(body: OcrRequest) -> dict:
         png = _decode_png(body.image_b64)
-        state["in_flight"] += 1
-        try:
-            _bump()
-            text = await pool.infer("table", png, prompt=None)
-            _bump()
-            return {"text": text}
-        finally:
-            state["in_flight"] -= 1
+        text = await _do_infer("table", png, None)
+        return {"text": text}
 
     @app.post("/shutdown", dependencies=[Depends(_require_token)])
     async def shutdown() -> dict:
@@ -166,4 +182,6 @@ def create_app(cfg: Optional[RunnerConfig] = None,
     app.state.cfg = cfg
     app.state.pool = pool
     app.state.runner_state = state
+    app.state.audit = audit
+    app.state.metrics = metrics
     return app
