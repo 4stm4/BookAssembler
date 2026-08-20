@@ -49,6 +49,13 @@ class ManagerConfig:
     # Queue / back-pressure
     max_queue: int = _env_int("KAE_MANAGER_MAX_QUEUE", 8)
 
+    # Announce endpoint hardening (RFC 0022 §5.2)
+    # `announce_allow_local`: accept loopback/private URLs (dev/tests only).
+    announce_allow_local: bool = os.environ.get(
+        "KAE_MANAGER_ANNOUNCE_ALLOW_LOCAL", "0") == "1"
+    # Minimum seconds between accepted announce calls (rate limit against spam).
+    announce_min_interval: int = _env_int("KAE_MANAGER_ANNOUNCE_MIN_INTERVAL", 2)
+
     # Roles this managed agent declares to KAE (surfaced in /health).
     roles: List[str] = field(default_factory=lambda: _env_list(
         "KAE_MANAGER_ROLES", ["table", "formula", "vision"],
