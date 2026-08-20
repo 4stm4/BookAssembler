@@ -277,6 +277,7 @@ export interface KRMNode {
   page_index?: number;
   page_end?: number;
   page_role?: string;
+  metadata?: Record<string, any>;
   caption_text?: string;
   labels?: Array<{ text: string; x0: number; y0: number; x1: number; y1: number }>;
   bbox?: [number, number, number, number];
