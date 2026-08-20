@@ -2,7 +2,15 @@
 
 | Status | Version | Date | Author |
 |---|---|---|---|
-| Draft | 1.0.0 | 2026-08-20 | Core Architecture Team |
+| Accepted | 1.0.0 | 2026-08-20 | Core Architecture Team |
+
+> **Implementation:** all 7 stages from §10 complete. Manager and Runner services
+> live in `src/agents/{manager,runner}`; KaggleKernelBackend in
+> `src/agents/manager/backends/kaggle.py`; kernel notebook in
+> `colab/kaggle-runner/`; KAE agent-manager routes `kind='managed'` via
+> `src/agents/router.probe_managed()`. Regression suite: 80 unit tests
+> (`tests/unit/test_agent_*.py`), no prod deploy required by this RFC — it
+> unlocks Kaggle-hosted GPU when the operator boots the Runner notebook.
 
 ---
 
@@ -253,17 +261,29 @@ Manager агрегирует и считает **GPU-минуты** (кумул�
 
 ## 10. План реализации (по этапам)
 
-1. **`src/agents/manager/`** — Manager как отдельный сервис (FastAPI), запускается
-   `python -m src.agents.manager` или Docker; конфиг через env.
-2. **`src/agents/runner/`** — Runner: пул моделей + HTTP + idle-таймер (можно из
-   существующего `kae_multimodel_agent.ipynb` вынести код в `.py` модуль,
-   ноутбук просто импортит и запускает).
-3. **`KaggleKernelBackend`** через `kaggle` CLI/API.
-4. **Announce endpoint** на Manager'е (`POST /runner/announce`).
-5. **Auth + метрики + аудит-события**.
-6. **UI**: добавить `kind=managed` бейдж и индикатор состояния Runner'а в
-   менеджере агентов.
-7. **RFC-соответствие**: обновить `COMPLIANCE_AUDIT.md` — добавить строку про 0022.
+1. ✅ **`src/agents/manager/`** (commit `509b0e7`) — FastAPI, `python -m
+   src.agents.manager`, env-driven config, state machine, orchestrator,
+   Bearer auth, Prometheus `/metrics`, 8 tests.
+2. ✅ **`src/agents/runner/`** (commit `81ccbd3`) — model pool with lazy load
+   and LRU-eviction under a VRAM budget, warmup → `/ready`, idle watchdog
+   (`os._exit(0)`), push announce, 14 tests.
+3. ✅ **`KaggleKernelBackend`** (commit `ed57a6b`) via the `kaggle` Python
+   API (optional runtime dep, lazy import); `colab/kaggle-runner/`
+   kernel-metadata + runner.ipynb; 8 tests.
+4. ✅ **Announce hardening** (commit `70a3459`) — URL validation
+   (no loopback/private/link-local unless `allow_local`), same-URL
+   idempotency, distinct-URL rate limit, Runner-side retry with
+   exponential backoff and 4xx early stop; 29 tests.
+5. ✅ **Audit + метрики** (commit `568b876`) — shared `AgentAudit`
+   (hash-chained JSONL, RFC 0020 format) with typed event helpers on both
+   Manager and Runner; extended Prometheus counters
+   (`kae_auth_fail_total`, `kae_announce_{total,rejected_total}`,
+   `kae_runner_*`); 10 tests.
+6. ✅ **UI `kind=managed`** (commit `dffc708`) — MANAGED badge + live
+   Runner-state indicator in the agent-manager modal; router refuses to
+   route to a managed agent whose Runner isn't UP; 5 tests.
+7. ✅ **RFC compliance** — this file's status flipped Draft → Accepted;
+   `COMPLIANCE_AUDIT.md` marks 0022 as ✅.
 
-Разбиение на этапы **обязательно**: до конца п.1-4 никакого прод-деплоя (иначе
-получим костыль вместо архитектуры — см. `feedback_quality_over_speed`).
+Разбиение на этапы было соблюдено: до конца этапа 4 ни один Manager/Runner
+не деплоился в прод (см. `feedback_quality_over_speed`).

@@ -38,7 +38,7 @@ Representation Model (KRM)** — дерево типизированных бл�
 | **Перевод** | Постраничный фоновый перевод через ollama; источник не мутируется, lineage (RFC 0021) | ✅ |
 | **Сборка книги** | XeLaTeX в Docker (кириллица) + `kae.lock`/`book.json` + `.kap` bundle (RFC 0012/0013) | ✅ |
 | **Векторизация схем** | Скан-схема → TikZ: CV (OpenCV) + vision-LLM (RFC 0011 `tikz_vectorization`) | 🧪 эксперим. |
-| **GPU Runner-оркестрация** | Двухуровневый агент (Manager+Runner) для on-demand GPU и экономии Kaggle-квоты (RFC 0022) | 📋 спроектирован |
+| **GPU Runner-оркестрация** | Двухуровневый агент (Manager+Runner) для on-demand GPU и экономии Kaggle-квоты (RFC 0022): `src/agents/{manager,runner}` + KaggleKernelBackend + UI `kind=managed`; 80 unit-тестов | ✅ |
 | **SEP-хранилища** | LocalFS (NVMe) рабочий; S3/MinIO, WebDAV, GoogleDrive — классы-заготовки | 🔶 частично |
 
 ---
