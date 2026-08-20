@@ -56,3 +56,4 @@ class ManagerConfig:
 
     # Kaggle-backend specifics (used only when backend="kaggle").
     kaggle_kernel: str = os.environ.get("KAE_KAGGLE_KERNEL", "")           # "<user>/<slug>"
+    kaggle_kernel_dir: str = os.environ.get("KAE_KAGGLE_KERNEL_DIR", "")   # local folder
