@@ -54,8 +54,14 @@ def _decode_png(image_b64: str) -> bytes:
 
 
 def _pick_backend(cfg: ManagerConfig) -> RunnerBackend:
-    # Only ManualBackend is real yet; other backends land in Stage 3 (RFC 0022 §10).
-    return ManualBackend()
+    kind = (cfg.backend or "manual").lower()
+    if kind == "manual":
+        return ManualBackend()
+    if kind == "kaggle":
+        # Imported lazily — the `kaggle` package is an optional runtime dep.
+        from src.agents.manager.backends.kaggle import KaggleKernelBackend
+        return KaggleKernelBackend(kernel=cfg.kaggle_kernel, kernel_dir=cfg.kaggle_kernel_dir)
+    raise ValueError(f"Unknown backend: {cfg.backend!r}")
 
 
 def create_app(cfg: Optional[ManagerConfig] = None) -> FastAPI:
