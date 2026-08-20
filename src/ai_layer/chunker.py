@@ -33,6 +33,7 @@ from src.krm.models import (
     ParagraphBlock,
     TableBlock,
     TextLineInline,
+    TocEntryBlock,
     WarningSpec,
 )
 
@@ -100,6 +101,15 @@ def _extract_text_from_node(node: BaseKRMNode) -> str:
 
     elif isinstance(node, WarningSpec):
         return f"[{node.severity.upper()}]: {node.message_text}"
+
+    elif isinstance(node, TocEntryBlock):
+        left = (
+            f"{node.chapter_number} {node.entry_text}"
+            if node.chapter_number
+            else node.entry_text
+        )
+        right = f" … p.{node.target_page + 1}" if isinstance(node.target_page, int) else ""
+        return (left + right).strip()
 
     elif isinstance(node, ListBlock):
         # Render as markdown list — RFC 0007 §5.2 atomic (kept together).

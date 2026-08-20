@@ -70,6 +70,7 @@ from src.krm.models import (
     ListBlock,
     ListItemBlock,
     ParagraphBlock,
+    TocEntryBlock,
     StyledTextSpan,
     TableBlock,
     TableCell,
@@ -424,6 +425,22 @@ def create_app() -> FastAPI:
                 if vl and hasattr(vl, "page_or_screen_index"):
                     result["page_index"] = vl.page_or_screen_index
                 return result
+            elif isinstance(node, TocEntryBlock):
+                result = {
+                    "id": node.id,
+                    "type": "TocEntryBlock",
+                    "text": node.entry_text,
+                    "chapter_number": node.chapter_number,
+                    "target_page": node.target_page,
+                    "anchor_id": node.anchor_id,
+                    "confidence_score": node.confidence_score,
+                    "extraction_confidence": node.extraction_confidence,
+                    "classification_confidence": node.classification_confidence,
+                }
+                vl = getattr(node, "visual_layout", None)
+                if vl and hasattr(vl, "page_or_screen_index"):
+                    result["page_index"] = vl.page_or_screen_index
+                return result
             elif isinstance(node, ListBlock):
                 result = {
                     "id": node.id,
@@ -632,6 +649,17 @@ def create_app() -> FastAPI:
                 cap.id = n.get("id", cap.id)
                 _restore_layout(cap, n)
                 return cap
+            elif t == "TocEntryBlock":
+                te = TocEntryBlock(
+                    entry_text=n.get("text", ""),
+                    chapter_number=n.get("chapter_number"),
+                    target_page=n.get("target_page"),
+                    anchor_id=n.get("anchor_id"),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                te.id = n.get("id", te.id)
+                _restore_layout(te, n)
+                return te
             elif t == "ListBlock":
                 items: List[ListItemBlock] = []
                 for it in n.get("items", []):
@@ -1975,8 +2003,12 @@ def create_app() -> FastAPI:
             new.classification_confidence = 0.95
             new.confidence_score = 0.95
             for e in entries:
-                item = ParagraphBlock(
-                    inlines=[TextLineInline(spans=[StyledTextSpan(text=e["display"])])],
+                target_page = e["target_page"]
+                zero_based = target_page - 1 if isinstance(target_page, int) else None
+                item = TocEntryBlock(
+                    entry_text=e["display"],
+                    chapter_number=e["number"],
+                    target_page=zero_based,
                     visual_layout=VisualLayout(bounding_box=region, page_or_screen_index=page),
                     extraction_confidence=0.95,
                     classification_confidence=0.95,
@@ -1985,8 +2017,7 @@ def create_app() -> FastAPI:
                 item.metadata = {
                     "llm_suggested_type": "toc_entry",
                     "llm_source": "PageAgent",
-                    "toc": {"level": e["level"], "number": e["number"],
-                            "title": e["title"], "target_page": e["target_page"]},
+                    "toc": {"level": e["level"], "title": e["title"]},
                 }
                 new.children.append(item)
             parent.children.insert(min(first_idx, len(parent.children)), new)
