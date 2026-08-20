@@ -260,7 +260,7 @@ export class KAEApiClient {
     return res.json();
   }
 
-  async getAgentConfig(): Promise<{ agents: Array<{ name: string; host: string; kind?: string; roles?: string[]; models: string[]; active_model: string; available: boolean }> }> {
+  async getAgentConfig(): Promise<{ agents: Array<{ name: string; host: string; kind?: string; roles?: string[]; models: string[]; active_model: string; available: boolean; runner?: string; runner_url?: string; queue_depth?: number }> }> {
     const res = await fetch(`${API_BASE}/agents/config`);
     if (!res.ok) throw new Error(`Failed to get agent config: ${res.statusText}`);
     return res.json();

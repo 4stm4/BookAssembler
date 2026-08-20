@@ -1515,19 +1515,30 @@ def create_app() -> FastAPI:
             return False, []
 
     def _probe_agent(host: str, kind: str) -> tuple:
-        """Health-check an agent. ollama: /api/tags → models; got-ocr/multimodel:
-        /health → declared tasks (used as the 'models' list in the UI)."""
-        if kind in ("got-ocr", "multimodel"):
+        """Health-check an agent.
+        Returns (available, models, extra) where extra is any additional health
+        payload (for kind=managed: {runner, runner_url, queue_depth}).
+        """
+        if kind in ("got-ocr", "multimodel", "managed"):
             import urllib.request
             try:
                 req = urllib.request.Request(f"{host}/health")
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     data = json.loads(resp.read())
                     tasks = data.get("tasks") or [data.get("model", kind)]
-                    return True, tasks
+                    extra = {}
+                    if kind == "managed":
+                        # Surface RFC 0022 §4.1 fields for UI (Stage 6).
+                        extra = {
+                            "runner": data.get("runner"),
+                            "runner_url": data.get("runner_url"),
+                            "queue_depth": data.get("queue_depth"),
+                        }
+                    return True, tasks, extra
             except Exception:
-                return False, []
-        return _probe_ollama(host)
+                return False, [], {}
+        ok, models = _probe_ollama(host)
+        return ok, models, {}
 
     @app.get("/api/v1/agents/config")
     async def get_agents_config() -> Dict[str, Any]:
@@ -1535,11 +1546,11 @@ def create_app() -> FastAPI:
         result = []
         for h in saved:
             kind = h.get("kind", "ollama")
-            available, models = _probe_agent(h["host"], kind)
+            available, models, extra = _probe_agent(h["host"], kind)
             active = h.get("active_model", "")
             if available and active and active not in models:
                 active = models[0] if models else ""
-            result.append({
+            entry = {
                 "name": h["name"],
                 "host": h["host"],
                 "kind": kind,
@@ -1547,7 +1558,9 @@ def create_app() -> FastAPI:
                 "models": models,
                 "active_model": active,
                 "available": available,
-            })
+            }
+            entry.update({k: v for k, v in extra.items() if v is not None})
+            result.append(entry)
         return {"agents": result}
 
     class AgentCreateRequest(BaseModel):
@@ -1587,8 +1600,9 @@ def create_app() -> FastAPI:
         for a in cfg:
             if role in (a.get("roles") or []):
                 kind = a.get("kind", "ollama")
-                available, models = _probe_agent(a["host"], kind)
-                if available:
+                available, models, extra = _probe_agent(a["host"], kind)
+                # For managed: only route when the underlying Runner is UP.
+                if available and (kind != "managed" or extra.get("runner") == "up"):
                     model = a.get("active_model") or (models[0] if models else None)
                     return a["host"], model, kind
         # Fallback: any reachable ollama agent (keeps old behaviour working).
