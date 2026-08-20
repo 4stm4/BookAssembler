@@ -1,0 +1,212 @@
+# Карта сущностей KRM: объявлено vs используется vs пропущено
+
+| Статус | Версия | Дата |
+|---|---|---|
+| Draft | 0.1.0 | 2026-08-20 |
+
+Инвентаризация всех типов узлов Knowledge Representation Model (см. RFC 0002) —
+что объявлено в `src/krm/models.py`, что реально создаётся в пайплайне (и кем),
+и чего пока не хватает для честного покрытия структуры технической книги.
+
+**Легенда:**
+- ✅ — объявлен и создаётся хотя бы одним анализатором/адаптером
+- ⚠️ — объявлен, но никто его не создаёт (мёртвый тип)
+- ❌ — тип отсутствует, семантика «размазана» по строковым флагам или ParagraphBlock
+
+---
+
+## 1. Слой Layout / Meta
+
+| Тип | Статус | Кем создаётся |
+|---|---|---|
+| `NormalizedRect` | ✅ | все адаптеры и анализаторы через `VisualLayout.bounding_box` |
+| `StyleDescriptor` | ✅ | `PdfSourceAdapter` (шрифт/кегль/жир/курсив/цвет) |
+| `VisualLayout` | ✅ | адаптеры |
+| `ProvenanceInfo` | ✅ | `PipelineRunner` (RFC 0005 §5) |
+
+## 2. Слой Inline (`SpanUnit`, `InlineUnit`)
+
+| Тип | Статус | Кем создаётся / почему нет |
+|---|---|---|
+| `StyledTextSpan` | ✅ | `PdfSourceAdapter` (`pdf_adapter.py:318`) |
+| `TextLineInline` | ✅ | `PdfSourceAdapter` (`pdf_adapter.py:328`) |
+| `EntityMentionSpan` | ⚠️ | `EntityExtractor` вместо создания span'а пишет `entity_mentions` в `span.metadata` |
+| `FootnoteRefSpan` | ⚠️ | нет детектора сносок |
+| `MathInline` | ⚠️ | нет детектора inline-формул |
+
+## 3. Слой Structural (`StructuralUnit`)
+
+| Тип | Статус | Кем создаётся / почему нет |
+|---|---|---|
+| `ParagraphBlock` | ✅ | адаптеры (`pdf_adapter`, `text_markdown`) |
+| `TitlePageBlock` | ✅ | `TitlePageAnalyzer` |
+| `BlankPageBlock` | ✅ | `TitlePageAnalyzer` (`title_page.py:190`) |
+| `TableBlock` + `TableCell` | ✅ | `TableDetector`, `PageAgent` (пересборка LaTeX) |
+| `FigureBlock` | ✅ | `PdfSourceAdapter` (`pdf_adapter.py:224`) |
+| `DiagramBlock` | ✅ | `DiagramDetectorAnalyzer` |
+| `CodeBlock` | ✅ | `PdfSourceAdapter`, `text_markdown` |
+| `CaptionBlock` | ✅ | `CaptionAnalyzer` |
+| `FormulaBlock` | ⚠️ | сериализация есть (`api/app.py`), сборка (`latex_builder`) и чанкер знают, **но ни один анализатор не создаёт** — можно только через ручную правку в UI |
+| `InstructionSpec` | ⚠️ | `EntityExtractor` даёт KG-ноду `INSTRUCTION`, но не структурный блок |
+| `DefinitionSpec` | ⚠️ | чанкер учитывает как атомарный, но детектора нет |
+| `WarningSpec` | ⚠️ | то же самое |
+| `ListBlock` / `ListItemBlock` | ❌ | списки идут как обычные `ParagraphBlock` |
+| `FootnoteBlock` | ❌ | сноски теряются или ломают порядок чтения |
+| `CalloutBlock` (note/warning/tip) | ❌ | врезки в рамке не выделяются |
+| `SidebarBlock` | ❌ | боковой блок сливается с основным потоком |
+| `BibEntryBlock` | ❌ | библиография — обычные параграфы |
+| `IndexEntryBlock` | ❌ | предметный указатель — обычные параграфы |
+| `TocEntryBlock` | ❌ | сейчас `ContainerUnit(semantic_type='toc')` + дети `ParagraphBlock`; нет полей номер главы / целевая страница / якорь |
+| `AlgorithmBlock` | ❌ | псевдокод неотличим от `CodeBlock` |
+| `TheoremSpec` / `LemmaSpec` / `ProofSpec` / `ExampleSpec` / `RemarkSpec` | ❌ | нет семантических декораторов для математических/учебных структур |
+| `EphemeraBlock` (pagenum / running header / footer) | ❌ | сейчас автоматически tombstone'ятся `title_page` эвристикой, но своего типа нет |
+
+## 4. Слой Container
+
+| Тип | Статус | Комментарий |
+|---|---|---|
+| `ContainerUnit` (part/chapter/section/…) | ✅ | `HeadingAnalyzer` строит дерево |
+| `ContainerUnit(semantic_type='toc')` | ✅ | `BlockClassifier`, `PageAgent` (`block_classifier.py:228`) |
+| `ContainerUnit(semantic_type='example')` | ✅ | `CaptionAnalyzer` (`caption_analyzer.py:112`) |
+| `KnowledgeDocument` (root) | ✅ | адаптер |
+
+`semantic_type` — единственный на данный момент способ дать контейнеру
+подтип. Значения — свободные строки, документированного словаря нет.
+
+## 5. Knowledge Graph — типы сущностей (`EntityType`)
+
+| Тип | Статус | Комментарий |
+|---|---|---|
+| `REGISTER` | ✅ | regex на `R0..R15` в `EntityExtractor` |
+| `INSTRUCTION` | ✅ | regex на MOV/ADD/… в `EntityExtractor` |
+| `CONCEPT_TERM` | ✅ | hex-литералы, fallback |
+| `HARDWARE_COMPONENT` | ⚠️ | объявлен, детектора нет |
+| `FLAG` | ⚠️ | объявлен, детектора нет |
+| `SOFTWARE_API` | ⚠️ | объявлен, детектора нет |
+| `BIBLIOGRAPHY_CITE` | ⚠️ | объявлен, детектора нет |
+| `Person` / `Organization` / `Product` / `Signal` / `Date` / `Version` / `URL` / `Formula` / `Unit` | ❌ | не объявлены |
+
+## 6. Knowledge Graph — типы связей (`RelationType`)
+
+| Тип | Статус |
+|---|---|
+| `MENTIONS_ENTITY` | ✅ используется |
+| `REFERENCES` / `CAPTION_FOR` / `FOOTNOTE_FOR` / `CONTINUATION_OF` / `DEFINES_ENTITY` / `CONCRETIZES` / `EXEMPLIFIES` / `USES_REGISTER` / `AFFECTS_FLAG` / `PART_OF_ARCHITECTURE` | ⚠️ объявлены, никем не пишутся |
+| `authored_by` / `published_in` / `cites` / `version_of` / `alias_of` | ❌ отсутствуют |
+
+---
+
+## Целевая иерархия KRM
+
+```mermaid
+graph TD
+    Base["BaseKRMNode<br/>(id, visual_layout, confidence, tombstone, metadata)"]
+
+    Base --> Span["SpanUnit (inline фрагмент)"]
+    Span --> StyledSpan["StyledTextSpan ✅"]
+    Span --> MentionSpan["EntityMentionSpan ⚠️"]
+    Span --> FootRefSpan["FootnoteRefSpan ⚠️"]
+
+    Base --> Inline["InlineUnit"]
+    Inline --> TextLine["TextLineInline ✅"]
+    Inline --> MathInl["MathInline ⚠️"]
+
+    Base --> Struct["StructuralUnit (ABC)"]
+    Struct --> Para["ParagraphBlock ✅"]
+    Para --> Title["TitlePageBlock ✅"]
+    Struct --> ListB["ListBlock ❌"]
+    ListB --> ListIt["ListItemBlock ❌"]
+    Struct --> Table["TableBlock ✅"]
+    Struct --> Fig["FigureBlock ✅"]
+    Fig --> Diag["DiagramBlock ✅"]
+    Struct --> Code["CodeBlock ✅"]
+    Struct --> Formula["FormulaBlock ⚠️"]
+    Struct --> Cap["CaptionBlock ✅"]
+    Struct --> Blank["BlankPageBlock ✅"]
+    Struct --> Callout["CalloutBlock ❌<br/>note/warning/tip"]
+    Struct --> Foot["FootnoteBlock ❌"]
+    Struct --> BibE["BibEntryBlock ❌"]
+    Struct --> IdxE["IndexEntryBlock ❌"]
+    Struct --> TocE["TocEntryBlock ❌"]
+    Struct --> Algo["AlgorithmBlock ❌"]
+    Struct --> Eph["EphemeraBlock ❌<br/>pagenum/header/footer"]
+
+    Base --> Sem["SemanticUnit (декоратор ABC)"]
+    Sem --> Def["DefinitionSpec ⚠️"]
+    Sem --> Thm["TheoremSpec ❌"]
+    Sem --> Proof["ProofSpec ❌"]
+    Sem --> Ex["ExampleSpec ❌"]
+    Sem --> Rem["RemarkSpec ❌"]
+    Sem --> Instr["InstructionSpec ⚠️"]
+    Sem --> Warn["WarningSpec ⚠️"]
+
+    Base --> Cont["ContainerUnit<br/>(chapter/section/toc/example)"]
+    Cont --> Doc["KnowledgeDocument (root)"]
+
+    classDef ok fill:#dcfce7,stroke:#166534,color:#052e16
+    classDef warn fill:#fef9c3,stroke:#854d0e,color:#422006
+    classDef miss fill:#fee2e2,stroke:#991b1b,color:#450a0a
+    classDef abstract fill:#e0e7ff,stroke:#3730a3,color:#1e1b4b
+
+    class Base,Span,Inline,Struct,Sem,Cont abstract
+    class StyledSpan,TextLine,Para,Title,Table,Fig,Diag,Code,Cap,Blank,Doc ok
+    class MentionSpan,FootRefSpan,MathInl,Formula,Def,Instr,Warn warn
+    class ListB,ListIt,Callout,Foot,BibE,IdxE,TocE,Algo,Eph,Thm,Proof,Ex,Rem miss
+```
+
+---
+
+## Приоритетный план закрытия пробелов
+
+**P0 — сущности, из-за отсутствия которых теряется структура книги:**
+1. `ListBlock` / `ListItemBlock` (+ детектор в `HeadingAnalyzer` или отдельно) —
+   огромное количество техлитературы построено на списках; сейчас они
+   неотличимы от прозы.
+2. `TocEntryBlock` — сейчас в оглавлении хранится только текст, теряются
+   номера глав и целевые страницы (нужно для навигации и cross-refs).
+3. `FormulaBlock` — модель есть, нужен только детектор (можно эвристикой
+   «строка почти целиком в шрифте `cmmi/cmsy` + одинокая на строке»
+   или через vision-агента для сложных случаев).
+
+**P1 — сущности, размывающие семантику при переводе/сборке:**
+4. `CalloutBlock` (note/warning/tip) — сейчас теряется рамка; при сборке
+   XeLaTeX эти блоки должны идти через `tcolorbox`, а не как обычный
+   параграф.
+5. `FootnoteBlock` — при переводе сноски привязываются к странице-источнику,
+   без своего типа lineage провисает.
+6. `BibEntryBlock` — библиография — отдельная сущность для cross-ref из
+   `RelationType.cites` (сейчас нет).
+
+**P2 — семантические декораторы для математического текста:**
+7. `TheoremSpec` / `ProofSpec` / `ExampleSpec` / `RemarkSpec` — расширение
+   `SemanticUnit`; детектор — эвристикой по заголовкам «Теорема N.M», «□»
+   в конце proof, «Пример N».
+8. Расширение `EntityType` — `Person`, `Organization`, `Product`,
+   `BibliographyCite` (уже объявлен, но не пишется), `Signal`, `Formula`.
+
+**P3 — служебное:**
+9. `EphemeraBlock` вместо неявного tombstone — явный тип для колонтитулов
+   и номеров страниц (сейчас логика размазана по `TitlePageAnalyzer`).
+10. `AlgorithmBlock` — специализация `CodeBlock` для нумерованного
+    псевдокода (стандарт `algorithmicx` в LaTeX-сборке).
+
+## Что делать со «⚠️ объявлено, не создаётся»
+
+Три варианта, в порядке предпочтения:
+- **добавить анализатор** (для `FormulaBlock`, `DefinitionSpec`, `WarningSpec` — это правильный путь);
+- **удалить неиспользуемый тип** (если целесообразности нет — например,
+  `FootnoteRefSpan` можно оставить как атрибут `metadata['footnote_id']` у
+  span'а, а сам класс убрать);
+- **переиспользовать** (`InstructionSpec` — либо детектор, либо явно снести
+  и полагаться только на KG-ноду).
+
+Решение принимать по каждому пункту отдельно после закрытия P0/P1.
+
+---
+
+## Связанные RFC
+
+- [RFC 0002 — KRM](0002-krm.md) — контракт типов
+- [RFC 0003 — Knowledge Graph](0003-knowledge-graph.md) — `EntityType` / `RelationType`
+- [RFC 0008 — Source Adapters](0008-source-adapters.md) — правило «адаптер без бизнес-логики»
+- [COMPLIANCE_AUDIT.md](COMPLIANCE_AUDIT.md) — общая карта соответствия
