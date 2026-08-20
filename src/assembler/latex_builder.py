@@ -19,6 +19,7 @@ from src.krm.models import (
     ContainerUnit,
     FigureBlock,
     KnowledgeDocument,
+    FormulaBlock,
     ListBlock,
     ListItemBlock,
     ParagraphBlock,
@@ -35,6 +36,7 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 \usepackage{polyglossia}
 \setdefaultlanguage{russian}
 \setotherlanguage{english}
+\usepackage{amsmath}
 \usepackage{graphicx}
 \usepackage[a4paper,margin=2.2cm]{geometry}
 \usepackage{sectsty}
@@ -147,6 +149,26 @@ def build_latex(doc: KnowledgeDocument, target_lang: str = "") -> str:
             cap = _esc(_translated(node, node.caption_text or "", target_lang))
             if cap:
                 body.append(f"\\textit{{{cap}}}\n\n")
+        elif isinstance(node, FormulaBlock):
+            # Prefer real LaTeX if a vision agent replaced the fallback.
+            latex = (node.latex_expression or "").strip()
+            md = getattr(node, "metadata", None) or {}
+            has_real_latex = not md.get("needs_vision_ocr", False)
+            if has_real_latex and latex:
+                if node.is_numbered:
+                    tag = _esc(node.formula_number or "")
+                    body.append(f"\\begin{{equation}}\\tag{{{tag}}}\n{latex}\n\\end{{equation}}\n")
+                else:
+                    body.append(f"\\[\n{latex}\n\\]\n")
+            elif latex:
+                # OCR fallback — no guarantee the text is valid LaTeX. Wrap
+                # as \text{} inside display math so xelatex doesn't blow up.
+                safe = _esc(latex)
+                if node.is_numbered:
+                    tag = _esc(node.formula_number or "")
+                    body.append(f"\\begin{{equation}}\\tag{{{tag}}}\n\\text{{{safe}}}\n\\end{{equation}}\n")
+                else:
+                    body.append(f"\\[\n\\text{{{safe}}}\n\\]\n")
         elif isinstance(node, TocEntryBlock):
             num = _esc(node.chapter_number or "")
             title = _esc(_translated(node, node.entry_text, target_lang))

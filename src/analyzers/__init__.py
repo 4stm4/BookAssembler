@@ -17,6 +17,7 @@ from src.analyzers.block_classifier import BlockClassifierAnalyzer
 from src.analyzers.caption_analyzer import CaptionAnalyzer
 from src.analyzers.diagram_detector import DiagramDetectorAnalyzer
 from src.analyzers.entity_extractor import EntityExtractorAnalyzer
+from src.analyzers.formula_detector import FormulaDetectorAnalyzer
 from src.analyzers.llm_refinement import LLMRefinementAnalyzer
 from src.analyzers.heading import HeadingAnalyzer
 from src.analyzers.list_detector import ListDetectorAnalyzer
@@ -35,6 +36,7 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         DiagramDetectorAnalyzer(),
         HeadingAnalyzer(),
         ListDetectorAnalyzer(),
+        FormulaDetectorAnalyzer(),
         TitlePageAnalyzer(),
         TableDetectorAnalyzer(),
         # Ask a vision agent about table-like pages TableDetector missed
@@ -53,6 +55,7 @@ __all__ = [
     "BlockClassifierAnalyzer",
     "CaptionAnalyzer",
     "EntityExtractorAnalyzer",
+    "FormulaDetectorAnalyzer",
     "HeadingAnalyzer",
     "KGPermission",
     "LLMRefinementAnalyzer",
