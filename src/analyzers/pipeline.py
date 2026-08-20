@@ -37,6 +37,7 @@ from src.graph.reading_graph import (
 )
 from src.krm.models import (
     BaseKRMNode,
+    CalloutBlock,
     ContainerUnit,
     InlineUnit,
     KnowledgeDocument,
@@ -296,6 +297,9 @@ class PipelineRunner:
         elif isinstance(node, ListItemBlock):
             for block in node.content:
                 self._record_provenance_recursive(block, analyzer_name)
+        elif isinstance(node, CalloutBlock):
+            for block in node.content:
+                self._record_provenance_recursive(block, analyzer_name)
         elif isinstance(node, InlineUnit):
             for span in node.spans:
                 self._record_provenance_recursive(span, analyzer_name)
@@ -381,6 +385,9 @@ class PipelineRunner:
                 for item in node.items:
                     walk(item)
             elif isinstance(node, ListItemBlock):
+                for block in node.content:
+                    walk(block)
+            elif isinstance(node, CalloutBlock):
                 for block in node.content:
                     walk(block)
 

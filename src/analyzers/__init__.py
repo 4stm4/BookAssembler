@@ -14,6 +14,7 @@ from src.analyzers.base import (
     SecurityViolationError,
 )
 from src.analyzers.block_classifier import BlockClassifierAnalyzer
+from src.analyzers.callout_detector import CalloutDetectorAnalyzer
 from src.analyzers.caption_analyzer import CaptionAnalyzer
 from src.analyzers.diagram_detector import DiagramDetectorAnalyzer
 from src.analyzers.entity_extractor import EntityExtractorAnalyzer
@@ -37,6 +38,7 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         HeadingAnalyzer(),
         ListDetectorAnalyzer(),
         FormulaDetectorAnalyzer(),
+        CalloutDetectorAnalyzer(),
         TitlePageAnalyzer(),
         TableDetectorAnalyzer(),
         # Ask a vision agent about table-like pages TableDetector missed
@@ -53,6 +55,7 @@ __all__ = [
     "AnalyzerManifest",
     "BaseAnalyzer",
     "BlockClassifierAnalyzer",
+    "CalloutDetectorAnalyzer",
     "CaptionAnalyzer",
     "EntityExtractorAnalyzer",
     "FormulaDetectorAnalyzer",

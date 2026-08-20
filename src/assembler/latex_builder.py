@@ -14,6 +14,7 @@ from typing import Any, List
 
 from src.krm.models import (
     BlankPageBlock,
+    CalloutBlock,
     CaptionBlock,
     CodeBlock,
     ContainerUnit,
@@ -38,6 +39,7 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 \setotherlanguage{english}
 \usepackage{amsmath}
 \usepackage{graphicx}
+\usepackage[framemethod=default]{mdframed}
 \usepackage[a4paper,margin=2.2cm]{geometry}
 \usepackage{sectsty}
 \setmainfont{DejaVu Serif}
@@ -149,6 +151,14 @@ def build_latex(doc: KnowledgeDocument, target_lang: str = "") -> str:
             cap = _esc(_translated(node, node.caption_text or "", target_lang))
             if cap:
                 body.append(f"\\textit{{{cap}}}\n\n")
+        elif isinstance(node, CalloutBlock):
+            label = _esc(_translated(node, node.label or node.kind.title(), target_lang))
+            body.append("\\begin{mdframed}\n")
+            if label:
+                body.append(f"\\textbf{{{label}}}\\\\[0.2em]\n")
+            for child in node.content:
+                render(child, depth + 1)
+            body.append("\\end{mdframed}\n")
         elif isinstance(node, FormulaBlock):
             # Prefer real LaTeX if a vision agent replaced the fallback.
             latex = (node.latex_expression or "").strip()

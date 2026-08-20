@@ -280,6 +280,28 @@ class ListItemBlock(StructuralUnit):
 
 
 @dataclass
+class CalloutBlock(StructuralUnit):
+    """
+    Boxed callout / admonition / notice — the kind of block that a book
+    prints inside a coloured frame ("Note", "Warning", "Tip", "Caution",
+    "Important", «Внимание», «Замечание»).
+
+    The assembler renders this via `mdframed`/`tcolorbox` so the visual
+    frame survives the round-trip instead of collapsing into prose.
+
+    * kind     — normalized label: 'note', 'warning', 'tip', 'important', 'caution'
+    * severity — 'info' | 'warning' | 'critical' (mirrors WarningSpec.severity
+                 so downstream renderers can pick a color)
+    * label    — original label as printed in the source ("Warning", «Внимание!»)
+    * content  — nested structural blocks (paragraphs, lists, code, …)
+    """
+    kind: str = "note"
+    severity: str = "info"
+    label: str = ""
+    content: List["StructuralUnit"] = field(default_factory=list)
+
+
+@dataclass
 class TocEntryBlock(StructuralUnit):
     """
     Single entry in a table of contents.
