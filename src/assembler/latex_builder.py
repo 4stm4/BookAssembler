@@ -19,6 +19,7 @@ from src.krm.models import (
     CodeBlock,
     ContainerUnit,
     FigureBlock,
+    FootnoteBlock,
     KnowledgeDocument,
     FormulaBlock,
     ListBlock,
@@ -151,6 +152,15 @@ def build_latex(doc: KnowledgeDocument, target_lang: str = "") -> str:
             cap = _esc(_translated(node, node.caption_text or "", target_lang))
             if cap:
                 body.append(f"\\textit{{{cap}}}\n\n")
+        elif isinstance(node, FootnoteBlock):
+            # We don't have inline references reliably; render as a plain
+            # small-font \footnotetext at the current position so the note
+            # itself is preserved even if the inline superscript is lost.
+            text = _esc(_translated(node, node.text, target_lang))
+            marker = _esc(node.marker) if node.marker else ""
+            body.append(
+                f"\\par\\noindent{{\\footnotesize {marker} {text}}}\\par\n"
+            )
         elif isinstance(node, CalloutBlock):
             label = _esc(_translated(node, node.label or node.kind.title(), target_lang))
             body.append("\\begin{mdframed}\n")

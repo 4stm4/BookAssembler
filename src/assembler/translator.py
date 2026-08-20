@@ -18,6 +18,7 @@ from src.krm.models import (
     CaptionBlock,
     CodeBlock,
     ContainerUnit,
+    FootnoteBlock,
     KnowledgeDocument,
     ListBlock,
     ListItemBlock,
@@ -45,6 +46,8 @@ def _get_block_text(block: Any) -> str:
         return (block.caption_text or "").strip()
     if isinstance(block, CodeBlock):
         return (block.code_text or "").strip()
+    if isinstance(block, FootnoteBlock):
+        return (block.text or "").strip()
     return ""
 
 
@@ -120,6 +123,9 @@ def _collect_translatable(container: Any, result: list) -> None:
     elif isinstance(container, CalloutBlock):
         for child in container.content:
             _collect_translatable(child, result)
+    elif isinstance(container, FootnoteBlock):
+        if container.text and len(container.text) > 2:
+            result.append(("footnote", container))
 
 
 def translate_and_assemble(
@@ -150,6 +156,8 @@ def translate_and_assemble(
             original = _get_block_text(block)
         elif kind == "caption":
             original = block.caption_text
+        elif kind == "footnote":
+            original = block.text
         else:
             original = ""
 

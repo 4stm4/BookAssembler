@@ -25,6 +25,7 @@ from src.krm.models import (
     ContainerUnit,
     DefinitionSpec,
     FigureBlock,
+    FootnoteBlock,
     FormulaBlock,
     InstructionSpec,
     KnowledgeDocument,
@@ -112,6 +113,10 @@ def _extract_text_from_node(node: BaseKRMNode) -> str:
         right = f" … p.{node.target_page + 1}" if isinstance(node.target_page, int) else ""
         return (left + right).strip()
 
+    elif isinstance(node, FootnoteBlock):
+        marker = node.marker or (str(node.footnote_number) if node.footnote_number else "")
+        return f"[footnote {marker}] {node.text}".strip()
+
     elif isinstance(node, CalloutBlock):
         label = node.label or node.kind.title()
         parts: List[str] = []
@@ -165,6 +170,8 @@ def _get_node_chunk_type_and_lang(node: BaseKRMNode) -> Tuple[str, Optional[str]
         return "list", node.list_style
     elif isinstance(node, CalloutBlock):
         return "callout", node.kind
+    elif isinstance(node, FootnoteBlock):
+        return "footnote", node.marker or (str(node.footnote_number or ""))
     elif isinstance(node, ParagraphBlock):
         return "narrative", None
     return "narrative", None
@@ -186,6 +193,7 @@ def _is_atomic_block(node: BaseKRMNode) -> bool:
             WarningSpec,
             ListBlock,
             CalloutBlock,
+            FootnoteBlock,
         ),
     )
 
