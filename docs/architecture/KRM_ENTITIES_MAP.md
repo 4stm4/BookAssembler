@@ -2,7 +2,7 @@
 
 | Статус | Версия | Дата |
 |---|---|---|
-| Draft | 0.1.0 | 2026-08-20 |
+| Draft | 0.2.0 | 2026-08-20 |
 
 Инвентаризация всех типов узлов Knowledge Representation Model (см. RFC 0002) —
 что объявлено в `src/krm/models.py`, что реально создаётся в пайплайне (и кем),
@@ -46,17 +46,17 @@
 | `DiagramBlock` | ✅ | `DiagramDetectorAnalyzer` |
 | `CodeBlock` | ✅ | `PdfSourceAdapter`, `text_markdown` |
 | `CaptionBlock` | ✅ | `CaptionAnalyzer` |
-| `FormulaBlock` | ⚠️ | сериализация есть (`api/app.py`), сборка (`latex_builder`) и чанкер знают, **но ни один анализатор не создаёт** — можно только через ручную правку в UI |
+| `FormulaBlock` | ✅ | `FormulaDetectorAnalyzer` (эвристика: math-font или ≥15% math-символов; заглушку заменит vision-OCR) |
+| `ListBlock` / `ListItemBlock` | ✅ | `ListDetectorAnalyzer` (маркеры •/-/1./a)/iv.) |
+| `TocEntryBlock` | ✅ | `BlockClassifierAnalyzer` + PageAgent (парсит номер главы и целевую страницу; `_link_toc_anchors` привязывает к контейнерам заголовков) |
 | `InstructionSpec` | ⚠️ | `EntityExtractor` даёт KG-ноду `INSTRUCTION`, но не структурный блок |
 | `DefinitionSpec` | ⚠️ | чанкер учитывает как атомарный, но детектора нет |
 | `WarningSpec` | ⚠️ | то же самое |
-| `ListBlock` / `ListItemBlock` | ❌ | списки идут как обычные `ParagraphBlock` |
 | `FootnoteBlock` | ❌ | сноски теряются или ломают порядок чтения |
 | `CalloutBlock` (note/warning/tip) | ❌ | врезки в рамке не выделяются |
 | `SidebarBlock` | ❌ | боковой блок сливается с основным потоком |
 | `BibEntryBlock` | ❌ | библиография — обычные параграфы |
 | `IndexEntryBlock` | ❌ | предметный указатель — обычные параграфы |
-| `TocEntryBlock` | ❌ | сейчас `ContainerUnit(semantic_type='toc')` + дети `ParagraphBlock`; нет полей номер главы / целевая страница / якорь |
 | `AlgorithmBlock` | ❌ | псевдокод неотличим от `CodeBlock` |
 | `TheoremSpec` / `LemmaSpec` / `ProofSpec` / `ExampleSpec` / `RemarkSpec` | ❌ | нет семантических декораторов для математических/учебных структур |
 | `EphemeraBlock` (pagenum / running header / footer) | ❌ | сейчас автоматически tombstone'ятся `title_page` эвристикой, но своего типа нет |
@@ -114,20 +114,20 @@ graph TD
     Base --> Struct["StructuralUnit (ABC)"]
     Struct --> Para["ParagraphBlock ✅"]
     Para --> Title["TitlePageBlock ✅"]
-    Struct --> ListB["ListBlock ❌"]
-    ListB --> ListIt["ListItemBlock ❌"]
+    Struct --> ListB["ListBlock ✅"]
+    ListB --> ListIt["ListItemBlock ✅"]
     Struct --> Table["TableBlock ✅"]
     Struct --> Fig["FigureBlock ✅"]
     Fig --> Diag["DiagramBlock ✅"]
     Struct --> Code["CodeBlock ✅"]
-    Struct --> Formula["FormulaBlock ⚠️"]
+    Struct --> Formula["FormulaBlock ✅"]
     Struct --> Cap["CaptionBlock ✅"]
     Struct --> Blank["BlankPageBlock ✅"]
     Struct --> Callout["CalloutBlock ❌<br/>note/warning/tip"]
     Struct --> Foot["FootnoteBlock ❌"]
     Struct --> BibE["BibEntryBlock ❌"]
     Struct --> IdxE["IndexEntryBlock ❌"]
-    Struct --> TocE["TocEntryBlock ❌"]
+    Struct --> TocE["TocEntryBlock ✅"]
     Struct --> Algo["AlgorithmBlock ❌"]
     Struct --> Eph["EphemeraBlock ❌<br/>pagenum/header/footer"]
 
@@ -150,23 +150,26 @@ graph TD
 
     class Base,Span,Inline,Struct,Sem,Cont abstract
     class StyledSpan,TextLine,Para,Title,Table,Fig,Diag,Code,Cap,Blank,Doc ok
-    class MentionSpan,FootRefSpan,MathInl,Formula,Def,Instr,Warn warn
-    class ListB,ListIt,Callout,Foot,BibE,IdxE,TocE,Algo,Eph,Thm,Proof,Ex,Rem miss
+    class ListB,ListIt,Formula,TocE ok
+    class MentionSpan,FootRefSpan,MathInl,Def,Instr,Warn warn
+    class Callout,Foot,BibE,IdxE,Algo,Eph,Thm,Proof,Ex,Rem miss
 ```
 
 ---
 
 ## Приоритетный план закрытия пробелов
 
-**P0 — сущности, из-за отсутствия которых теряется структура книги:**
-1. `ListBlock` / `ListItemBlock` (+ детектор в `HeadingAnalyzer` или отдельно) —
-   огромное количество техлитературы построено на списках; сейчас они
-   неотличимы от прозы.
-2. `TocEntryBlock` — сейчас в оглавлении хранится только текст, теряются
-   номера глав и целевые страницы (нужно для навигации и cross-refs).
-3. `FormulaBlock` — модель есть, нужен только детектор (можно эвристикой
-   «строка почти целиком в шрифте `cmmi/cmsy` + одинокая на строке»
-   или через vision-агента для сложных случаев).
+**P0 — ✅ ВЫПОЛНЕНО:**
+1. ✅ `ListBlock` / `ListItemBlock` + `ListDetectorAnalyzer` — маркеры
+   •/-/1./a)/iv., сериализация, LaTeX itemize/enumerate, чанкер
+   атомарный (RFC 0007 §5.2). 7 unit-тестов.
+2. ✅ `TocEntryBlock` (chapter_number, target_page, anchor_id) —
+   `BlockClassifierAnalyzer._parse_toc_entry` + PageAgent-путь;
+   `_link_toc_anchors` привязывает записи к ContainerUnit заголовков.
+   5 unit-тестов.
+3. ✅ `FormulaBlock` + `FormulaDetectorAnalyzer` — эвристика по
+   math-font (CMMI/CMSY/STIX/…) и плотности math-символов; fallback
+   помечен `needs_vision_ocr` для GOT-OCR / Qwen-VL. 7 unit-тестов.
 
 **P1 — сущности, размывающие семантику при переводе/сборке:**
 4. `CalloutBlock` (note/warning/tip) — сейчас теряется рамка; при сборке
