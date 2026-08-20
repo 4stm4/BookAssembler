@@ -292,10 +292,13 @@ def create_app() -> FastAPI:
                 lp = _last_page(node)
                 if lp is not None and lp != result.get("page_index"):
                     result["page_end"] = lp
-            # Expose translated segments so the UI can show translations per block.
+            # Expose useful metadata to the UI: translations, agent-suggested type,
+            # toc-entry parts, etc. (skip internal-only keys).
             md = getattr(node, "metadata", None) or {}
-            if md.get("translations"):
-                result["translations"] = md["translations"]
+            if md:
+                slim = {k: v for k, v in md.items() if k not in ("tombstone_reason",)}
+                if slim:
+                    result["metadata"] = slim
             return result
 
         def _serialize_body(node: Any) -> Dict[str, Any]:
@@ -1740,16 +1743,37 @@ def create_app() -> FastAPI:
             return {"status": "empty", "page": page, "refined": 0}
 
         listing = "\n".join(f'{i+1}. "{_text(b)[:120]}"' for i, b in enumerate(blocks))
-        host, model = _pick_agent()
         prompt = (
-            "This is one page of a scanned book, given as its text blocks in order. "
-            "First decide the PAGE ROLE: one of title, toc, table, diagram, text. "
-            "Then classify EACH block: paragraph, toc_entry, caption, heading, code, "
-            "formula, list_item, table_cell, title.\n"
-            'Reply with ONLY JSON: {"role":"...","blocks":[{"n":1,"type":"..."},...]}.\n\n'
-            f"Blocks:\n{listing}"
+            "This image is one page of a scanned book. Along with it you get the "
+            "text blocks extracted from the page, in reading order.\n\n"
+            f"BLOCKS:\n{listing}\n\n"
+            "First decide the PAGE ROLE: title, toc, table, diagram, figure, code, "
+            "formula, text. Then classify EACH block: paragraph, heading, toc_entry, "
+            "caption, code, formula, list_item, table_cell, title, label.\n"
+            'Reply with ONLY JSON: {"role":"...","blocks":[{"n":1,"type":"..."},...]}. '
+            "No prose, no code fences."
         )
-        resp = _call_ollama(prompt, host=host, model=model)
+
+        # Prefer a vision agent (sees the page image); fall back to text-only ollama.
+        from src.agents.router import pick as _pick_role, call_infer as _call_agent
+        from src.analyzers.page_agent import _resolve_source_path
+        host_v, model_v, _ = _pick_role("vision")
+        model = model_v
+        resp: Optional[str] = None
+        if host_v:
+            try:
+                import pymupdf as fitz
+                pdf_path = _resolve_source_path(doc)
+                if pdf_path:
+                    pdf = fitz.open(pdf_path)
+                    png = pdf[page].get_pixmap(dpi=100).tobytes("png")
+                    pdf.close()
+                    resp = await asyncio.to_thread(_call_agent, host_v, "vision", png, prompt)
+            except Exception:
+                logging.getLogger(__name__).exception("vision refine-page failed; falling back")
+        if not resp:
+            host, model = _pick_agent()
+            resp = _call_ollama(prompt, host=host, model=model)
         if not resp:
             raise HTTPException(status_code=503, detail="Agent unavailable or timed out")
 
@@ -1772,8 +1796,8 @@ def create_app() -> FastAPI:
         rebuilt = None
         # Rebuild the page structure per the agent's role decision (RFC 0001 §2.4:
         # absorbed blocks are tombstoned, not deleted).
-        if role in ("title", "diagram", "table"):
-            rebuilt = _rebuild_page(doc, blocks, role, page)
+        if role in ("title", "diagram", "table", "toc"):
+            rebuilt = _rebuild_page(doc, blocks, role, page, types)
 
         refined = 0
         for idx, bt in types.items():
@@ -1796,8 +1820,50 @@ def create_app() -> FastAPI:
         return {"status": "refined", "page": page, "role": role,
                 "blocks": len(blocks), "refined": refined, "rebuilt": rebuilt}
 
-    def _rebuild_page(doc: KnowledgeDocument, blocks: List[Any], role: str, page: int) -> Optional[str]:
-        """Reassemble a page's blocks into a title / diagram / table structure."""
+    # TOC entry prefix: "Section 2", "Chapter III", "Appendix A", "1.2.3", "2.1"
+    import re as _re_toc
+    _RE_TOC_BOUNDARY = _re_toc.compile(
+        r"\s+(?=(?:Section|Chapter|Appendix|Part|Глава|Раздел|Приложение)\b|\d+\.\d)",
+        _re_toc.IGNORECASE,
+    )
+    _RE_TOC_ENTRY = _re_toc.compile(
+        r"^(?P<kind>Section|Chapter|Appendix|Part|Глава|Раздел|Приложение)?\s*"
+        r"(?P<num>[A-Z0-9]+(?:\.\d+)*)?\s*"
+        r"(?P<title>.*?)"
+        r"(?:\s*[.\s]{2,}\s*|\s+)(?P<page>\d{1,4}|[ivxlcdm]+|[IVXLCDM]+)?\s*$",
+        _re_toc.IGNORECASE,
+    )
+
+    def _split_toc_line(text: str) -> List[str]:
+        """Split OCR-glued TOC lines at prefix boundaries ("Section 2 X 2.1 Y…")."""
+        parts = _RE_TOC_BOUNDARY.split(text.strip())
+        return [p.strip() for p in parts if p.strip()]
+
+    def _parse_toc_entry(text: str) -> Dict[str, Any]:
+        """Extract {level, number, title, target_page, display} from one entry."""
+        t = text.strip()
+        m = _RE_TOC_ENTRY.match(t)
+        if not m:
+            return {"level": 1, "number": None, "title": t, "target_page": None, "display": t}
+        kind = (m.group("kind") or "").strip()
+        num = (m.group("num") or "").strip()
+        title = (m.group("title") or "").strip(" .·—-").strip()
+        page = m.group("page")
+        try:
+            page_num = int(page) if page and page.isdigit() else None
+        except Exception:
+            page_num = None
+        level = 1 if not num or "." not in num else 1 + num.count(".")
+        prefix = " ".join(x for x in (kind, num) if x).strip()
+        display = f"{prefix}. {title}" if prefix and title else (prefix or title or t)
+        if page_num is not None:
+            display = f"{display} … {page_num}"
+        return {"level": level, "number": prefix or None, "title": title,
+                "target_page": page_num, "display": display}
+
+    def _rebuild_page(doc: KnowledgeDocument, blocks: List[Any], role: str, page: int,
+                      types: Optional[Dict[int, str]] = None) -> Optional[str]:
+        """Reassemble a page's blocks into a title / diagram / table / toc structure."""
         from src.krm.models import (TitlePageBlock, DiagramBlock, TextLineInline,
                                      StyledTextSpan, VisualLayout, NormalizedRect)
 
@@ -1829,6 +1895,50 @@ def create_app() -> FastAPI:
                 max(0.0, min(b.x0 for b in bbs) - 0.02), max(0.0, min(b.y0 for b in bbs) - 0.02),
                 min(1.0, max(b.x1 for b in bbs) + 0.05), min(1.0, max(b.y1 for b in bbs) + 0.03))
 
+        if role == "toc":
+            # Skip if this page's parent already holds a TOC container — don't
+            # nest a second "Оглавление" on repeat clicks.
+            if getattr(parent, "semantic_type", "") == "toc":
+                return "toc:already"
+            # A TOC is a LIST, not paragraphs. Split glued OCR lines into entries
+            # (e.g. "Section 2 X 2.1 Y 2.2 Z" → three items) and parse each entry
+            # into level/number/title/page for the assembler.
+            entries: List[Dict[str, Any]] = []
+            for b in blocks:
+                txt = _text(b)
+                if not txt:
+                    continue
+                for e in _split_toc_line(txt):
+                    parsed = _parse_toc_entry(e)
+                    entries.append(parsed)
+
+            new = ContainerUnit(title="Оглавление", level=2, semantic_type="toc")
+            new.visual_layout = VisualLayout(bounding_box=region, page_or_screen_index=page)
+            new.extraction_confidence = 0.95
+            new.classification_confidence = 0.95
+            new.confidence_score = 0.95
+            for e in entries:
+                item = ParagraphBlock(
+                    inlines=[TextLineInline(spans=[StyledTextSpan(text=e["display"])])],
+                    visual_layout=VisualLayout(bounding_box=region, page_or_screen_index=page),
+                    extraction_confidence=0.95,
+                    classification_confidence=0.95,
+                    confidence_score=0.95,
+                )
+                item.metadata = {
+                    "llm_suggested_type": "toc_entry",
+                    "llm_source": "PageAgent",
+                    "toc": {"level": e["level"], "number": e["number"],
+                            "title": e["title"], "target_page": e["target_page"]},
+                }
+                new.children.append(item)
+            parent.children.insert(min(first_idx, len(parent.children)), new)
+            for b in blocks:
+                b.is_tombstoned = True
+                if not b.metadata:
+                    b.metadata = {}
+                b.metadata["tombstone_reason"] = f"page_agent_rebuilt:toc:{new.id}"
+            return f"toc:{new.id}"
         if role == "title":
             new = TitlePageBlock(page_role="title")
             new.inlines = [TextLineInline(spans=[StyledTextSpan(text="\n".join(_text(b) for b in blocks if _text(b)))])]

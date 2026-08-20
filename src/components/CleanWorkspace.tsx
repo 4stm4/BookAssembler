@@ -85,6 +85,69 @@ const NODE_TYPE_OPTIONS = [
   'TableBlock', 'CaptionBlock', 'TitlePageBlock', 'BlankPageBlock', 'ContainerUnit',
 ];
 
+// Group a container's children into runs sharing the same page_index. Containers
+// (they can span pages) and blocks without a page go into their own "un-paged"
+// group so we don't wrap them under a misleading page header.
+function groupChildrenByPage(children: KRMNode[]): Array<{ page: number | null; items: KRMNode[] }> {
+  const groups: Array<{ page: number | null; items: KRMNode[] }> = [];
+  for (const ch of children) {
+    const isContainer = ch.type === 'ContainerUnit';
+    const page: number | null = isContainer || ch.page_index == null ? null : ch.page_index;
+    const last = groups[groups.length - 1];
+    if (last && last.page === page) last.items.push(ch);
+    else groups.push({ page, items: [ch] });
+  }
+  return groups;
+}
+
+const PageGroup: React.FC<{
+  page: number;
+  jobId?: string;
+  onRefinePage?: (page: number) => Promise<void>;
+  children: React.ReactNode;
+}> = ({ page, jobId, onRefinePage, children }) => {
+  const [status, setStatus] = useState<'idle' | 'running' | 'done'>('idle');
+  const [showPreview, setShowPreview] = useState(false);
+  return (
+    <div className="border border-slate-800/70 rounded-lg bg-slate-950/40">
+      <div className="flex items-center justify-between px-2 py-1 border-b border-slate-800/70 bg-slate-900/40">
+        <div className="text-[11px] font-mono text-slate-400 uppercase tracking-wide">Страница {page + 1}</div>
+        <div className="flex items-center gap-1.5">
+          {jobId && (
+            <button
+              onClick={() => setShowPreview(true)}
+              className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 flex items-center gap-1"
+              title={`Открыть превью страницы ${page + 1}`}
+            >
+              <Eye className="w-3 h-3" />
+              превью
+            </button>
+          )}
+          {jobId && onRefinePage && (
+            <button
+              onClick={async () => {
+                setStatus('running');
+                try { await onRefinePage(page); setStatus('done'); }
+                catch { setStatus('idle'); }
+              }}
+              disabled={status === 'running'}
+              className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-violet-500/10 text-violet-300 border border-violet-500/20 hover:bg-violet-500/20 flex items-center gap-1 disabled:opacity-50"
+              title="Агент: пересобрать и уточнить эту страницу"
+            >
+              <Sparkles className="w-3 h-3" />
+              {status === 'running' ? '…' : status === 'done' ? '✓' : 'Агент'}
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="p-2 space-y-1">{children}</div>
+      {showPreview && jobId && (
+        <PagePreviewModal jobId={jobId} pageIndex={page} onClose={() => setShowPreview(false)} />
+      )}
+    </div>
+  );
+};
+
 const KRMNodeView: React.FC<{
   node: KRMNode; depth: number; jobId?: string;
   onRefineRequest?: (nodeId: string, mode: 'agent' | 'manual', patch?: Partial<KRMNode>) => Promise<void>;
@@ -97,7 +160,6 @@ const KRMNodeView: React.FC<{
   const [editType, setEditType] = useState(node.type);
   const [editText, setEditText] = useState(node.title || node.text || '');
   const [refineStatus, setRefineStatus] = useState<'idle' | 'sending' | 'done'>('idle');
-  const [pageAgent, setPageAgent] = useState<'idle' | 'running' | 'done'>('idle');
   const isContainer = node.type === 'ContainerUnit';
   const isTable = node.type === 'TableBlock';
   const hasChildren = node.children && node.children.length > 0;
@@ -168,23 +230,6 @@ const KRMNodeView: React.FC<{
                 title={`Открыть превью страницы ${node.page_index! + 1}`}
               >
                 <Eye className="w-3 h-3" />
-                стр.{node.page_index! + 1}{node.page_end != null && node.page_end !== node.page_index ? `–${node.page_end + 1}` : ''}
-              </button>
-            )}
-            {hasPage && jobId && onRefinePage && (
-              <button
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  setPageAgent('running');
-                  try { await onRefinePage(node.page_index!); setPageAgent('done'); }
-                  catch { setPageAgent('idle'); }
-                }}
-                disabled={pageAgent === 'running'}
-                className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-violet-500/10 text-violet-300 border border-violet-500/20 hover:bg-violet-500/20 flex items-center gap-1 disabled:opacity-50"
-                title="Агент: пересобрать и уточнить эту страницу"
-              >
-                <Sparkles className="w-3 h-3" />
-                {pageAgent === 'running' ? '…' : pageAgent === 'done' ? '✓' : 'Агент стр.'}
               </button>
             )}
             <span
@@ -302,8 +347,21 @@ const KRMNodeView: React.FC<{
       )}
       {hasChildren && !collapsed && (
         <div className="space-y-1 mt-1">
-          {node.children!.map((child: KRMNode) => (
-            <KRMNodeView key={child.id} node={child} depth={depth + 1} jobId={jobId} onRefineRequest={onRefineRequest} onRefinePage={onRefinePage} />
+          {groupChildrenByPage(node.children!).map((group, gi) => (
+            group.page == null ? (
+              // Un-paged children (containers, etc.) — render inline.
+              <React.Fragment key={`ung-${gi}`}>
+                {group.items.map((child) => (
+                  <KRMNodeView key={child.id} node={child} depth={depth + 1} jobId={jobId} onRefineRequest={onRefineRequest} onRefinePage={onRefinePage} />
+                ))}
+              </React.Fragment>
+            ) : (
+              <PageGroup key={`pg-${group.page}-${gi}`} page={group.page} jobId={jobId} onRefinePage={onRefinePage}>
+                {group.items.map((child) => (
+                  <KRMNodeView key={child.id} node={child} depth={depth + 1} jobId={jobId} onRefineRequest={onRefineRequest} onRefinePage={onRefinePage} />
+                ))}
+              </PageGroup>
+            )
           ))}
         </div>
       )}
@@ -720,8 +778,20 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
                 <div className="text-[11px] text-slate-400 uppercase tracking-wider font-sans font-semibold">
                   Иерархия узлов KRM (Knowledge Representation Model)
                 </div>
-                {krmNodes.map((node) => (
-                  <KRMNodeView key={node.id} node={node} depth={0} jobId={activeJobId || undefined} onRefineRequest={handleRefineRequest} onRefinePage={handleRefinePage} />
+                {groupChildrenByPage(krmNodes).map((group, gi) => (
+                  group.page == null ? (
+                    <React.Fragment key={`root-ung-${gi}`}>
+                      {group.items.map((node) => (
+                        <KRMNodeView key={node.id} node={node} depth={0} jobId={activeJobId || undefined} onRefineRequest={handleRefineRequest} onRefinePage={handleRefinePage} />
+                      ))}
+                    </React.Fragment>
+                  ) : (
+                    <PageGroup key={`root-pg-${group.page}-${gi}`} page={group.page} jobId={activeJobId || undefined} onRefinePage={handleRefinePage}>
+                      {group.items.map((node) => (
+                        <KRMNodeView key={node.id} node={node} depth={0} jobId={activeJobId || undefined} onRefineRequest={handleRefineRequest} onRefinePage={handleRefinePage} />
+                      ))}
+                    </PageGroup>
+                  )
                 ))}
               </div>
             ) : (

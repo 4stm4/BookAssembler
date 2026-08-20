@@ -80,11 +80,15 @@ class PageAgentAnalyzer(BaseAnalyzer):
         kg: KnowledgeGraph,
         context: Optional[Dict[str, Any]] = None,
     ) -> None:
-        # Only worth calling if a `table`-role agent is reachable.
-        host, _model, _kind = pick("table")
+        # Prefer a `vision`-role agent (classifies the whole page); fall back to
+        # `table`-only if that's all that's available.
+        host, _model, _kind = pick("vision")
+        classify_mode = host is not None
         if not host:
-            log.info("PageAgent: no table-role agent — skipping")
-            return
+            host, _model, _kind = pick("table")
+            if not host:
+                log.info("PageAgent: no vision/table agent — skipping")
+                return
 
         # Group non-tombstoned leaf blocks by page.
         pages: Dict[int, List[Tuple[Any, ContainerUnit]]] = {}
@@ -108,7 +112,8 @@ class PageAgentAnalyzer(BaseAnalyzer):
 
         pdf_path = _resolve_source_path(doc)
         if not pdf_path:
-            log.info("PageAgent: cannot resolve source PDF — skipping")
+            log.info("PageAgent: cannot resolve source PDF (uri=%r) — skipping",
+                     getattr(doc, "source_uri", None))
             return
 
         for pg, blocks in sorted(pages.items()):
@@ -116,28 +121,102 @@ class PageAgentAnalyzer(BaseAnalyzer):
                 continue  # TableDetector already got it
             if len(blocks) < MIN_BLOCKS:
                 continue
-            texts = [_text(b) for b, _ in blocks]
-            joined = " ".join(texts).lower()
-            numeric = sum(1 for t in texts if _looks_numeric(t))
-            short = sum(1 for t in texts if len(t) <= 40)
-            # Explicit table-title on page: "Table N", "Figure/Table 1", "Analysis of"
-            titled = ("table " in joined or " analysis of" in joined
-                      or " cost of " in joined or "monthly use" in joined)
-            looks_table = (
-                titled
-                or numeric / len(blocks) >= MIN_NUMERIC_RATIO
-                or short / len(blocks) >= MIN_SHORT_RATIO
-            )
-            if not looks_table:
-                continue
 
-            log.info("PageAgent: page %d looks like a table "
-                     "(titled=%s, %d/%d numeric, %d/%d short)",
-                     pg, titled, numeric, len(blocks), short, len(blocks))
-            latex = self._recognize_table(pdf_path, pg, host, blocks)
-            if not latex:
+            if classify_mode:
+                # Ask the vision agent to classify the whole page — it sees the
+                # image and the block list, decides the page role and per-block type.
+                role, types = self._classify_page(pdf_path, pg, host, blocks)
+                log.info("PageAgent: page %d role=%s, %d block types",
+                         pg, role, len(types))
+                if role == "table":
+                    latex = self._recognize_table(pdf_path, pg, host, blocks)
+                    if latex:
+                        self._replace_with_table(blocks, latex, pg)
+                        continue
+                if types:
+                    self._apply_types(blocks, types)
+            else:
+                # Fallback: table-only heuristic
+                texts = [_text(b) for b, _ in blocks]
+                joined = " ".join(texts).lower()
+                numeric = sum(1 for t in texts if _looks_numeric(t))
+                short = sum(1 for t in texts if len(t) <= 40)
+                titled = ("table " in joined or " analysis of" in joined
+                          or " cost of " in joined or "monthly use" in joined)
+                if not (titled or numeric / len(blocks) >= MIN_NUMERIC_RATIO
+                        or short / len(blocks) >= MIN_SHORT_RATIO):
+                    continue
+                latex = self._recognize_table(pdf_path, pg, host, blocks)
+                if latex:
+                    self._replace_with_table(blocks, latex, pg)
+
+    def _classify_page(
+        self, pdf_path: str, page_index: int, host: str,
+        blocks: List[Tuple[Any, ContainerUnit]],
+    ) -> Tuple[str, Dict[int, str]]:
+        """Ask a vision agent to classify a page and every block on it.
+
+        Returns (page_role, {block_index: type}).
+        """
+        import json as _json
+        import re as _re
+        import pymupdf as fitz
+
+        pdf = fitz.open(pdf_path)
+        try:
+            page = pdf[page_index]
+            png = page.get_pixmap(dpi=100).tobytes("png")
+        finally:
+            pdf.close()
+
+        listing = "\n".join(
+            f"{i + 1}. \"{_text(b)[:120]}\"" for i, (b, _) in enumerate(blocks)
+        )
+        prompt = (
+            "This image is one page of a scanned book. Along with it you get the "
+            "text blocks extracted from the page, in reading order.\n\n"
+            f"BLOCKS:\n{listing}\n\n"
+            "First decide the PAGE ROLE: title, toc, table, diagram, figure, code, "
+            "formula, text. Then classify EACH block: paragraph, heading, "
+            "toc_entry, caption, code, formula, list_item, table_cell, title, label.\n"
+            'Reply with ONLY JSON: {"role":"...","blocks":[{"n":1,"type":"..."},...]}. '
+            "No prose, no code fences."
+        )
+        text = call_infer(host, "vision", png, prompt=prompt) or ""
+        role = "text"
+        types: Dict[int, str] = {}
+        m = _re.search(r"\{.*\}", text, _re.DOTALL)
+        if m:
+            try:
+                data = _json.loads(m.group())
+                role = str(data.get("role", "text")).lower().strip()
+                for item in data.get("blocks", []):
+                    idx = int(item.get("n", 0)) - 1
+                    t = str(item.get("type", "")).lower().strip()
+                    if 0 <= idx < len(blocks) and t:
+                        types[idx] = t
+            except Exception:
+                log.warning("PageAgent: bad JSON from vision agent on page %d", page_index)
+        return role, types
+
+    def _apply_types(
+        self, blocks: List[Tuple[Any, ContainerUnit]], types: Dict[int, str]
+    ) -> None:
+        """Record the agent-suggested type in each block's metadata."""
+        for idx, t in types.items():
+            if not (0 <= idx < len(blocks)):
                 continue
-            self._replace_with_table(blocks, latex, pg)
+            b, _ = blocks[idx]
+            # metadata can be None on freshly-loaded blocks — always guarantee a dict.
+            md = getattr(b, "metadata", None)
+            if not isinstance(md, dict):
+                md = {}
+                b.metadata = md
+            md["llm_suggested_type"] = t
+            md["llm_source"] = "PageAgent"
+            b.classification_confidence = 0.9
+            if hasattr(b, "update_confidence"):
+                b.update_confidence()
 
     def _recognize_table(
         self, pdf_path: str, page_index: int, host: str,
@@ -205,17 +284,29 @@ class PageAgentAnalyzer(BaseAnalyzer):
 
 
 def _resolve_source_path(doc: KnowledgeDocument) -> Optional[str]:
-    """Best-effort: resolve doc.source_uri to a local PDF file the agent can read."""
+    """Best-effort: resolve doc.source_uri to a local PDF file the agent can read.
+
+    Handles sep://<provider>/<rel> (unknown provider id): tries every known
+    SEP root; also file:// and absolute paths.
+    """
     uri = doc.source_uri or ""
+    if uri.startswith("file://"):
+        p = uri[len("file://") :]
+        return p if os.path.exists(p) else None
     if uri.startswith("sep://"):
         try:
             _, rel = uri.replace("sep://", "").split("/", 1)
         except ValueError:
             return None
-        root = os.environ.get("KAE_SSD_PATH", "/data/kae")
-        cand = os.path.join(root, rel)
-        return cand if os.path.exists(cand) else None
-    if uri.startswith("file://"):
-        p = uri[len("file://") :]
-        return p if os.path.exists(p) else None
-    return None
+        # Try both the env-configured SSD path and legacy /data/kae — SEP root
+        # can move between deploys, but the file layout under it is stable.
+        roots = [
+            os.environ.get("KAE_SSD_PATH", "/data/kae"),
+            "/data/kae", "/data/ssd",
+        ]
+        for root in roots:
+            cand = os.path.join(root, rel)
+            if os.path.exists(cand):
+                return cand
+        return None
+    return uri if os.path.isabs(uri) and os.path.exists(uri) else None
