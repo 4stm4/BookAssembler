@@ -39,7 +39,7 @@ export const App: React.FC = () => {
   const [isAssembling, setIsAssembling] = useState(false);
   const [assembleResult, setAssembleResult] = useState<{ status: string; download_url?: string } | null>(null);
   const [isAgentsOpen, setIsAgentsOpen] = useState(false);
-  const [agentsData, setAgentsData] = useState<Array<{ name: string; host: string; kind?: string; roles?: string[]; models: string[]; active_model: string; available: boolean }>>([]);
+  const [agentsData, setAgentsData] = useState<Array<{ name: string; host: string; kind?: string; roles?: string[]; models: string[]; active_model: string; available: boolean; runner?: string; runner_url?: string; queue_depth?: number }>>([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
   const [addAgentForm, setAddAgentForm] = useState<{ name: string; host: string } | null>(null);
 
@@ -379,6 +379,27 @@ export const App: React.FC = () => {
                         )}
                         {agent.kind === 'multimodel' && (
                           <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-fuchsia-500/15 text-fuchsia-300 border border-fuchsia-500/30">MULTI</span>
+                        )}
+                        {agent.kind === 'managed' && (
+                          <>
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-sky-500/15 text-sky-300 border border-sky-500/30">MANAGED</span>
+                            {agent.runner && (() => {
+                              const map: Record<string, { icon: string; cls: string; label: string }> = {
+                                up:       { icon: '⚡', cls: 'text-emerald-300', label: 'GPU ready' },
+                                warming:  { icon: '🟡', cls: 'text-amber-300',   label: 'GPU warming up' },
+                                starting: { icon: '🔄', cls: 'text-amber-300',   label: 'GPU starting' },
+                                cold:     { icon: '⚪', cls: 'text-slate-400',   label: 'GPU cold (starts on demand)' },
+                                stopping: { icon: '⏸', cls: 'text-slate-400',   label: 'GPU stopping' },
+                                error:    { icon: '❌', cls: 'text-red-400',     label: 'GPU error' },
+                              };
+                              const s = map[agent.runner] ?? { icon: '·', cls: 'text-slate-500', label: agent.runner };
+                              return (
+                                <span className={`text-[10px] font-mono ${s.cls}`} title={s.label}>
+                                  {s.icon} {agent.runner}
+                                </span>
+                              );
+                            })()}
+                          </>
                         )}
                       </div>
                       <div className="flex items-center gap-2">

@@ -51,6 +51,20 @@ def _probe_health(host: str) -> Tuple[bool, List[str]]:
         return False, []
 
 
+def probe_managed(host: str) -> Tuple[bool, dict]:
+    """/health of a Manager (RFC 0022 §4.1). Returns (reachable, health_body).
+
+    Health body carries tasks, runner state, runner_url, queue_depth so the KAE
+    agent-manager UI can render a live indicator (Stage 6).
+    """
+    try:
+        req = urllib.request.Request(f"{host}/health")
+        with urllib.request.urlopen(req, timeout=5) as r:
+            return True, json.loads(r.read())
+    except Exception:
+        return False, {}
+
+
 _VISION_ROLES = {"table", "formula", "vision"}
 
 
@@ -65,6 +79,15 @@ def pick(role: str) -> Tuple[Optional[str], Optional[str], str]:
         if role not in (a.get("roles") or []):
             continue
         kind = a.get("kind", "ollama")
+        if kind == "managed":
+            ok, health = probe_managed(a["host"])
+            # Manager is reachable ≠ Runner is ready. Only route inference here
+            # when the Runner is UP; otherwise the request would sit in queue.
+            if ok and health.get("runner") == "up":
+                tasks = health.get("tasks") or []
+                return a["host"], (a.get("active_model")
+                                   or (tasks[0] if tasks else None)), kind
+            continue
         ok, models = (_probe_health if kind in ("got-ocr", "multimodel") else _probe_ollama)(a["host"])
         if ok:
             return a["host"], (a.get("active_model") or (models[0] if models else None)), kind
