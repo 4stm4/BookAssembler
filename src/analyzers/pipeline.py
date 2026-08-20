@@ -40,6 +40,8 @@ from src.krm.models import (
     ContainerUnit,
     InlineUnit,
     KnowledgeDocument,
+    ListBlock,
+    ListItemBlock,
     ParagraphBlock,
     ProvenanceInfo,
     SpanUnit,
@@ -288,6 +290,12 @@ class PipelineRunner:
                     self._record_provenance_recursive(cell, analyzer_name)
                     for block in cell.content:
                         self._record_provenance_recursive(block, analyzer_name)
+        elif isinstance(node, ListBlock):
+            for item in node.items:
+                self._record_provenance_recursive(item, analyzer_name)
+        elif isinstance(node, ListItemBlock):
+            for block in node.content:
+                self._record_provenance_recursive(block, analyzer_name)
         elif isinstance(node, InlineUnit):
             for span in node.spans:
                 self._record_provenance_recursive(span, analyzer_name)
@@ -369,6 +377,12 @@ class PipelineRunner:
                         ids.add(cell.id)
                         for block in cell.content:
                             walk(block)
+            elif isinstance(node, ListBlock):
+                for item in node.items:
+                    walk(item)
+            elif isinstance(node, ListItemBlock):
+                for block in node.content:
+                    walk(block)
 
         for container in doc.root_containers:
             walk(container)
