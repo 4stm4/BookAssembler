@@ -60,6 +60,7 @@ from src.jobs.manager import JobManager, JobRecord, JobStatus
 from src.jobs.pyjobkit_bridge import PyJobKitBridge
 from src.krm.models import (
     BaseKRMNode,
+    BibEntryBlock,
     CalloutBlock,
     CaptionBlock,
     CodeBlock,
@@ -427,6 +428,21 @@ def create_app() -> FastAPI:
                 if vl and hasattr(vl, "page_or_screen_index"):
                     result["page_index"] = vl.page_or_screen_index
                 return result
+            elif isinstance(node, BibEntryBlock):
+                result = {
+                    "id": node.id,
+                    "type": "BibEntryBlock",
+                    "cite_key": node.cite_key,
+                    "authors": node.authors,
+                    "year": node.year,
+                    "title": node.title,
+                    "text": node.raw_text,
+                    "confidence_score": node.confidence_score,
+                }
+                vl = getattr(node, "visual_layout", None)
+                if vl and hasattr(vl, "page_or_screen_index"):
+                    result["page_index"] = vl.page_or_screen_index
+                return result
             elif isinstance(node, FootnoteBlock):
                 result = {
                     "id": node.id,
@@ -682,6 +698,18 @@ def create_app() -> FastAPI:
                 cap.id = n.get("id", cap.id)
                 _restore_layout(cap, n)
                 return cap
+            elif t == "BibEntryBlock":
+                be = BibEntryBlock(
+                    cite_key=n.get("cite_key", ""),
+                    authors=list(n.get("authors", []) or []),
+                    year=n.get("year"),
+                    title=n.get("title", ""),
+                    raw_text=n.get("text", ""),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                be.id = n.get("id", be.id)
+                _restore_layout(be, n)
+                return be
             elif t == "FootnoteBlock":
                 fn = FootnoteBlock(
                     marker=n.get("marker", ""),

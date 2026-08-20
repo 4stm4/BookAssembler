@@ -13,6 +13,7 @@ from typing import Any, List, Optional
 
 from src.analyzers.llm_refinement import _call_ollama
 from src.krm.models import (
+    BibEntryBlock,
     BlankPageBlock,
     CalloutBlock,
     CaptionBlock,
@@ -48,6 +49,8 @@ def _get_block_text(block: Any) -> str:
         return (block.code_text or "").strip()
     if isinstance(block, FootnoteBlock):
         return (block.text or "").strip()
+    if isinstance(block, BibEntryBlock):
+        return (block.raw_text or block.title or "").strip()
     return ""
 
 
@@ -126,6 +129,11 @@ def _collect_translatable(container: Any, result: list) -> None:
     elif isinstance(container, FootnoteBlock):
         if container.text and len(container.text) > 2:
             result.append(("footnote", container))
+    elif isinstance(container, BibEntryBlock):
+        # Bibliography entries are usually kept in source language; translate
+        # only when the target document explicitly wants translated refs.
+        if container.raw_text and len(container.raw_text) > 5:
+            result.append(("bibentry", container))
 
 
 def translate_and_assemble(
@@ -158,6 +166,8 @@ def translate_and_assemble(
             original = block.caption_text
         elif kind == "footnote":
             original = block.text
+        elif kind == "bibentry":
+            original = block.raw_text
         else:
             original = ""
 

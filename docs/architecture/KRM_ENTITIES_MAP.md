@@ -2,7 +2,7 @@
 
 | Статус | Версия | Дата |
 |---|---|---|
-| Draft | 0.2.0 | 2026-08-20 |
+| Draft | 0.3.0 | 2026-08-21 |
 
 Инвентаризация всех типов узлов Knowledge Representation Model (см. RFC 0002) —
 что объявлено в `src/krm/models.py`, что реально создаётся в пайплайне (и кем),
@@ -52,10 +52,10 @@
 | `InstructionSpec` | ⚠️ | `EntityExtractor` даёт KG-ноду `INSTRUCTION`, но не структурный блок |
 | `DefinitionSpec` | ⚠️ | чанкер учитывает как атомарный, но детектора нет |
 | `WarningSpec` | ⚠️ | то же самое |
-| `FootnoteBlock` | ❌ | сноски теряются или ломают порядок чтения |
-| `CalloutBlock` (note/warning/tip) | ❌ | врезки в рамке не выделяются |
+| `FootnoteBlock` | ✅ | `FootnoteDetectorAnalyzer` (маркер + маленький кегль + низ страницы) |
+| `CalloutBlock` (note/warning/tip) | ✅ | `CalloutDetectorAnalyzer` (префикс Note/Warning/⚠/…) → mdframed |
 | `SidebarBlock` | ❌ | боковой блок сливается с основным потоком |
-| `BibEntryBlock` | ❌ | библиография — обычные параграфы |
+| `BibEntryBlock` | ✅ | `BibliographyDetectorAnalyzer` (контейнер «Bibliography/References/Литература») → `thebibliography` |
 | `IndexEntryBlock` | ❌ | предметный указатель — обычные параграфы |
 | `AlgorithmBlock` | ❌ | псевдокод неотличим от `CodeBlock` |
 | `TheoremSpec` / `LemmaSpec` / `ProofSpec` / `ExampleSpec` / `RemarkSpec` | ❌ | нет семантических декораторов для математических/учебных структур |
@@ -123,9 +123,9 @@ graph TD
     Struct --> Formula["FormulaBlock ✅"]
     Struct --> Cap["CaptionBlock ✅"]
     Struct --> Blank["BlankPageBlock ✅"]
-    Struct --> Callout["CalloutBlock ❌<br/>note/warning/tip"]
-    Struct --> Foot["FootnoteBlock ❌"]
-    Struct --> BibE["BibEntryBlock ❌"]
+    Struct --> Callout["CalloutBlock ✅<br/>note/warning/tip"]
+    Struct --> Foot["FootnoteBlock ✅"]
+    Struct --> BibE["BibEntryBlock ✅"]
     Struct --> IdxE["IndexEntryBlock ❌"]
     Struct --> TocE["TocEntryBlock ✅"]
     Struct --> Algo["AlgorithmBlock ❌"]
@@ -150,9 +150,9 @@ graph TD
 
     class Base,Span,Inline,Struct,Sem,Cont abstract
     class StyledSpan,TextLine,Para,Title,Table,Fig,Diag,Code,Cap,Blank,Doc ok
-    class ListB,ListIt,Formula,TocE ok
+    class ListB,ListIt,Formula,TocE,Callout,Foot,BibE ok
     class MentionSpan,FootRefSpan,MathInl,Def,Instr,Warn warn
-    class Callout,Foot,BibE,IdxE,Algo,Eph,Thm,Proof,Ex,Rem miss
+    class IdxE,Algo,Eph,Thm,Proof,Ex,Rem miss
 ```
 
 ---
@@ -171,14 +171,13 @@ graph TD
    math-font (CMMI/CMSY/STIX/…) и плотности math-символов; fallback
    помечен `needs_vision_ocr` для GOT-OCR / Qwen-VL. 7 unit-тестов.
 
-**P1 — сущности, размывающие семантику при переводе/сборке:**
-4. `CalloutBlock` (note/warning/tip) — сейчас теряется рамка; при сборке
-   XeLaTeX эти блоки должны идти через `tcolorbox`, а не как обычный
-   параграф.
-5. `FootnoteBlock` — при переводе сноски привязываются к странице-источнику,
-   без своего типа lineage провисает.
-6. `BibEntryBlock` — библиография — отдельная сущность для cross-ref из
-   `RelationType.cites` (сейчас нет).
+**P1 — ✅ ВЫПОЛНЕНО:**
+4. ✅ `CalloutBlock` — префикс Note/Warning/Tip/⚠/Внимание, `mdframed`
+   в LaTeX, атомарный в чанкере. 7 тестов.
+5. ✅ `FootnoteBlock` — маркеры ¹²³/1./*/†, small-font + bottom-y
+   эвристика, tests+false-positives. 8 тестов.
+6. ✅ `BibEntryBlock` — контейнеры «Bibliography/References/Литература»,
+   парс `[N]`/года/авторов, `thebibliography` в LaTeX. 7 тестов.
 
 **P2 — семантические декораторы для математического текста:**
 7. `TheoremSpec` / `ProofSpec` / `ExampleSpec` / `RemarkSpec` — расширение

@@ -13,6 +13,7 @@ import subprocess
 from typing import Any, List
 
 from src.krm.models import (
+    BibEntryBlock,
     BlankPageBlock,
     CalloutBlock,
     CaptionBlock,
@@ -132,6 +133,24 @@ def build_latex(doc: KnowledgeDocument, target_lang: str = "") -> str:
         if getattr(node, "is_tombstoned", False):
             return  # RFC 0001 §2.4
         if isinstance(node, ContainerUnit):
+            if node.semantic_type == "bibliography":
+                entries = [c for c in node.children if isinstance(c, BibEntryBlock)]
+                if entries:
+                    if node.title:
+                        cmd = _heading_cmd(node.level)
+                        body.append(
+                            f"\\{cmd}*{{{_esc(_translated(node, node.title, target_lang))}}}\n"
+                        )
+                    widest = str(len(entries))
+                    body.append(f"\\begin{{thebibliography}}{{{widest}}}\n")
+                    for entry in entries:
+                        if entry.is_tombstoned:
+                            continue
+                        key = _esc(entry.cite_key or entry.id[:8])
+                        raw = _esc(_translated(entry, entry.raw_text or entry.title, target_lang))
+                        body.append(f"\\bibitem{{{key}}} {raw}\n")
+                    body.append("\\end{thebibliography}\n")
+                    return
             if node.title:
                 cmd = _heading_cmd(node.level)
                 body.append(f"\\{cmd}{{{_esc(_translated(node, node.title, target_lang))}}}\n")

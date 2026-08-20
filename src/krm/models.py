@@ -280,6 +280,28 @@ class ListItemBlock(StructuralUnit):
 
 
 @dataclass
+class BibEntryBlock(StructuralUnit):
+    """
+    Single bibliography / references entry.
+
+    * cite_key   — short identifier for cross-references. When the entry
+                   starts with "[N]", cite_key = "N"; otherwise a
+                   fabricated slug like 'smith2020' (author + year).
+    * authors    — first-pass extraction of the author list; raw source
+                   stays in raw_text so nothing is lost.
+    * year       — 4-digit publication year, if detected.
+    * title      — best-effort title span (between authors and year).
+    * raw_text   — verbatim source line — canonical source of truth for
+                   assembly and translation; parsed fields are advisory.
+    """
+    cite_key: str = ""
+    authors: List[str] = field(default_factory=list)
+    year: Optional[int] = None
+    title: str = ""
+    raw_text: str = ""
+
+
+@dataclass
 class FootnoteBlock(StructuralUnit):
     """
     Page footnote text ("¹ …", "* …", "1. …") — the small-font block that
