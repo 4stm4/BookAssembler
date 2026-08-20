@@ -66,6 +66,7 @@ from src.krm.models import (
     ContainerUnit,
     DiagramBlock,
     FigureBlock,
+    FootnoteBlock,
     FormulaBlock,
     KnowledgeDocument,
     ListBlock,
@@ -426,6 +427,20 @@ def create_app() -> FastAPI:
                 if vl and hasattr(vl, "page_or_screen_index"):
                     result["page_index"] = vl.page_or_screen_index
                 return result
+            elif isinstance(node, FootnoteBlock):
+                result = {
+                    "id": node.id,
+                    "type": "FootnoteBlock",
+                    "marker": node.marker,
+                    "footnote_number": node.footnote_number,
+                    "text": node.text,
+                    "ref_block_ids": list(node.ref_block_ids),
+                    "confidence_score": node.confidence_score,
+                }
+                vl = getattr(node, "visual_layout", None)
+                if vl and hasattr(vl, "page_or_screen_index"):
+                    result["page_index"] = vl.page_or_screen_index
+                return result
             elif isinstance(node, CalloutBlock):
                 result = {
                     "id": node.id,
@@ -667,6 +682,17 @@ def create_app() -> FastAPI:
                 cap.id = n.get("id", cap.id)
                 _restore_layout(cap, n)
                 return cap
+            elif t == "FootnoteBlock":
+                fn = FootnoteBlock(
+                    marker=n.get("marker", ""),
+                    footnote_number=n.get("footnote_number"),
+                    text=n.get("text", ""),
+                    ref_block_ids=list(n.get("ref_block_ids", []) or []),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                fn.id = n.get("id", fn.id)
+                _restore_layout(fn, n)
+                return fn
             elif t == "CalloutBlock":
                 cb = CalloutBlock(
                     kind=n.get("kind", "note"),

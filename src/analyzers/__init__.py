@@ -18,6 +18,7 @@ from src.analyzers.callout_detector import CalloutDetectorAnalyzer
 from src.analyzers.caption_analyzer import CaptionAnalyzer
 from src.analyzers.diagram_detector import DiagramDetectorAnalyzer
 from src.analyzers.entity_extractor import EntityExtractorAnalyzer
+from src.analyzers.footnote_detector import FootnoteDetectorAnalyzer
 from src.analyzers.formula_detector import FormulaDetectorAnalyzer
 from src.analyzers.llm_refinement import LLMRefinementAnalyzer
 from src.analyzers.heading import HeadingAnalyzer
@@ -39,6 +40,7 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         ListDetectorAnalyzer(),
         FormulaDetectorAnalyzer(),
         CalloutDetectorAnalyzer(),
+        FootnoteDetectorAnalyzer(),
         TitlePageAnalyzer(),
         TableDetectorAnalyzer(),
         # Ask a vision agent about table-like pages TableDetector missed
@@ -58,6 +60,7 @@ __all__ = [
     "CalloutDetectorAnalyzer",
     "CaptionAnalyzer",
     "EntityExtractorAnalyzer",
+    "FootnoteDetectorAnalyzer",
     "FormulaDetectorAnalyzer",
     "HeadingAnalyzer",
     "KGPermission",

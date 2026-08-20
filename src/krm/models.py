@@ -280,6 +280,27 @@ class ListItemBlock(StructuralUnit):
 
 
 @dataclass
+class FootnoteBlock(StructuralUnit):
+    """
+    Page footnote text ("¹ …", "* …", "1. …") — the small-font block that
+    sits at the bottom of a page and is referenced from the body by a
+    superscript marker.
+
+    * marker            — original marker as printed ('¹', '*', '1')
+    * footnote_number   — numeric normalization when the marker is a digit
+                          or a superscript numeral; None for symbols
+    * text              — the footnote content (plain text; the assembler
+                          escapes it before emitting \footnotetext{...})
+    * ref_block_ids     — ids of body blocks known to reference this note
+                          (populated post-hoc by a linker; empty until then)
+    """
+    marker: str = ""
+    footnote_number: Optional[int] = None
+    text: str = ""
+    ref_block_ids: List[str] = field(default_factory=list)
+
+
+@dataclass
 class CalloutBlock(StructuralUnit):
     """
     Boxed callout / admonition / notice — the kind of block that a book
