@@ -19,6 +19,7 @@ from src.analyzers.diagram_detector import DiagramDetectorAnalyzer
 from src.analyzers.entity_extractor import EntityExtractorAnalyzer
 from src.analyzers.llm_refinement import LLMRefinementAnalyzer
 from src.analyzers.heading import HeadingAnalyzer
+from src.analyzers.list_detector import ListDetectorAnalyzer
 from src.analyzers.normalization import NormalizationAnalyzer
 from src.analyzers.page_agent import PageAgentAnalyzer
 from src.analyzers.pipeline import PipelineRunner
@@ -33,6 +34,7 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         ReadingOrderAnalyzer(),
         DiagramDetectorAnalyzer(),
         HeadingAnalyzer(),
+        ListDetectorAnalyzer(),
         TitlePageAnalyzer(),
         TableDetectorAnalyzer(),
         # Ask a vision agent about table-like pages TableDetector missed
@@ -54,6 +56,7 @@ __all__ = [
     "HeadingAnalyzer",
     "KGPermission",
     "LLMRefinementAnalyzer",
+    "ListDetectorAnalyzer",
     "KRMPermission",
     "NormalizationAnalyzer",
     "PipelineRunner",
