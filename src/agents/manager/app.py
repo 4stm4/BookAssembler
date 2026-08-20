@@ -21,6 +21,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
+from src.agents.audit import AgentAudit
 from src.agents.manager.announce_validation import AnnounceUrlError, validate_runner_url
 from src.agents.manager.backends.base import ManualBackend, RunnerBackend
 from src.agents.manager.config import ManagerConfig
@@ -65,8 +66,11 @@ def _pick_backend(cfg: ManagerConfig) -> RunnerBackend:
     raise ValueError(f"Unknown backend: {cfg.backend!r}")
 
 
-def create_app(cfg: Optional[ManagerConfig] = None) -> FastAPI:
+def create_app(cfg: Optional[ManagerConfig] = None,
+               audit: Optional[AgentAudit] = None) -> FastAPI:
     cfg = cfg or ManagerConfig()
+    audit = audit or AgentAudit("manager")
+    audit.manager_started({"backend": cfg.backend, "roles": cfg.roles})
     state = ManagerState()
     backend = _pick_backend(cfg)
     orch = Orchestrator(cfg, state, backend)
@@ -80,12 +84,17 @@ def create_app(cfg: Optional[ManagerConfig] = None) -> FastAPI:
     app = FastAPI(title="KAE GPU Runner Manager", version="0.1.0")
 
     # ---- auth ----
-    def _require_kae_token(authorization: Optional[str] = Header(default=None)) -> None:
+    def _require_kae_token(request: Request,
+                           authorization: Optional[str] = Header(default=None)) -> None:
         if not cfg.kae_token:
             return  # no token configured — dev mode
         if not authorization or not authorization.startswith("Bearer "):
+            metrics.auth_fail_total += 1
+            audit.auth_failed(request.url.path, "missing")
             raise HTTPException(401, "Missing Bearer token")
         if authorization.removeprefix("Bearer ").strip() != cfg.kae_token:
+            metrics.auth_fail_total += 1
+            audit.auth_failed(request.url.path, "bad_token")
             raise HTTPException(401, "Bad Bearer token")
 
     def _require_announce_secret(secret: str) -> None:
@@ -94,6 +103,8 @@ def create_app(cfg: Optional[ManagerConfig] = None) -> FastAPI:
         if not cfg.runner_token:
             return
         if secret != cfg.runner_token:
+            metrics.auth_fail_total += 1
+            audit.auth_failed("/runner/announce", "bad_secret")
             raise HTTPException(401, "Bad announce secret")
 
     # In-flight counter behaves as both queue depth and back-pressure gate.
@@ -127,12 +138,17 @@ def create_app(cfg: Optional[ManagerConfig] = None) -> FastAPI:
 
     @app.post("/runner/announce")
     async def announce(body: AnnounceRequest) -> dict:
-        _require_announce_secret(body.secret)
+        try:
+            _require_announce_secret(body.secret)
+        except HTTPException:
+            metrics.announce_rejected_total += 1
+            raise
 
         # 1. Validate the URL — public scheme + host, no loopback in prod.
         try:
             url = validate_runner_url(body.url, allow_local=cfg.announce_allow_local)
         except AnnounceUrlError as e:
+            metrics.announce_rejected_total += 1
             raise HTTPException(400, f"bad url: {e}") from e
 
         # 2. Rate-limit — one accepted announce per `announce_min_interval` sec.
@@ -142,6 +158,7 @@ def create_app(cfg: Optional[ManagerConfig] = None) -> FastAPI:
             same = url == state.runner_url
             since = now - announce_state["last_ts"]
             if not same and since < cfg.announce_min_interval:
+                metrics.announce_rejected_total += 1
                 raise HTTPException(
                     429, "announce too frequent",
                     headers={"Retry-After": str(cfg.announce_min_interval)},
@@ -150,8 +167,11 @@ def create_app(cfg: Optional[ManagerConfig] = None) -> FastAPI:
 
             if same and state.status in (RunnerStatus.UP, RunnerStatus.WARMING):
                 # Nothing to do — Runner re-announcing the same URL after retry.
+                metrics.announce_total += 1
+                audit.runner_announced(url, status="unchanged")
                 return {"status": "unchanged", "url": url}
 
+            replaced = state.runner_url if state.runner_url and state.runner_url != url else None
             await state.announce_runner(url)
 
         # 3. Optimistic single probe so status flips warming → up quickly.
@@ -164,6 +184,8 @@ def create_app(cfg: Optional[ManagerConfig] = None) -> FastAPI:
                     await state.set_status(RunnerStatus.WARMING)
             except Exception:
                 await state.set_status(RunnerStatus.WARMING)
+        metrics.announce_total += 1
+        audit.runner_announced(url, status=state.status.value, replaced=replaced)
         log.info("Runner announced at %s (status=%s)", url, state.status.value)
         return {"status": "accepted", "url": url}
 
@@ -189,13 +211,20 @@ def create_app(cfg: Optional[ManagerConfig] = None) -> FastAPI:
             raise
         except TimeoutError as e:
             await orch.note_infer_error(str(e))
+            audit.infer_failed(task, f"timeout: {e}")
             raise HTTPException(504, f"Runner timeout: {e}") from e
         except Exception as e:
             await orch.note_infer_error(str(e))
+            audit.infer_failed(task, str(e))
             log.exception("infer failed")
             raise HTTPException(503, f"Runner error: {e}") from e
         finally:
-            metrics.record_infer(task, time.time() - t0, ok)
+            duration = time.time() - t0
+            metrics.record_infer(task, duration, ok)
+            if ok:
+                audit.infer_completed(task,
+                                      duration_ms=int(duration * 1000),
+                                      bytes_in=len(image_png))
             async with inflight_lock:
                 inflight_state["n"] -= 1
 
@@ -222,4 +251,5 @@ def create_app(cfg: Optional[ManagerConfig] = None) -> FastAPI:
     app.state.manager_state = state
     app.state.orchestrator = orch
     app.state.metrics = metrics
+    app.state.audit = audit
     return app

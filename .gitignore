@@ -39,3 +39,7 @@ glossary_suggestions.json
 # Scratch / temp
 scratchpad/
 *.tmp
+
+# Agent state (RFC 0022)
+.manager/
+.runner/
