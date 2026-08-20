@@ -39,7 +39,7 @@
 | 0018 | Retrieval & dataset eval | ➖ | вне текущего объёма | P3 |
 | 0019 | Job & Resource Manager | ✅ | JobManager/pyjobkit | — |
 | 0020 | Security: Ed25519-подписи плагинов | ➖ | плагинов нет | P3 |
-| 0022 | GPU Runner Orchestration (Manager+Runner, idle-shutdown, auth) | ➖ | RFC написан, реализация не начата (см. §10 план этапов) | P2 |
+| 0022 | GPU Runner Orchestration (Manager+Runner, idle-shutdown, auth) | ✅ | все 7 этапов §10 реализованы: `src/agents/{manager,runner}` + KaggleKernelBackend + announce hardening + audit/metrics + UI (kind='managed' с индикатором Runner-state). 80 unit-тестов зелёные | — |
 
 ---
 
