@@ -1,4 +1,4 @@
-# Аудит соответствия кода RFC 0001–0020
+# Аудит соответствия кода RFC 0001–0022
 
 | Статус | Версия | Дата | Автор |
 |---|---|---|---|
@@ -39,6 +39,7 @@
 | 0018 | Retrieval & dataset eval | ➖ | вне текущего объёма | P3 |
 | 0019 | Job & Resource Manager | ✅ | JobManager/pyjobkit | — |
 | 0020 | Security: Ed25519-подписи плагинов | ➖ | плагинов нет | P3 |
+| 0022 | GPU Runner Orchestration (Manager+Runner, idle-shutdown, auth) | ➖ | RFC написан, реализация не начата (см. §10 план этапов) | P2 |
 
 ---
 

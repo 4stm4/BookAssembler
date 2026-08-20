@@ -27,15 +27,18 @@ Representation Model (KRM)** — дерево типизированных бл�
 | Область | Что реализовано | Статус |
 |---|---|---|
 | **Извлечение (PDF)** | `PdfSourceAdapter` на PyMuPDF: блоки, стиль, bbox, фильтр OCR-мусора | ✅ |
-| **Пайплайн анализа** | 10 анализаторов: нормализация, порядок чтения, заголовки, титул, таблицы, подписи, классификация, LLM-уточнение, извлечение сущностей, детекция схем | ✅ |
+| **Пайплайн анализа** | 11 анализаторов: нормализация, порядок чтения, заголовки, титул, таблицы, подписи, классификация, LLM-уточнение, извлечение сущностей, детекция схем, page-agent (vision-классификация страницы) | ✅ |
 | **Графы** | Knowledge Graph (сущности/связи) + Reading Graph (DAG порядка чтения) | ✅ |
 | **KRM round-trip** | Сохранение bbox+стиля+перевода в JSON, восстановление без потерь (RFC 0002/0011) | ✅ |
 | **HITL** | Баннер low-confidence узлов, ручная правка, агент-уточнение отдельного блока | ✅ |
 | **Агент на страницу** | Переклассификация и **пересборка** страницы по роли (титул/схема/таблица) | ✅ |
-| **Менеджер агентов** | Несколько ollama-хостов (edge/GPU/Colab), выбор модели, роутинг | ✅ |
+| **Менеджер агентов** | Несколько хостов (ollama/GOT-OCR/multimodel/Colab/Kaggle), **роли** (translate/refine/table/vision/formula), роутинг задач по ролям | ✅ |
+| **GPU-агенты (Colab/Kaggle)** | Мультимодельный агент на Qwen2.5-VL (2×T4 fp16, шардинг), GOT-OCR2.0 отдельно; вызывается через `/infer?task=` | ✅ |
+| **Распознавание таблиц** | Автовызов vision-агента на table-страницы → чистый LaTeX `tabular` в `TableBlock` (проверено на PDP-11) | ✅ |
 | **Перевод** | Постраничный фоновый перевод через ollama; источник не мутируется, lineage (RFC 0021) | ✅ |
 | **Сборка книги** | XeLaTeX в Docker (кириллица) + `kae.lock`/`book.json` + `.kap` bundle (RFC 0012/0013) | ✅ |
 | **Векторизация схем** | Скан-схема → TikZ: CV (OpenCV) + vision-LLM (RFC 0011 `tikz_vectorization`) | 🧪 эксперим. |
+| **GPU Runner-оркестрация** | Двухуровневый агент (Manager+Runner) для on-demand GPU и экономии Kaggle-квоты (RFC 0022) | 📋 спроектирован |
 | **SEP-хранилища** | LocalFS (NVMe) рабочий; S3/MinIO, WebDAV, GoogleDrive — классы-заготовки | 🔶 частично |
 
 ---
@@ -51,7 +54,8 @@ flowchart TD
     E --> F[HeadingAnalyzer<br/>дерево контейнеров]
     F --> G[TitlePageAnalyzer]
     G --> H[TableDetector / Caption]
-    H --> I[BlockClassifier]
+    H --> PA[PageAgent<br/>vision: role + пересборка<br/>title/toc/table]
+    PA --> I[BlockClassifier]
     I --> J[LLMRefinement<br/>ollama-агент]
     J --> K[EntityExtractor<br/>Knowledge Graph]
     K --> L{confidence < 0.85?}
@@ -92,6 +96,7 @@ flowchart TD
 | 0019 | Job & Resource Manager |
 | 0020 | Security & Trust |
 | 0021 | Target Document Assembly & Translation |
+| 0022 | GPU Runner Orchestration (Manager+Runner, on-demand GPU) |
 
 Степень соответствия кода каждому RFC — в [`COMPLIANCE_AUDIT.md`](docs/architecture/COMPLIANCE_AUDIT.md).
 
@@ -124,10 +129,11 @@ BookAssembler/
 │   ├── components/          # React UI (CleanWorkspace, DocumentDashboard, …)
 │   └── App.tsx              # SPA
 │
-├── docs/architecture/       # RFC 0001–0021 + COMPLIANCE_AUDIT.md
-└── colab/                   # GPU-агенты на Colab (см. ниже)
-    ├── kae_gpu_agent.ipynb  # ollama (vision/coder) через cloudflared-туннель
-    └── kae_got_ocr.ipynb    # GOT-OCR2.0 (таблицы/формулы) как HTTP-сервис
+├── docs/architecture/       # RFC 0001–0022 + COMPLIANCE_AUDIT.md
+└── colab/                   # GPU-агенты на Colab/Kaggle (см. ниже)
+    ├── kae_gpu_agent.ipynb        # ollama (vision/coder) через cloudflared-туннель
+    ├── kae_got_ocr.ipynb          # GOT-OCR2.0 (таблицы/формулы) как HTTP-сервис
+    └── kae_multimodel_agent.ipynb # Qwen2.5-VL 2×T4 fp16 — table/formula/vision по /infer
 ```
 
 ---
@@ -152,19 +158,28 @@ docker compose up -d --build
 
 ---
 
-## GPU-агенты (Google Colab)
+## GPU-агенты (Colab / Kaggle)
 
 Тяжёлые модели (vision-векторизация схем, OCR таблиц/формул) выносятся на бесплатный
-Colab-GPU и подключаются как обычный агент в менеджере агентов.
+GPU (Colab T4 или Kaggle T4×2) и подключаются как обычный агент в менеджере агентов
+KAE. Секретный `Authorization: Bearer` защищает публичный туннель от чужих запросов
+(планируется в RFC 0022).
 
-- [`colab/kae_gpu_agent.ipynb`](colab/kae_gpu_agent.ipynb) — поднимает **ollama** с
-  vision-моделью (`qwen2.5vl` / `llava`) на T4 и отдаёт публичный URL через
-  cloudflared. URL добавляется в менеджер агентов KAE.
-- [`colab/kae_got_ocr.ipynb`](colab/kae_got_ocr.ipynb) — **GOT-OCR2.0** через
-  transformers как HTTP-сервис `/ocr` (текст + Markdown/LaTeX для таблиц и формул).
+- [`colab/kae_multimodel_agent.ipynb`](colab/kae_multimodel_agent.ipynb) — **основной**:
+  Qwen2.5-VL-7B в fp16 с шардингом по 2×T4 (Kaggle), сервис `/health` + `/infer{task}`
+  для задач `table` / `formula` / `vision`. Регистрируется в менеджере как
+  `kind=multimodel` с ролями.
+- [`colab/kae_got_ocr.ipynb`](colab/kae_got_ocr.ipynb) — **GOT-OCR2.0** отдельно
+  (лучшее качество на таблицах, но несовместим по версии transformers с Qwen-VL).
+- [`colab/kae_gpu_agent.ipynb`](colab/kae_gpu_agent.ipynb) — ollama с vision-моделью
+  (`llava`), запасной вариант.
 
 Локальные ollama-агенты (Raspberry Pi / Orange Pi) работают на CPU — годятся для
-классификации/перевода; для vision-задач нужен GPU (Colab).
+классификации/перевода; для vision-задач нужен GPU-агент.
+
+**On-demand GPU (RFC 0022, в разработке):** двухуровневая архитектура — Manager
+(CPU, всегда online) стартует Runner (GPU) по запросу и гасит по простою, чтобы
+не сжигать Kaggle-квоту впустую.
 
 ---
 
