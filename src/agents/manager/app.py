@@ -21,6 +21,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
+from src.agents.manager.announce_validation import AnnounceUrlError, validate_runner_url
 from src.agents.manager.backends.base import ManualBackend, RunnerBackend
 from src.agents.manager.config import ManagerConfig
 from src.agents.manager.metrics import Metrics, render
@@ -120,11 +121,40 @@ def create_app(cfg: Optional[ManagerConfig] = None) -> FastAPI:
     async def metrics_endpoint() -> str:
         return render(metrics, state.snapshot_gpu_seconds(), await _queue_depth())
 
+    # Rate-limit + idempotency scratch space for /runner/announce.
+    announce_state = {"last_ts": 0.0}
+    announce_lock = _asyncio.Lock()
+
     @app.post("/runner/announce")
     async def announce(body: AnnounceRequest) -> dict:
         _require_announce_secret(body.secret)
-        await state.announce_runner(body.url)
-        # Optimistic: probe once inline so we can flip to WARMING / UP quickly.
+
+        # 1. Validate the URL — public scheme + host, no loopback in prod.
+        try:
+            url = validate_runner_url(body.url, allow_local=cfg.announce_allow_local)
+        except AnnounceUrlError as e:
+            raise HTTPException(400, f"bad url: {e}") from e
+
+        # 2. Rate-limit — one accepted announce per `announce_min_interval` sec.
+        #    Idempotent same-URL announces bypass the limit (Runner may retry).
+        now = time.time()
+        async with announce_lock:
+            same = url == state.runner_url
+            since = now - announce_state["last_ts"]
+            if not same and since < cfg.announce_min_interval:
+                raise HTTPException(
+                    429, "announce too frequent",
+                    headers={"Retry-After": str(cfg.announce_min_interval)},
+                )
+            announce_state["last_ts"] = now
+
+            if same and state.status in (RunnerStatus.UP, RunnerStatus.WARMING):
+                # Nothing to do — Runner re-announcing the same URL after retry.
+                return {"status": "unchanged", "url": url}
+
+            await state.announce_runner(url)
+
+        # 3. Optimistic single probe so status flips warming → up quickly.
         cli = orch.client()
         if cli:
             try:
@@ -134,8 +164,8 @@ def create_app(cfg: Optional[ManagerConfig] = None) -> FastAPI:
                     await state.set_status(RunnerStatus.WARMING)
             except Exception:
                 await state.set_status(RunnerStatus.WARMING)
-        log.info("Runner announced at %s (status=%s)", body.url, state.status.value)
-        return {"status": "accepted", "url": body.url}
+        log.info("Runner announced at %s (status=%s)", url, state.status.value)
+        return {"status": "accepted", "url": url}
 
     async def _run_infer(task: str, image_png: bytes, prompt: Optional[str]) -> str:
         # Back-pressure: bail early if we're already at capacity.
