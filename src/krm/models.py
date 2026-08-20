@@ -266,6 +266,35 @@ class BlankPageBlock(StructuralUnit):
 
 
 @dataclass
+class ListItemBlock(StructuralUnit):
+    """
+    Single item in a list. Content is any sequence of structural blocks so
+    items may hold nested lists, code blocks, paragraphs, etc.
+
+    `marker` is the original leading marker as it appeared in the source
+    ("•", "-", "1.", "a)", "iii."), preserved for round-trip and confidence
+    debugging; the assembler regenerates markers from `list_style`.
+    """
+    marker: str = ""
+    content: List["StructuralUnit"] = field(default_factory=list)
+
+
+@dataclass
+class ListBlock(StructuralUnit):
+    """
+    Ordered or unordered list. Children are ListItemBlock (see RFC 0002).
+
+    `list_style` selects the assembler rendering:
+      * "bullet"       → LaTeX itemize / Markdown '-'
+      * "ordered"      → enumerate / '1.'
+      * "alpha"        → enumerate[label=\\alph*]  (a, b, c)
+      * "roman"        → enumerate[label=\\roman*] (i, ii, iii)
+    """
+    list_style: str = "bullet"
+    items: List[ListItemBlock] = field(default_factory=list)
+
+
+@dataclass
 class TitlePageBlock(ParagraphBlock):
     """
     Title page of the book or a major division (half-title, series page, etc.).
