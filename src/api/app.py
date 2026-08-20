@@ -67,6 +67,8 @@ from src.krm.models import (
     FigureBlock,
     FormulaBlock,
     KnowledgeDocument,
+    ListBlock,
+    ListItemBlock,
     ParagraphBlock,
     StyledTextSpan,
     TableBlock,
@@ -422,6 +424,30 @@ def create_app() -> FastAPI:
                 if vl and hasattr(vl, "page_or_screen_index"):
                     result["page_index"] = vl.page_or_screen_index
                 return result
+            elif isinstance(node, ListBlock):
+                result = {
+                    "id": node.id,
+                    "type": "ListBlock",
+                    "list_style": node.list_style,
+                    "items": [
+                        {
+                            "id": it.id,
+                            "type": "ListItemBlock",
+                            "marker": it.marker,
+                            "content": [
+                                serialize_node(b) for b in it.content
+                                if not getattr(b, "is_tombstoned", False)
+                            ],
+                        }
+                        for it in node.items
+                        if not getattr(it, "is_tombstoned", False)
+                    ],
+                    "confidence_score": node.confidence_score,
+                }
+                vl = getattr(node, "visual_layout", None)
+                if vl and hasattr(vl, "page_or_screen_index"):
+                    result["page_index"] = vl.page_or_screen_index
+                return result
             elif isinstance(node, TableBlock):
                 rows = []
                 for row in node.grid:
@@ -606,6 +632,23 @@ def create_app() -> FastAPI:
                 cap.id = n.get("id", cap.id)
                 _restore_layout(cap, n)
                 return cap
+            elif t == "ListBlock":
+                items: List[ListItemBlock] = []
+                for it in n.get("items", []):
+                    li = ListItemBlock(
+                        marker=it.get("marker", ""),
+                        content=[rebuild_node(b) for b in it.get("content", [])],
+                    )
+                    li.id = it.get("id", li.id)
+                    items.append(li)
+                lb = ListBlock(
+                    list_style=n.get("list_style", "bullet"),
+                    items=items,
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                lb.id = n.get("id", lb.id)
+                _restore_layout(lb, n)
+                return lb
             elif t == "TableBlock":
                 grid = []
                 for row in n.get("rows", []):

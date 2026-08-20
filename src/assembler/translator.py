@@ -18,6 +18,8 @@ from src.krm.models import (
     CodeBlock,
     ContainerUnit,
     KnowledgeDocument,
+    ListBlock,
+    ListItemBlock,
     ParagraphBlock,
     TableBlock,
     TitlePageBlock,
@@ -108,6 +110,12 @@ def _collect_translatable(container: Any, result: list) -> None:
     elif isinstance(container, CaptionBlock):
         if container.caption_text and len(container.caption_text) > 2:
             result.append(("caption", container))
+    elif isinstance(container, ListBlock):
+        for item in container.items:
+            if getattr(item, "is_tombstoned", False):
+                continue
+            for child in item.content:
+                _collect_translatable(child, result)
 
 
 def translate_and_assemble(

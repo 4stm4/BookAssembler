@@ -104,6 +104,26 @@ def test_nested_container_processed() -> None:
     assert isinstance(inner.children[0], ListBlock)
 
 
+def test_latex_and_chunker_render_list() -> None:
+    """Assembler + chunker recognize ListBlock and render it as a list."""
+    from src.ai_layer.chunker import _extract_text_from_node, _is_atomic_block
+    from src.assembler.latex_builder import build_latex
+
+    doc = _doc([_para("1. alpha"), _para("2. beta")])
+    ListDetectorAnalyzer().run(doc, ReadingGraph(), KnowledgeGraph())
+    lst = doc.root_containers[0].children[0]
+    assert isinstance(lst, ListBlock)
+    assert _is_atomic_block(lst)
+
+    md = _extract_text_from_node(lst)
+    assert "1. alpha" in md and "2. beta" in md
+
+    tex = build_latex(doc)
+    assert "\\begin{enumerate}" in tex
+    assert "\\item alpha" in tex
+    assert "\\item beta" in tex
+
+
 def test_tombstoned_paragraph_ignored() -> None:
     p1 = _para("• a"); p2 = _para("• b")
     tomb = _para("• x"); tomb.is_tombstoned = True
