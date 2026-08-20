@@ -13,6 +13,7 @@ from src.analyzers.base import (
     RGPermission,
     SecurityViolationError,
 )
+from src.analyzers.bibliography_detector import BibliographyDetectorAnalyzer
 from src.analyzers.block_classifier import BlockClassifierAnalyzer
 from src.analyzers.callout_detector import CalloutDetectorAnalyzer
 from src.analyzers.caption_analyzer import CaptionAnalyzer
@@ -41,6 +42,7 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         FormulaDetectorAnalyzer(),
         CalloutDetectorAnalyzer(),
         FootnoteDetectorAnalyzer(),
+        BibliographyDetectorAnalyzer(),
         TitlePageAnalyzer(),
         TableDetectorAnalyzer(),
         # Ask a vision agent about table-like pages TableDetector missed
@@ -56,6 +58,7 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
 __all__ = [
     "AnalyzerManifest",
     "BaseAnalyzer",
+    "BibliographyDetectorAnalyzer",
     "BlockClassifierAnalyzer",
     "CalloutDetectorAnalyzer",
     "CaptionAnalyzer",
