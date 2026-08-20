@@ -4,6 +4,7 @@ Knowledge Representation Model (KRM) package.
 
 from src.krm.models import (
     BaseKRMNode,
+    CalloutBlock,
     CaptionBlock,
     CodeBlock,
     ContainerUnit,
@@ -38,6 +39,7 @@ from src.krm.models import (
 
 __all__ = [
     "BaseKRMNode",
+    "CalloutBlock",
     "CaptionBlock",
     "CodeBlock",
     "ContainerUnit",

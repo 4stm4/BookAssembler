@@ -20,6 +20,7 @@ from src.graph.knowledge_graph import KnowledgeGraph, RelationType
 from src.graph.reading_graph import ReadingGraph, ReadingTrack
 from src.krm.models import (
     BaseKRMNode,
+    CalloutBlock,
     CodeBlock,
     ContainerUnit,
     DefinitionSpec,
@@ -111,6 +112,16 @@ def _extract_text_from_node(node: BaseKRMNode) -> str:
         right = f" … p.{node.target_page + 1}" if isinstance(node.target_page, int) else ""
         return (left + right).strip()
 
+    elif isinstance(node, CalloutBlock):
+        label = node.label or node.kind.title()
+        parts: List[str] = []
+        for child in node.content:
+            child_text = _extract_text_from_node(child)
+            if child_text:
+                parts.append(child_text)
+        body = " ".join(parts).strip()
+        return f"[{label.upper()}] {body}".strip()
+
     elif isinstance(node, ListBlock):
         # Render as markdown list — RFC 0007 §5.2 atomic (kept together).
         lines: List[str] = []
@@ -152,6 +163,8 @@ def _get_node_chunk_type_and_lang(node: BaseKRMNode) -> Tuple[str, Optional[str]
         return "warning", None
     elif isinstance(node, ListBlock):
         return "list", node.list_style
+    elif isinstance(node, CalloutBlock):
+        return "callout", node.kind
     elif isinstance(node, ParagraphBlock):
         return "narrative", None
     return "narrative", None
@@ -172,6 +185,7 @@ def _is_atomic_block(node: BaseKRMNode) -> bool:
             DefinitionSpec,
             WarningSpec,
             ListBlock,
+            CalloutBlock,
         ),
     )
 

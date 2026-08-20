@@ -60,6 +60,7 @@ from src.jobs.manager import JobManager, JobRecord, JobStatus
 from src.jobs.pyjobkit_bridge import PyJobKitBridge
 from src.krm.models import (
     BaseKRMNode,
+    CalloutBlock,
     CaptionBlock,
     CodeBlock,
     ContainerUnit,
@@ -425,6 +426,23 @@ def create_app() -> FastAPI:
                 if vl and hasattr(vl, "page_or_screen_index"):
                     result["page_index"] = vl.page_or_screen_index
                 return result
+            elif isinstance(node, CalloutBlock):
+                result = {
+                    "id": node.id,
+                    "type": "CalloutBlock",
+                    "kind": node.kind,
+                    "severity": node.severity,
+                    "label": node.label,
+                    "content": [
+                        serialize_node(b) for b in node.content
+                        if not getattr(b, "is_tombstoned", False)
+                    ],
+                    "confidence_score": node.confidence_score,
+                }
+                vl = getattr(node, "visual_layout", None)
+                if vl and hasattr(vl, "page_or_screen_index"):
+                    result["page_index"] = vl.page_or_screen_index
+                return result
             elif isinstance(node, TocEntryBlock):
                 result = {
                     "id": node.id,
@@ -649,6 +667,17 @@ def create_app() -> FastAPI:
                 cap.id = n.get("id", cap.id)
                 _restore_layout(cap, n)
                 return cap
+            elif t == "CalloutBlock":
+                cb = CalloutBlock(
+                    kind=n.get("kind", "note"),
+                    severity=n.get("severity", "info"),
+                    label=n.get("label", ""),
+                    content=[rebuild_node(b) for b in n.get("content", [])],
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                cb.id = n.get("id", cb.id)
+                _restore_layout(cb, n)
+                return cb
             elif t == "TocEntryBlock":
                 te = TocEntryBlock(
                     entry_text=n.get("text", ""),
