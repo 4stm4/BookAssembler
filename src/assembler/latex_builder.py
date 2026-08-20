@@ -19,6 +19,8 @@ from src.krm.models import (
     ContainerUnit,
     FigureBlock,
     KnowledgeDocument,
+    ListBlock,
+    ListItemBlock,
     ParagraphBlock,
     TableBlock,
     TitlePageBlock,
@@ -144,6 +146,21 @@ def build_latex(doc: KnowledgeDocument, target_lang: str = "") -> str:
             cap = _esc(_translated(node, node.caption_text or "", target_lang))
             if cap:
                 body.append(f"\\textit{{{cap}}}\n\n")
+        elif isinstance(node, ListBlock):
+            env = "enumerate" if node.list_style in ("ordered", "alpha", "roman") else "itemize"
+            opts = ""
+            if node.list_style == "alpha":
+                opts = "[label=\\alph*)]"
+            elif node.list_style == "roman":
+                opts = "[label=\\roman*.]"
+            body.append(f"\\begin{{{env}}}{opts}\n")
+            for it in node.items:
+                if getattr(it, "is_tombstoned", False):
+                    continue
+                body.append("\\item ")
+                for child in it.content:
+                    render(child, depth + 1)
+            body.append(f"\\end{{{env}}}\n")
         elif isinstance(node, TableBlock):
             body.append(_render_table(node))
         elif isinstance(node, FigureBlock):

@@ -27,6 +27,8 @@ from src.krm.models import (
     FormulaBlock,
     InstructionSpec,
     KnowledgeDocument,
+    ListBlock,
+    ListItemBlock,
     MathInline,
     ParagraphBlock,
     TableBlock,
@@ -99,6 +101,24 @@ def _extract_text_from_node(node: BaseKRMNode) -> str:
     elif isinstance(node, WarningSpec):
         return f"[{node.severity.upper()}]: {node.message_text}"
 
+    elif isinstance(node, ListBlock):
+        # Render as markdown list — RFC 0007 §5.2 atomic (kept together).
+        lines: List[str] = []
+        ordered = node.list_style in ("ordered", "alpha", "roman")
+        for idx, item in enumerate(node.items, start=1):
+            if item.is_tombstoned:
+                continue
+            marker = f"{idx}." if ordered else "-"
+            item_text_parts: List[str] = []
+            for child in item.content:
+                child_text = _extract_text_from_node(child)
+                if child_text:
+                    item_text_parts.append(child_text)
+            body_text = " ".join(item_text_parts).strip()
+            if body_text:
+                lines.append(f"{marker} {body_text}")
+        return "\n".join(lines)
+
     return ""
 
 
@@ -120,6 +140,8 @@ def _get_node_chunk_type_and_lang(node: BaseKRMNode) -> Tuple[str, Optional[str]
         return "definition", None
     elif isinstance(node, WarningSpec):
         return "warning", None
+    elif isinstance(node, ListBlock):
+        return "list", node.list_style
     elif isinstance(node, ParagraphBlock):
         return "narrative", None
     return "narrative", None
@@ -139,6 +161,7 @@ def _is_atomic_block(node: BaseKRMNode) -> bool:
             InstructionSpec,
             DefinitionSpec,
             WarningSpec,
+            ListBlock,
         ),
     )
 
