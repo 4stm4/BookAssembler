@@ -280,6 +280,27 @@ class ListItemBlock(StructuralUnit):
 
 
 @dataclass
+class TocEntryBlock(StructuralUnit):
+    """
+    Single entry in a table of contents.
+
+    Fields (all optional except entry_text):
+      * entry_text     — full displayed line ("1.2  Registers ..... 45")
+      * chapter_number — parsed leader ("1.2", "Глава 5", "A")
+      * target_page    — 0-based physical page index the entry points to
+      * anchor_id      — id of the ContainerUnit this entry navigates to
+                         (populated once the heading tree is available)
+
+    Kept as a leaf StructuralUnit so a TOC ContainerUnit's children stay
+    typed (no more mixed ParagraphBlock inside `semantic_type='toc'`).
+    """
+    entry_text: str = ""
+    chapter_number: Optional[str] = None
+    target_page: Optional[int] = None
+    anchor_id: Optional[str] = None
+
+
+@dataclass
 class ListBlock(StructuralUnit):
     """
     Ordered or unordered list. Children are ListItemBlock (see RFC 0002).

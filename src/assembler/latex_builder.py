@@ -24,6 +24,7 @@ from src.krm.models import (
     ParagraphBlock,
     TableBlock,
     TitlePageBlock,
+    TocEntryBlock,
 )
 
 log = logging.getLogger(__name__)
@@ -146,6 +147,17 @@ def build_latex(doc: KnowledgeDocument, target_lang: str = "") -> str:
             cap = _esc(_translated(node, node.caption_text or "", target_lang))
             if cap:
                 body.append(f"\\textit{{{cap}}}\n\n")
+        elif isinstance(node, TocEntryBlock):
+            num = _esc(node.chapter_number or "")
+            title = _esc(_translated(node, node.entry_text, target_lang))
+            page = str(node.target_page + 1) if isinstance(node.target_page, int) else ""
+            left = f"{num}~{title}" if num else title
+            if page:
+                body.append(
+                    f"\\noindent {left}\\dotfill {page}\\\\\n"
+                )
+            else:
+                body.append(f"\\noindent {left}\\\\\n")
         elif isinstance(node, ListBlock):
             env = "enumerate" if node.list_style in ("ordered", "alpha", "roman") else "itemize"
             opts = ""

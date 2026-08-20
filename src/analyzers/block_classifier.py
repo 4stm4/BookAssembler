@@ -22,10 +22,62 @@ from src.krm.models import (
     KnowledgeDocument,
     ParagraphBlock,
     TextLineInline,
+    TocEntryBlock,
     StyledTextSpan,
     VisualLayout,
     NormalizedRect,
 )
+
+
+# Leading chapter number: "1", "1.2", "1.2.3", "A.", "IV.", "Глава 5", "Chapter 7"
+_LEADING_NUM_RE = re.compile(
+    r"""^\s*
+    (?:
+        (?P<hier>\d+(?:\.\d+){0,3}\.?)           # 1  |  1.  |  1.2  |  1.2.3
+      | (?P<letter>[A-ZА-ЯЁa-zа-яё])[.)]         # A.  a.  А)
+      | (?P<roman>[IVXLCDM]+)[.)]                # IV.  X)
+      | (?P<word>(?:Глава|Chapter|Часть|Part|Раздел|Section|Appendix|Приложение))\s+
+        (?P<word_num>[\d\wА-Яа-я]+)
+    )
+    \s+
+    """,
+    re.VERBOSE,
+)
+
+
+def _parse_toc_entry(text: str) -> Tuple[str, Optional[str], Optional[int]]:
+    """
+    Split "1.2  Registers .......... 45" into (entry_text, chapter_number, target_page).
+
+    entry_text keeps the *displayed* line stripped of dot-leaders so the user
+    sees the same wording; chapter_number and target_page are parsed extras.
+    """
+    stripped = re.sub(r"\.{2,}", " ", (text or "").strip())
+    stripped = re.sub(r"\s+", " ", stripped)
+
+    target_page: Optional[int] = None
+    m_page = _ENDS_WITH_PAGE_NUM.search(stripped)
+    if m_page:
+        raw = m_page.group(1)
+        try:
+            target_page = int(raw) - 1  # 0-based physical page index
+        except ValueError:
+            target_page = None  # roman numerals — leave unparsed for now
+        stripped = _ENDS_WITH_PAGE_NUM.sub("", stripped).strip()
+
+    chapter_number: Optional[str] = None
+    m_num = _LEADING_NUM_RE.match(stripped)
+    if m_num:
+        if m_num.group("hier"):
+            chapter_number = m_num.group("hier")
+        elif m_num.group("letter"):
+            chapter_number = m_num.group("letter") + "."
+        elif m_num.group("roman"):
+            chapter_number = m_num.group("roman") + "."
+        elif m_num.group("word"):
+            chapter_number = f"{m_num.group('word')} {m_num.group('word_num')}"
+
+    return stripped, chapter_number, target_page
 
 _ENDS_WITH_PAGE_NUM = re.compile(r"\s(\d{1,4}|[ivxlcdm]+|[IVXLCDM]+)\s*$")
 
@@ -130,6 +182,43 @@ class BlockClassifierAnalyzer(BaseAnalyzer):
         self._total_pages = doc.metadata.get("page_count", 100) if doc.metadata else 100
         for container in doc.root_containers:
             self._process_container(container)
+        self._link_toc_anchors(doc.root_containers)
+
+    def _link_toc_anchors(self, containers: list) -> None:
+        """Populate TocEntryBlock.anchor_id by matching against ContainerUnit
+        titles (chapter_number prefix first, then normalized-title equality).
+        """
+        headings: Dict[str, str] = {}  # normalized title/number → container id
+        toc_entries: List[TocEntryBlock] = []
+
+        def walk(nodes: list) -> None:
+            for n in nodes:
+                if isinstance(n, ContainerUnit):
+                    if n.semantic_type != "toc" and n.title:
+                        norm = re.sub(r"\s+", " ", n.title.strip().lower())
+                        headings[norm] = n.id
+                        m_num = re.match(r"^\s*([\d.]+|[A-Za-zА-Яа-я]\.)\s+", n.title)
+                        if m_num:
+                            headings[m_num.group(1).strip().rstrip(".")] = n.id
+                    for ch in n.children:
+                        walk([ch])
+                elif isinstance(n, TocEntryBlock):
+                    toc_entries.append(n)
+
+        walk(containers)
+
+        for e in toc_entries:
+            if e.anchor_id:
+                continue
+            if e.chapter_number:
+                key = e.chapter_number.strip().rstrip(".")
+                if key in headings:
+                    e.anchor_id = headings[key]
+                    continue
+            body = re.sub(r"^\s*([\d.]+|[A-Za-zА-Яа-я]\.)\s+", "", e.entry_text or "")
+            body_norm = re.sub(r"\s+", " ", body.strip().lower())
+            if body_norm and body_norm in headings:
+                e.anchor_id = headings[body_norm]
 
     def _collect_headings(self, containers: list) -> None:
         for c in containers:
@@ -230,30 +319,24 @@ class BlockClassifierAnalyzer(BaseAnalyzer):
                 extraction_confidence=0.85,
                 confidence_score=min(0.85, run_confidence),
             )
-            toc_lines = []
-            first_page = None
             for orig_idx, block in run:
                 text = _get_text(block)
-                if text:
-                    toc_lines.append(text)
-                if first_page is None:
-                    vl = getattr(block, "visual_layout", None)
-                    if vl:
-                        first_page = vl.page_or_screen_index
-                indices_to_remove.add(orig_idx)
-            merged_text = "\n".join(toc_lines)
-            merged_block = ParagraphBlock(
-                inlines=[TextLineInline(spans=[StyledTextSpan(text=merged_text)])],
-                extraction_confidence=0.85,
-                classification_confidence=run_confidence,
-                confidence_score=min(0.85, run_confidence),
-            )
-            if first_page is not None:
-                merged_block.visual_layout = VisualLayout(
-                    bounding_box=NormalizedRect(0.0, 0.0, 1.0, 1.0),
-                    page_or_screen_index=first_page,
+                if not text.strip():
+                    indices_to_remove.add(orig_idx)
+                    continue
+                entry_text, chapter_number, target_page = _parse_toc_entry(text)
+                entry = TocEntryBlock(
+                    entry_text=entry_text,
+                    chapter_number=chapter_number,
+                    target_page=target_page,
+                    visual_layout=block.visual_layout,
+                    extraction_confidence=0.85,
+                    classification_confidence=run_confidence,
+                    confidence_score=min(0.85, run_confidence),
                 )
-            toc_container.children.append(merged_block)
+                entry.id = block.id  # RFC 0001 §2.3 — preserve identity
+                toc_container.children.append(entry)
+                indices_to_remove.add(orig_idx)
 
             insertions[first_idx] = toc_container
 
