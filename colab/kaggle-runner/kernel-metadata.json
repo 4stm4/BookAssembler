@@ -1,7 +1,7 @@
 {
-  "id": "REPLACE_WITH/kae-runner",
+  "id": "phoenixfree/kae-gpu-runner",
   "id_no": null,
-  "title": "KAE GPU Runner",
+  "title": "kae-gpu-runner",
   "code_file": "runner.ipynb",
   "language": "python",
   "kernel_type": "notebook",
@@ -9,7 +9,7 @@
   "enable_gpu": true,
   "enable_tpu": false,
   "enable_internet": true,
-  "keywords": ["kae", "gpu-runner"],
+  "keywords": [],
   "dataset_sources": [],
   "kernel_sources": [],
   "competition_sources": [],
