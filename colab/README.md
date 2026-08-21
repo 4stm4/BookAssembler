@@ -22,7 +22,10 @@ GPU и подключаются как обычный агент в KAE. Три 
 **Что нужно:**
 - Аккаунт [kaggle.com](https://kaggle.com) с активированным телефоном (`Settings → Phone verification`) — иначе GPU и Internet недоступны.
 - Локально: [Kaggle API](https://www.kaggle.com/docs/api) — `pip install kaggle` в **вашем** окружении (не в KAE-репозитории — см. правило проекта «не ставить локально»).
-- Kaggle-креды: `Account → Create New API Token` → сохрани `~/.kaggle/kaggle.json` (`chmod 600`).
+- Kaggle-креды: `Account → Create New API Token`. Актуальный клиент
+  пишет токен в **`~/.kaggle/access_token`** (`chmod 600`); старые
+  версии клали `~/.kaggle/kaggle.json` — если у тебя такая, оба
+  варианта работают.
 
 **Шаги:**
 
