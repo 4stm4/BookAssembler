@@ -45,3 +45,10 @@ class RunnerConfig:
 
     # LRU model pool budget in MB; 0 → auto (detect free VRAM on start).
     vram_budget_mb: int = _env_int("KAE_RUNNER_VRAM_BUDGET_MB", 0)
+
+    # Which loaders to register at startup. Comma-separated slugs, resolved
+    # against src.agents.runner.loaders.LOADER_REGISTRY. Empty → EchoLoader
+    # (dev / no-GPU / tests).
+    loaders: List[str] = field(default_factory=lambda: _env_list(
+        "KAE_RUNNER_LOADERS", [],
+    ))
