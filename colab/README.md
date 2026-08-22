@@ -1,3 +1,10 @@
+> ⚠️ **Archived alternative.** Основной deploy теперь на edge-кластере
+> (rpi4/rpi5/orangepi) — см. [`docs/deploy/edge-cluster.md`](../docs/deploy/edge-cluster.md).
+> Эта директория оставлена для opt-in GPU-fallback: когда LLaVA/
+> Qwen2-VL на CPU-хостах не тянет, Manager может поднимать Kaggle-
+> Runner через `bin/push-kaggle-runner.sh` (полностью автоматически,
+> без клика в Kaggle UI).
+
 # GPU-агенты для KAE (Colab / Kaggle)
 
 Тяжёлые модели (vision-векторизация, OCR таблиц/формул) выносятся на бесплатный
@@ -17,7 +24,31 @@ GPU и подключаются как обычный агент в KAE. Три 
 
 ## Запуск Kaggle Runner (RFC 0022 managed путь)
 
-### 1. Один раз — залить kernel в свой Kaggle-аккаунт
+### Полностью автоматический путь (из edge-cluster)
+
+Manager на rpi5 может сам заливать/обновлять kernel через:
+
+```bash
+KAE_MANAGER_URL='https://<стабильный-URL-manager>' \
+KAE_RUNNER_TOKEN='<Bearer>' \
+  bin/push-kaggle-runner.sh
+```
+
+Скрипт:
+- копирует `colab/kaggle-runner/` во временный каталог,
+- sed'ит placeholder'ы `__KAE_MANAGER_URL__` / `__KAE_RUNNER_TOKEN__`
+  на реальные значения из env (в git — только placeholder'ы),
+- ставит одноразовый venv в `.scratchpad/kag-venv/` и вызывает
+  `kaggle kernels push`,
+- **никакого клика в Kaggle UI не требуется** — kernel запустится
+  автоматически.
+
+Опрос статуса и ожидание, пока Runner дойдёт до `RUNNING`:
+```bash
+bin/poll-kaggle-runner.sh
+```
+
+### 1. Один раз — залить kernel в свой Kaggle-аккаунт (ручной путь)
 
 **Что нужно:**
 - Аккаунт [kaggle.com](https://kaggle.com) с активированным телефоном (`Settings → Phone verification`) — иначе GPU и Internet недоступны.

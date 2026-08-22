@@ -43,3 +43,4 @@ scratchpad/
 # Agent state (RFC 0022)
 .manager/
 .runner/
+.scratchpad/
