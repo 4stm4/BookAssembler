@@ -2,7 +2,7 @@
 
 | Status | Version | Date | Author |
 |---|---|---|---|
-| Accepted | 1.0.0 | 2026-08-20 | Core Architecture Team |
+| Accepted | 1.1.0 | 2026-08-25 | Core Architecture Team |
 
 > **Implementation:** all 7 stages from §10 complete. Manager and Runner services
 > live in `src/agents/{manager,runner}`; KaggleKernelBackend in
@@ -11,6 +11,14 @@
 > `src/agents/router.probe_managed()`. Regression suite: 80 unit tests
 > (`tests/unit/test_agent_*.py`), no prod deploy required by this RFC — it
 > unlocks Kaggle-hosted GPU when the operator boots the Runner notebook.
+>
+> **⚠️ Kaggle backend — opt-in GPU-fallback only (v1.1.0, 2026-08-25).**
+> Primary inference runs on the edge cluster (rpi5 + orangepi) via
+> `OllamaBackend` (`KAE_MANAGER_BACKEND=ollama`). The Kaggle path
+> (`KAE_MANAGER_BACKEND=kaggle`) is retained for tasks that exceed edge-cluster
+> VRAM (e.g. Qwen2.5-VL-7B on T4). See
+> [`docs/deploy/edge-cluster.md`](../deploy/edge-cluster.md) for the primary
+> deployment topology.
 
 ---
 
