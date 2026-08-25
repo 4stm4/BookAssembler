@@ -4,5 +4,6 @@ Runner backends — pluggable adapters that (re)start the GPU Runner process
 """
 
 from src.agents.manager.backends.base import ManualBackend, RunnerBackend
+from src.agents.manager.backends.ollama import OllamaBackend
 
-__all__ = ["RunnerBackend", "ManualBackend"]
+__all__ = ["RunnerBackend", "ManualBackend", "OllamaBackend"]

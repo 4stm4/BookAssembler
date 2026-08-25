@@ -336,6 +336,8 @@ class PipelineRunner:
 
             try:
                 analyzer.run(guarded_doc, guarded_rg, guarded_kg, context)
+            except SecurityViolationError:
+                raise
             except Exception:
                 logging.getLogger(__name__).exception(
                     "Analyzer '%s' failed; rolling back to pre-run state (RFC 0005 §6.1)",

@@ -60,9 +60,11 @@ def _pick_backend(cfg: ManagerConfig) -> RunnerBackend:
     if kind == "manual":
         return ManualBackend()
     if kind == "kaggle":
-        # Imported lazily — the `kaggle` package is an optional runtime dep.
         from src.agents.manager.backends.kaggle import KaggleKernelBackend
         return KaggleKernelBackend(kernel=cfg.kaggle_kernel, kernel_dir=cfg.kaggle_kernel_dir)
+    if kind == "ollama":
+        from src.agents.manager.backends.ollama import OllamaBackend
+        return OllamaBackend()
     raise ValueError(f"Unknown backend: {cfg.backend!r}")
 
 
