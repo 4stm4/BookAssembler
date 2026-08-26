@@ -565,12 +565,29 @@ def create_app() -> FastAPI:
         ]
         _fill_pages(serialized, [None])
 
+        semantic = []
+        for su in getattr(doc, "semantic_units", []) or []:
+            entry: Dict[str, Any] = {
+                "id": su.id,
+                "kind": type(su).__name__,
+                "target_block_id": getattr(su, "target_block_id", ""),
+            }
+            for attr in ("statement_type", "name", "number", "proved_statement_id",
+                         "term", "definition_text", "severity", "message_text",
+                         "architecture_or_platform", "mnemonic_or_function",
+                         "operands_or_arguments", "affected_flags_or_state"):
+                val = getattr(su, attr, None)
+                if val is not None and val != "" and val != []:
+                    entry[attr] = val
+            semantic.append(entry)
+
         return {
             "title": doc.title,
             "source_uri": doc.source_uri,
             "source_type": doc.source_type,
             "page_count": doc.metadata.get("page_count", 0) if doc.metadata else 0,
             "containers": serialized,
+            "semantic_units": semantic,
         }
 
     def _rebuild_document(data: Dict[str, Any]) -> KnowledgeDocument:
@@ -786,6 +803,35 @@ def create_app() -> FastAPI:
         )
         for c in data.get("containers", []):
             doc.root_containers.append(rebuild_node(c))
+
+        from src.krm.models import (
+            TheoremSpec, ProofSpec, ExampleSpec, RemarkSpec,
+            DefinitionSpec, InstructionSpec, WarningSpec,
+        )
+        _SU_MAP = {
+            "TheoremSpec": TheoremSpec, "ProofSpec": ProofSpec,
+            "ExampleSpec": ExampleSpec, "RemarkSpec": RemarkSpec,
+            "DefinitionSpec": DefinitionSpec, "InstructionSpec": InstructionSpec,
+            "WarningSpec": WarningSpec,
+        }
+        for su_data in data.get("semantic_units", []):
+            cls = _SU_MAP.get(su_data.get("kind", ""))
+            if cls is None:
+                continue
+            kwargs: Dict[str, Any] = {"target_block_id": su_data.get("target_block_id", "")}
+            for field_name in ("statement_type", "name", "number", "proved_statement_id",
+                               "term", "definition_text", "severity", "message_text",
+                               "architecture_or_platform", "mnemonic_or_function",
+                               "operands_or_arguments", "affected_flags_or_state"):
+                if field_name in su_data:
+                    kwargs[field_name] = su_data[field_name]
+            try:
+                spec = cls(**kwargs)
+                spec.id = su_data.get("id", spec.id)
+                doc.semantic_units.append(spec)
+            except TypeError:
+                pass
+
         return doc
 
     # Persistent document store (L1 Local Disk per RFC 0013)

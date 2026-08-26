@@ -2,7 +2,7 @@
 
 | Статус | Версия | Дата |
 |---|---|---|
-| Draft | 0.3.0 | 2026-08-21 |
+| Draft | 0.4.0 | 2026-08-26 |
 
 Инвентаризация всех типов узлов Knowledge Representation Model (см. RFC 0002) —
 что объявлено в `src/krm/models.py`, что реально создаётся в пайплайне (и кем),
@@ -50,7 +50,7 @@
 | `ListBlock` / `ListItemBlock` | ✅ | `ListDetectorAnalyzer` (маркеры •/-/1./a)/iv.) |
 | `TocEntryBlock` | ✅ | `BlockClassifierAnalyzer` + PageAgent (парсит номер главы и целевую страницу; `_link_toc_anchors` привязывает к контейнерам заголовков) |
 | `InstructionSpec` | ⚠️ | `EntityExtractor` даёт KG-ноду `INSTRUCTION`, но не структурный блок |
-| `DefinitionSpec` | ⚠️ | чанкер учитывает как атомарный, но детектора нет |
+| `DefinitionSpec` | ✅ | `DefinitionDetectorAnalyzer` — prefix + pattern heuristics |
 | `WarningSpec` | ⚠️ | то же самое |
 | `FootnoteBlock` | ✅ | `FootnoteDetectorAnalyzer` (маркер + маленький кегль + низ страницы) |
 | `CalloutBlock` (note/warning/tip) | ✅ | `CalloutDetectorAnalyzer` (префикс Note/Warning/⚠/…) → mdframed |
@@ -58,7 +58,10 @@
 | `BibEntryBlock` | ✅ | `BibliographyDetectorAnalyzer` (контейнер «Bibliography/References/Литература») → `thebibliography` |
 | `IndexEntryBlock` | ❌ | предметный указатель — обычные параграфы |
 | `AlgorithmBlock` | ❌ | псевдокод неотличим от `CodeBlock` |
-| `TheoremSpec` / `LemmaSpec` / `ProofSpec` / `ExampleSpec` / `RemarkSpec` | ❌ | нет семантических декораторов для математических/учебных структур |
+| `TheoremSpec` (Theorem/Lemma/Corollary/Proposition) | ✅ | `TheoremDetectorAnalyzer` — prefix detection |
+| `ProofSpec` | ✅ | `TheoremDetectorAnalyzer` — proof prefix + links to proved statement |
+| `ExampleSpec` | ✅ | `TheoremDetectorAnalyzer` — example prefix detection |
+| `RemarkSpec` | ✅ | `TheoremDetectorAnalyzer` — remark prefix detection |
 | `EphemeraBlock` (pagenum / running header / footer) | ❌ | сейчас автоматически tombstone'ятся `title_page` эвристикой, но своего типа нет |
 
 ## 4. Слой Container
@@ -132,11 +135,11 @@ graph TD
     Struct --> Eph["EphemeraBlock ❌<br/>pagenum/header/footer"]
 
     Base --> Sem["SemanticUnit (декоратор ABC)"]
-    Sem --> Def["DefinitionSpec ⚠️"]
-    Sem --> Thm["TheoremSpec ❌"]
-    Sem --> Proof["ProofSpec ❌"]
-    Sem --> Ex["ExampleSpec ❌"]
-    Sem --> Rem["RemarkSpec ❌"]
+    Sem --> Def["DefinitionSpec ✅"]
+    Sem --> Thm["TheoremSpec ✅"]
+    Sem --> Proof["ProofSpec ✅"]
+    Sem --> Ex["ExampleSpec ✅"]
+    Sem --> Rem["RemarkSpec ✅"]
     Sem --> Instr["InstructionSpec ⚠️"]
     Sem --> Warn["WarningSpec ⚠️"]
 
