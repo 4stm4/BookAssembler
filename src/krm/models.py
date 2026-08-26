@@ -446,6 +446,42 @@ class WarningSpec(SemanticUnit):
     message_text: str = ""
 
 
+@dataclass
+class TheoremSpec(SemanticUnit):
+    """
+    Formal mathematical statement (theorem, lemma, corollary, proposition).
+    """
+    statement_type: str = "theorem"  # theorem, lemma, corollary, proposition
+    name: str = ""
+    number: str = ""
+
+
+@dataclass
+class ProofSpec(SemanticUnit):
+    """
+    Proof of a theorem/lemma. Links back to statement via target_block_id.
+    """
+    proved_statement_id: str = ""
+
+
+@dataclass
+class ExampleSpec(SemanticUnit):
+    """
+    Worked example illustrating a concept or theorem.
+    """
+    name: str = ""
+    number: str = ""
+
+
+@dataclass
+class RemarkSpec(SemanticUnit):
+    """
+    Remark, note, or observation in mathematical/technical discourse.
+    """
+    name: str = ""
+    number: str = ""
+
+
 # ============================================================================
 # 5. Container & Root Units
 # ============================================================================
@@ -470,3 +506,4 @@ class KnowledgeDocument(BaseKRMNode):
     source_uri: str = ""
     source_type: str = ""  # e.g., 'pdf', 'docx', 'html', 'ipynb'
     root_containers: List[ContainerUnit] = field(default_factory=list)
+    semantic_units: List["SemanticUnit"] = field(default_factory=list)

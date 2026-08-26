@@ -179,6 +179,9 @@ def _get_node_chunk_type_and_lang(node: BaseKRMNode) -> Tuple[str, Optional[str]
     elif isinstance(node, BibEntryBlock):
         return "bibliography", node.cite_key or None
     elif isinstance(node, ParagraphBlock):
+        dec = (getattr(node, "metadata", None) or {}).get("semantic_decorator")
+        if dec in ("theorem", "proof", "example", "remark", "definition"):
+            return dec, (getattr(node, "metadata", None) or {}).get("statement_type")
         return "narrative", None
     return "narrative", None
 
@@ -187,7 +190,7 @@ def _is_atomic_block(node: BaseKRMNode) -> bool:
     """
     Returns True if the node is an atomic (non-splittable) block unit.
     """
-    return isinstance(
+    if isinstance(
         node,
         (
             TableBlock,
@@ -202,7 +205,11 @@ def _is_atomic_block(node: BaseKRMNode) -> bool:
             FootnoteBlock,
             BibEntryBlock,
         ),
-    )
+    ):
+        return True
+    if isinstance(node, ParagraphBlock) and (getattr(node, "metadata", None) or {}).get("semantic_decorator"):
+        return True
+    return False
 
 
 class SemanticChunker:

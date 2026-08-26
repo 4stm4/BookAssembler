@@ -17,6 +17,7 @@ from src.analyzers.bibliography_detector import BibliographyDetectorAnalyzer
 from src.analyzers.block_classifier import BlockClassifierAnalyzer
 from src.analyzers.callout_detector import CalloutDetectorAnalyzer
 from src.analyzers.caption_analyzer import CaptionAnalyzer
+from src.analyzers.definition_detector import DefinitionDetectorAnalyzer
 from src.analyzers.diagram_detector import DiagramDetectorAnalyzer
 from src.analyzers.entity_extractor import EntityExtractorAnalyzer
 from src.analyzers.footnote_detector import FootnoteDetectorAnalyzer
@@ -29,6 +30,7 @@ from src.analyzers.page_agent import PageAgentAnalyzer
 from src.analyzers.pipeline import PipelineRunner
 from src.analyzers.reading_order import ReadingOrderAnalyzer
 from src.analyzers.table_detector import TableDetectorAnalyzer
+from src.analyzers.theorem_detector import TheoremDetectorAnalyzer
 from src.analyzers.title_page import TitlePageAnalyzer
 
 
@@ -40,6 +42,8 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         HeadingAnalyzer(),
         ListDetectorAnalyzer(),
         FormulaDetectorAnalyzer(),
+        TheoremDetectorAnalyzer(),
+        DefinitionDetectorAnalyzer(),
         CalloutDetectorAnalyzer(),
         FootnoteDetectorAnalyzer(),
         BibliographyDetectorAnalyzer(),
@@ -62,6 +66,7 @@ __all__ = [
     "BlockClassifierAnalyzer",
     "CalloutDetectorAnalyzer",
     "CaptionAnalyzer",
+    "DefinitionDetectorAnalyzer",
     "EntityExtractorAnalyzer",
     "FootnoteDetectorAnalyzer",
     "FormulaDetectorAnalyzer",
@@ -76,6 +81,7 @@ __all__ = [
     "ReadingOrderAnalyzer",
     "SecurityViolationError",
     "TableDetectorAnalyzer",
+    "TheoremDetectorAnalyzer",
     "TitlePageAnalyzer",
     "create_default_pipeline",
 ]

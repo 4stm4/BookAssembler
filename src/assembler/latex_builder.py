@@ -40,7 +40,16 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 \setdefaultlanguage{russian}
 \setotherlanguage{english}
 \usepackage{amsmath}
+\usepackage{amsthm}
 \usepackage{graphicx}
+\newtheorem{theorem}{Theorem}[chapter]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{remark}{Remark}[chapter]
+\newtheorem{exampleenv}{Example}[chapter]
+\theoremstyle{definition}
+\newtheorem{definitionenv}{Definition}[chapter]
 \usepackage[framemethod=default]{mdframed}
 \usepackage[a4paper,margin=2.2cm]{geometry}
 \usepackage{sectsty}
@@ -240,7 +249,31 @@ def build_latex(doc: KnowledgeDocument, target_lang: str = "") -> str:
             body.append("\\begin{center}[figure]\\end{center}\n")
         elif isinstance(node, ParagraphBlock):
             txt = _esc(_translated(node, _para_text(node), target_lang))
-            if txt:
+            if not txt:
+                pass
+            elif (node.metadata or {}).get("semantic_decorator") in (
+                "theorem", "proof", "example", "remark", "definition",
+            ):
+                dec = node.metadata["semantic_decorator"]
+                _ENV = {
+                    "theorem": {
+                        "theorem": "theorem", "lemma": "lemma",
+                        "corollary": "corollary", "proposition": "proposition",
+                    },
+                    "proof": "proof",
+                    "example": "exampleenv",
+                    "remark": "remark",
+                    "definition": "definitionenv",
+                }
+                if dec == "theorem":
+                    stype = (node.metadata or {}).get("statement_type", "theorem")
+                    env = _ENV["theorem"].get(stype, "theorem")
+                elif dec == "proof":
+                    env = "proof"
+                else:
+                    env = _ENV.get(dec, dec)
+                body.append(f"\\begin{{{env}}}\n{txt}\n\\end{{{env}}}\n")
+            else:
                 body.append(_wrap_align(txt, _alignment(node)) + "\n")
 
     for container in doc.root_containers:
