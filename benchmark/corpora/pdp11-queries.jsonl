@@ -1,0 +1,20 @@
+{"query": "What addressing modes does the PDP-11 support?", "relevant_ids": ["ch3-addressing-modes"]}
+{"query": "How does the MOV instruction work on PDP-11?", "relevant_ids": ["ch4-mov-instruction"]}
+{"query": "What is the purpose of the stack pointer register?", "relevant_ids": ["ch2-sp-register", "ch5-stack-operations"]}
+{"query": "How to perform floating point arithmetic on PDP-11?", "relevant_ids": ["ch7-floating-point"]}
+{"query": "What are the condition codes in PDP-11?", "relevant_ids": ["ch2-condition-codes"]}
+{"query": "How does the TRAP instruction work?", "relevant_ids": ["ch6-trap-instruction"]}
+{"query": "What is the difference between byte and word addressing?", "relevant_ids": ["ch3-byte-word"]}
+{"query": "How to use the autoincrement addressing mode?", "relevant_ids": ["ch3-autoincrement"]}
+{"query": "What interrupts are supported by PDP-11?", "relevant_ids": ["ch6-interrupts"]}
+{"query": "How does the branch instruction calculate target address?", "relevant_ids": ["ch4-branch-offset"]}
+{"query": "What is the processor status word?", "relevant_ids": ["ch2-psw"]}
+{"query": "How to perform subroutine calls with JSR?", "relevant_ids": ["ch5-jsr-rts"]}
+{"query": "What memory-mapped I/O devices exist on PDP-11?", "relevant_ids": ["ch8-io-devices"]}
+{"query": "How does the UNIBUS architecture work?", "relevant_ids": ["ch8-unibus"]}
+{"query": "What is the purpose of the general registers R0-R5?", "relevant_ids": ["ch2-general-registers"]}
+{"query": "How to implement a loop in PDP-11 assembly?", "relevant_ids": ["ch4-loop-example", "ch4-sob-instruction"]}
+{"query": "What are the PDP-11 instruction formats?", "relevant_ids": ["ch4-instruction-formats"]}
+{"query": "How does memory management work on PDP-11/70?", "relevant_ids": ["ch9-memory-management"]}
+{"query": "What is the difference between kernel and user mode?", "relevant_ids": ["ch9-kernel-user-mode"]}
+{"query": "How to handle stack overflow on PDP-11?", "relevant_ids": ["ch5-stack-overflow", "ch6-trap-instruction"]}
