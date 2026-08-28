@@ -19,21 +19,25 @@ from src.ai_layer.models import AIContextChunk, ChunkBreadcrumbs
 from src.graph.knowledge_graph import KnowledgeGraph, RelationType
 from src.graph.reading_graph import ReadingGraph, ReadingTrack
 from src.krm.models import (
+    AlgorithmBlock,
     BaseKRMNode,
     BibEntryBlock,
     CalloutBlock,
     CodeBlock,
     ContainerUnit,
     DefinitionSpec,
+    EphemeraBlock,
     FigureBlock,
     FootnoteBlock,
     FormulaBlock,
+    IndexEntryBlock,
     InstructionSpec,
     KnowledgeDocument,
     ListBlock,
     ListItemBlock,
     MathInline,
     ParagraphBlock,
+    SidebarBlock,
     TableBlock,
     TextLineInline,
     TocEntryBlock,
@@ -149,6 +153,27 @@ def _extract_text_from_node(node: BaseKRMNode) -> str:
                 lines.append(f"{marker} {body_text}")
         return "\n".join(lines)
 
+    elif isinstance(node, AlgorithmBlock):
+        name = node.algorithm_name or ""
+        num = node.algorithm_number or ""
+        prefix = f"Algorithm {num}: {name}".strip(": ")
+        return f"{prefix}\n{node.pseudocode}" if node.pseudocode else prefix
+
+    elif isinstance(node, EphemeraBlock):
+        return node.repeated_text or f"[{node.ephemera_type}]"
+
+    elif isinstance(node, IndexEntryBlock):
+        refs = ", ".join(node.page_refs) if node.page_refs else ""
+        return f"{node.term} — {refs}" if refs else node.term
+
+    elif isinstance(node, SidebarBlock):
+        parts: List[str] = []
+        for child in node.content:
+            child_text = _extract_text_from_node(child)
+            if child_text:
+                parts.append(child_text)
+        return f"[Sidebar] {' '.join(parts)}".strip()
+
     return ""
 
 
@@ -178,6 +203,14 @@ def _get_node_chunk_type_and_lang(node: BaseKRMNode) -> Tuple[str, Optional[str]
         return "footnote", node.marker or (str(node.footnote_number or ""))
     elif isinstance(node, BibEntryBlock):
         return "bibliography", node.cite_key or None
+    elif isinstance(node, AlgorithmBlock):
+        return "algorithm", None
+    elif isinstance(node, EphemeraBlock):
+        return "ephemera", node.ephemera_type
+    elif isinstance(node, IndexEntryBlock):
+        return "index", None
+    elif isinstance(node, SidebarBlock):
+        return "sidebar", node.sidebar_type
     elif isinstance(node, ParagraphBlock):
         dec = (getattr(node, "metadata", None) or {}).get("semantic_decorator")
         if dec in ("theorem", "proof", "example", "remark", "definition"):
@@ -204,6 +237,10 @@ def _is_atomic_block(node: BaseKRMNode) -> bool:
             CalloutBlock,
             FootnoteBlock,
             BibEntryBlock,
+            AlgorithmBlock,
+            EphemeraBlock,
+            IndexEntryBlock,
+            SidebarBlock,
         ),
     ):
         return True

@@ -13,19 +13,23 @@ import subprocess
 from typing import Any, List
 
 from src.krm.models import (
+    AlgorithmBlock,
     BibEntryBlock,
     BlankPageBlock,
     CalloutBlock,
     CaptionBlock,
     CodeBlock,
     ContainerUnit,
+    EphemeraBlock,
     FigureBlock,
     FootnoteBlock,
+    IndexEntryBlock,
     KnowledgeDocument,
     FormulaBlock,
     ListBlock,
     ListItemBlock,
     ParagraphBlock,
+    SidebarBlock,
     TableBlock,
     TitlePageBlock,
     TocEntryBlock,
@@ -50,6 +54,7 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 \newtheorem{exampleenv}{Example}[chapter]
 \theoremstyle{definition}
 \newtheorem{definitionenv}{Definition}[chapter]
+\usepackage[ruled,vlined]{algorithm2e}
 \usepackage[framemethod=default]{mdframed}
 \usepackage[a4paper,margin=2.2cm]{geometry}
 \usepackage{sectsty}
@@ -247,6 +252,22 @@ def build_latex(doc: KnowledgeDocument, target_lang: str = "") -> str:
             body.append(_render_table(node))
         elif isinstance(node, FigureBlock):
             body.append("\\begin{center}[figure]\\end{center}\n")
+        elif isinstance(node, EphemeraBlock):
+            pass  # ephemera (headers/footers/pagenums) are intentionally omitted
+        elif isinstance(node, AlgorithmBlock):
+            name = _esc(node.algorithm_name) if node.algorithm_name else ""
+            num = node.algorithm_number or ""
+            pseudo = _esc(node.pseudocode)
+            body.append(f"\\begin{{algorithm}}\n\\caption{{{num}. {name}}}\n{pseudo}\n\\end{{algorithm}}\n")
+        elif isinstance(node, SidebarBlock):
+            inner = "".join(
+                _esc(_translated(c, _para_text(c), target_lang))
+                for c in node.content if isinstance(c, ParagraphBlock)
+            )
+            body.append(f"\\begin{{minipage}}{{0.35\\textwidth}}\n{inner}\n\\end{{minipage}}\n")
+        elif isinstance(node, IndexEntryBlock):
+            refs = ", ".join(node.page_refs) if node.page_refs else ""
+            body.append(f"\\noindent {_esc(node.term)}\\dotfill {refs}\\\\\n")
         elif isinstance(node, ParagraphBlock):
             txt = _esc(_translated(node, _para_text(node), target_lang))
             if not txt:

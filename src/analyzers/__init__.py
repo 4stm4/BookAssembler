@@ -13,6 +13,7 @@ from src.analyzers.base import (
     RGPermission,
     SecurityViolationError,
 )
+from src.analyzers.algorithm_detector import AlgorithmDetectorAnalyzer
 from src.analyzers.bibliography_detector import BibliographyDetectorAnalyzer
 from src.analyzers.block_classifier import BlockClassifierAnalyzer
 from src.analyzers.callout_detector import CalloutDetectorAnalyzer
@@ -21,10 +22,12 @@ from src.analyzers.citation_linker import CitationLinkerAnalyzer
 from src.analyzers.definition_detector import DefinitionDetectorAnalyzer
 from src.analyzers.diagram_detector import DiagramDetectorAnalyzer
 from src.analyzers.entity_extractor import EntityExtractorAnalyzer
+from src.analyzers.ephemera_detector import EphemeraDetectorAnalyzer
 from src.analyzers.footnote_detector import FootnoteDetectorAnalyzer
 from src.analyzers.formula_detector import FormulaDetectorAnalyzer
 from src.analyzers.llm_refinement import LLMRefinementAnalyzer
 from src.analyzers.heading import HeadingAnalyzer
+from src.analyzers.index_detector import IndexDetectorAnalyzer
 from src.analyzers.list_detector import ListDetectorAnalyzer
 from src.analyzers.normalization import NormalizationAnalyzer
 from src.analyzers.page_agent import PageAgentAnalyzer
@@ -40,6 +43,7 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
     return [
         NormalizationAnalyzer(),
         ReadingOrderAnalyzer(),
+        EphemeraDetectorAnalyzer(),
         DiagramDetectorAnalyzer(),
         HeadingAnalyzer(),
         ListDetectorAnalyzer(),
@@ -49,6 +53,8 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         CalloutDetectorAnalyzer(),
         FootnoteDetectorAnalyzer(),
         BibliographyDetectorAnalyzer(),
+        AlgorithmDetectorAnalyzer(),
+        IndexDetectorAnalyzer(),
         TitlePageAnalyzer(),
         TableDetectorAnalyzer(),
         # Ask a vision agent about table-like pages TableDetector missed
@@ -64,6 +70,7 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
 
 
 __all__ = [
+    "AlgorithmDetectorAnalyzer",
     "AnalyzerManifest",
     "BaseAnalyzer",
     "BibliographyDetectorAnalyzer",
@@ -73,9 +80,11 @@ __all__ = [
     "CitationLinkerAnalyzer",
     "DefinitionDetectorAnalyzer",
     "EntityExtractorAnalyzer",
+    "EphemeraDetectorAnalyzer",
     "FootnoteDetectorAnalyzer",
     "FormulaDetectorAnalyzer",
     "HeadingAnalyzer",
+    "IndexDetectorAnalyzer",
     "KGPermission",
     "LLMRefinementAnalyzer",
     "ListDetectorAnalyzer",

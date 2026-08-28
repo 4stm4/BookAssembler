@@ -59,6 +59,7 @@ from src.hitl.manager import CorrectionStatus, HITLManager, HITLTaskItem
 from src.jobs.manager import JobManager, JobRecord, JobStatus
 from src.jobs.pyjobkit_bridge import PyJobKitBridge
 from src.krm.models import (
+    AlgorithmBlock,
     BaseKRMNode,
     BibEntryBlock,
     CalloutBlock,
@@ -66,13 +67,16 @@ from src.krm.models import (
     CodeBlock,
     ContainerUnit,
     DiagramBlock,
+    EphemeraBlock,
     FigureBlock,
     FootnoteBlock,
     FormulaBlock,
+    IndexEntryBlock,
     KnowledgeDocument,
     ListBlock,
     ListItemBlock,
     ParagraphBlock,
+    SidebarBlock,
     TocEntryBlock,
     StyledTextSpan,
     TableBlock,
@@ -542,6 +546,48 @@ def create_app() -> FastAPI:
                     if bb:
                         result["bbox"] = [bb.x0, bb.y0, bb.x1, bb.y1]
                 return result
+            elif isinstance(node, EphemeraBlock):
+                return {
+                    "id": node.id,
+                    "type": "EphemeraBlock",
+                    "ephemera_type": node.ephemera_type,
+                    "repeated_text": node.repeated_text,
+                    "confidence_score": node.confidence_score,
+                }
+            elif isinstance(node, AlgorithmBlock):
+                return {
+                    "id": node.id,
+                    "type": "AlgorithmBlock",
+                    "algorithm_name": node.algorithm_name,
+                    "algorithm_number": node.algorithm_number,
+                    "pseudocode": node.pseudocode,
+                    "confidence_score": node.confidence_score,
+                }
+            elif isinstance(node, SidebarBlock):
+                children = [
+                    _serialize_body(c) for c in node.content
+                    if not getattr(c, "is_tombstoned", False)
+                ]
+                return {
+                    "id": node.id,
+                    "type": "SidebarBlock",
+                    "sidebar_type": node.sidebar_type,
+                    "content": children,
+                    "confidence_score": node.confidence_score,
+                }
+            elif isinstance(node, IndexEntryBlock):
+                subs = [
+                    {"term": s.term, "page_refs": s.page_refs}
+                    for s in node.subentries
+                ] if node.subentries else []
+                return {
+                    "id": node.id,
+                    "type": "IndexEntryBlock",
+                    "term": node.term,
+                    "page_refs": node.page_refs,
+                    "subentries": subs,
+                    "confidence_score": node.confidence_score,
+                }
             fallback = {"id": getattr(node, "id", ""), "type": type(node).__name__}
             cp = _first_page(node)
             if cp is not None:
