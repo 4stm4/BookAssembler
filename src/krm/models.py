@@ -266,6 +266,47 @@ class BlankPageBlock(StructuralUnit):
 
 
 @dataclass
+class EphemeraBlock(StructuralUnit):
+    """
+    Running header, footer, or page number — decorative content repeated
+    across pages that is not part of the logical document structure.
+    """
+    ephemera_type: str = "header"  # header, footer, page_number
+    repeated_text: str = ""
+
+
+@dataclass
+class AlgorithmBlock(StructuralUnit):
+    """
+    Pseudocode algorithm block (Algorithm N: Name).
+    Extends the concept of CodeBlock with algorithm-specific metadata.
+    """
+    algorithm_name: str = ""
+    algorithm_number: str = ""
+    pseudocode: str = ""
+
+
+@dataclass
+class SidebarBlock(StructuralUnit):
+    """
+    Content outside the main text column — sidebars, margin notes, pull quotes.
+    Detected by bbox position outside the dominant text column.
+    """
+    sidebar_type: str = "sidebar"  # sidebar, margin_note, pull_quote
+    content: List["StructuralUnit"] = field(default_factory=list)
+
+
+@dataclass
+class IndexEntryBlock(StructuralUnit):
+    """
+    Single entry in a back-of-book index: 'Term, p1, p2-p3'.
+    """
+    term: str = ""
+    page_refs: List[str] = field(default_factory=list)
+    subentries: List["IndexEntryBlock"] = field(default_factory=list)
+
+
+@dataclass
 class ListItemBlock(StructuralUnit):
     """
     Single item in a list. Content is any sequence of structural blocks so
