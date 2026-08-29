@@ -1786,6 +1786,57 @@ def create_app() -> FastAPI:
         ok, models = _probe_ollama(host)
         return ok, models, {}
 
+    # --- Skills API (RFC 0006) ---
+
+    _skills_runner_instance: Optional[Any] = None
+
+    def _get_skills_runner() -> Any:
+        nonlocal _skills_runner_instance
+        if _skills_runner_instance is None:
+            from src.skills.runner import SkillsRunner
+            from pathlib import Path
+            runner = SkillsRunner()
+            skills_dir = Path("skills")
+            if skills_dir.exists():
+                runner.load_directory(skills_dir)
+        _skills_runner_instance = runner
+        return _skills_runner_instance
+
+    @app.get("/api/v1/skills")
+    async def list_skills() -> List[Dict[str, Any]]:
+        runner = _get_skills_runner()
+        result = []
+        for name, pack in runner.packs.items():
+            result.append({
+                "name": pack.name,
+                "version": pack.version,
+                "description": pack.metadata.get("description", ""),
+                "apply_when": pack.apply_when,
+                "steps": pack.steps,
+                "disabled": pack.disabled,
+            })
+        return result
+
+    @app.post("/api/v1/skills/{skill_name}/activate")
+    async def activate_skill(skill_name: str, job_id: str) -> Dict[str, Any]:
+        runner = _get_skills_runner()
+        pack = runner.packs.get(skill_name)
+        if pack is None:
+            return {"error": f"Skill pack '{skill_name}' not found"}
+        if job_id not in jobs:
+            return {"error": f"Job '{job_id}' not found"}
+        job = jobs[job_id]
+        doc = job.get("document")
+        if doc is None:
+            return {"error": "Job has no document"}
+        job.setdefault("active_skills", []).append(skill_name)
+        return {
+            "status": "activated",
+            "skill": skill_name,
+            "job_id": job_id,
+            "pipeline_steps": len(runner.build_pipeline(pack)),
+        }
+
     @app.get("/api/v1/agents/config")
     async def get_agents_config() -> Dict[str, Any]:
         saved = _load_agents_config()

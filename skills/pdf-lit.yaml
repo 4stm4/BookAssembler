@@ -1,0 +1,33 @@
+name: pdf-lit
+version: "1.0.0"
+description: "General literature PDF — headings, paragraphs, footnotes, bibliography"
+apply_when: "page_count > 10 and not contains(title, 'PDP')"
+requires:
+  kae: ">=0.4.0"
+
+steps:
+  - NormalizationAnalyzer
+  - ReadingOrderAnalyzer
+  - EphemeraDetectorAnalyzer
+  - HeadingAnalyzer
+  - ListDetectorAnalyzer
+  - FootnoteDetectorAnalyzer
+  - BibliographyDetectorAnalyzer
+  - TitlePageAnalyzer
+  - TableDetectorAnalyzer
+  - PageAgentAnalyzer
+  - CaptionAnalyzer
+  - BlockClassifierAnalyzer
+  - LLMRefinementAnalyzer
+  - EntityExtractorAnalyzer
+  - ProperNounExtractorAnalyzer
+  - CitationLinkerAnalyzer
+
+disabled:
+  - CalloutDetectorAnalyzer
+  - TheoremDetectorAnalyzer
+  - DiagramDetectorAnalyzer
+  - FormulaDetectorAnalyzer
+  - AlgorithmDetectorAnalyzer
+  - IndexDetectorAnalyzer
+  - DefinitionDetectorAnalyzer
