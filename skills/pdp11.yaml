@@ -1,0 +1,33 @@
+name: pdp11
+version: "1.0.0"
+description: "PDP-11 processor documentation — registers, instructions, assembly"
+apply_when: "contains(title, 'PDP') or contains(text_sample, 'PDP-11')"
+requires:
+  kae: ">=0.4.0"
+
+steps:
+  - NormalizationAnalyzer
+  - ReadingOrderAnalyzer
+  - EphemeraDetectorAnalyzer
+  - DiagramDetectorAnalyzer
+  - HeadingAnalyzer
+  - ListDetectorAnalyzer
+  - FormulaDetectorAnalyzer
+  - DefinitionDetectorAnalyzer
+  - FootnoteDetectorAnalyzer
+  - BibliographyDetectorAnalyzer
+  - AlgorithmDetectorAnalyzer
+  - IndexDetectorAnalyzer
+  - TitlePageAnalyzer
+  - TableDetectorAnalyzer
+  - PageAgentAnalyzer
+  - CaptionAnalyzer
+  - BlockClassifierAnalyzer
+  - LLMRefinementAnalyzer
+  - EntityExtractorAnalyzer
+  - ProperNounExtractorAnalyzer
+  - CitationLinkerAnalyzer
+
+disabled:
+  - TheoremDetectorAnalyzer
+  - CalloutDetectorAnalyzer

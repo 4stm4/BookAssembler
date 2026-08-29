@@ -1,0 +1,33 @@
+name: math-book
+version: "1.0.0"
+description: "Mathematics textbook — theorems, proofs, examples, formulas"
+apply_when: "has_language('russian') and page_count > 20"
+requires:
+  kae: ">=0.4.0"
+
+steps:
+  - NormalizationAnalyzer
+  - ReadingOrderAnalyzer
+  - EphemeraDetectorAnalyzer
+  - HeadingAnalyzer
+  - ListDetectorAnalyzer
+  - FormulaDetectorAnalyzer
+  - TheoremDetectorAnalyzer
+  - DefinitionDetectorAnalyzer
+  - FootnoteDetectorAnalyzer
+  - BibliographyDetectorAnalyzer
+  - IndexDetectorAnalyzer
+  - TitlePageAnalyzer
+  - TableDetectorAnalyzer
+  - PageAgentAnalyzer
+  - CaptionAnalyzer
+  - BlockClassifierAnalyzer
+  - LLMRefinementAnalyzer
+  - EntityExtractorAnalyzer
+  - ProperNounExtractorAnalyzer
+  - CitationLinkerAnalyzer
+
+disabled:
+  - CalloutDetectorAnalyzer
+  - DiagramDetectorAnalyzer
+  - AlgorithmDetectorAnalyzer
