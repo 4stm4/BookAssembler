@@ -37,6 +37,7 @@ from src.analyzers.reading_order import ReadingOrderAnalyzer
 from src.analyzers.table_detector import TableDetectorAnalyzer
 from src.analyzers.theorem_detector import TheoremDetectorAnalyzer
 from src.analyzers.title_page import TitlePageAnalyzer
+from src.analyzers.vision_fallback import VisionFallbackAnalyzer
 
 
 def create_default_pipeline() -> List[BaseAnalyzer]:
@@ -63,6 +64,7 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         CaptionAnalyzer(),
         BlockClassifierAnalyzer(),
         LLMRefinementAnalyzer(),
+        VisionFallbackAnalyzer(),
         EntityExtractorAnalyzer(),
         ProperNounExtractorAnalyzer(),
         CitationLinkerAnalyzer(),
@@ -98,5 +100,6 @@ __all__ = [
     "TableDetectorAnalyzer",
     "TheoremDetectorAnalyzer",
     "TitlePageAnalyzer",
+    "VisionFallbackAnalyzer",
     "create_default_pipeline",
 ]
