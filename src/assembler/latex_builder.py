@@ -56,6 +56,7 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 \newtheorem{definitionenv}{Definition}[chapter]
 \usepackage[ruled,vlined]{algorithm2e}
 \usepackage[framemethod=default]{mdframed}
+\usepackage{tikz}
 \usepackage[a4paper,margin=2.2cm]{geometry}
 \usepackage{sectsty}
 \setmainfont{DejaVu Serif}
@@ -133,12 +134,24 @@ def _translated(node: Any, fallback: str, target_lang: str) -> str:
     return fallback
 
 
-def build_latex(doc: KnowledgeDocument, target_lang: str = "") -> str:
+def build_latex(
+    doc: KnowledgeDocument, target_lang: str = "", page_aware: bool = False,
+) -> str:
     """Render the KRM tree to a XeLaTeX document (hybrid strategy, RFC 0021).
 
     If target_lang is given, translated segments (metadata['translations']) are
     used in place of source text; the KRM source itself stays unmodified.
+
+    If page_aware is True, blocks are grouped by page_or_screen_index and
+    rendered per-page with positional layout for special pages (title, toc,
+    cover) and reflow for text pages (RFC 0021 §3).
     """
+    if page_aware:
+        from src.assembler.page_assembler import assemble_pages
+        title = _esc(doc.title or "Untitled")
+        header = f"\\title{{{title}}}\n\\maketitle\n"
+        return _PREAMBLE + header + assemble_pages(doc, target_lang) + _POSTAMBLE
+
     body: List[str] = []
     title = _esc(doc.title or "Untitled")
     body.append(f"\\title{{{title}}}\n\\maketitle\n")
