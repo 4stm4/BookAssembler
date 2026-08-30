@@ -1434,27 +1434,43 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
         return _serialize_document(doc)
 
+    def _open_source_pdf(job_id: str, doc: KnowledgeDocument) -> Any:
+        """Open the source PDF for a job, supporting both upload:// and sep:// URIs."""
+        import pymupdf as fitz
+        source_uri = doc.source_uri or ""
+
+        if source_uri.startswith("upload://"):
+            filename = source_uri.replace("upload://", "")
+            pdf_path = os.path.join(kae_ssd_path, job_id, filename)
+            if not os.path.isfile(pdf_path):
+                raise HTTPException(status_code=404, detail="Uploaded PDF not found on disk")
+            return fitz.open(pdf_path)
+
+        if source_uri.startswith("sep://"):
+            parts = source_uri.replace("sep://", "").split("/", 1)
+            if len(parts) != 2:
+                raise HTTPException(status_code=400, detail="Invalid source_uri")
+            provider_id, file_id = parts
+            try:
+                import asyncio
+                sep_provider = _resolve_sep_provider(provider_id)
+                loop = asyncio.get_event_loop()
+                file_stream = loop.run_until_complete(sep_provider.get_file_stream(file_id))
+            except Exception:
+                raise HTTPException(status_code=404, detail="Cannot access source file")
+            pdf_bytes = file_stream.read()
+            return fitz.open(stream=pdf_bytes, filetype="pdf")
+
+        raise HTTPException(status_code=400, detail="Unsupported source URI scheme")
+
     @app.get("/api/v1/jobs/{job_id}/page-image/{page_num}")
     async def get_page_image(job_id: str, page_num: int) -> Response:
         doc = docs_store.get(job_id)
         if doc is None:
             raise HTTPException(status_code=404, detail="Document not found")
-        source_uri = doc.source_uri or ""
-        if not source_uri.startswith("sep://"):
-            raise HTTPException(status_code=400, detail="Only SEP documents supported")
-        parts = source_uri.replace("sep://", "").split("/", 1)
-        if len(parts) != 2:
-            raise HTTPException(status_code=400, detail="Invalid source_uri")
-        provider_id, file_id = parts
-        try:
-            sep_provider = _resolve_sep_provider(provider_id)
-            file_stream = await sep_provider.get_file_stream(file_id)
-        except Exception:
-            raise HTTPException(status_code=404, detail="Cannot access source file")
-        import pymupdf as fitz
-        pdf_bytes = file_stream.read()
-        pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        pdf_doc = _open_source_pdf(job_id, doc)
         if page_num < 0 or page_num >= len(pdf_doc):
+            pdf_doc.close()
             raise HTTPException(status_code=400, detail=f"Page {page_num} out of range")
         page = pdf_doc[page_num]
         pix = page.get_pixmap(dpi=100)
@@ -1492,19 +1508,11 @@ def create_app() -> FastAPI:
         vl = node.visual_layout
         if vl is None or vl.bounding_box is None:
             raise HTTPException(status_code=400, detail="Diagram has no region")
-        source_uri = doc.source_uri or ""
-        if not source_uri.startswith("sep://"):
-            raise HTTPException(status_code=400, detail="Only SEP documents supported")
-        provider_id, file_id = source_uri.replace("sep://", "").split("/", 1)
-        try:
-            sep_provider = _resolve_sep_provider(provider_id)
-            file_stream = await sep_provider.get_file_stream(file_id)
-        except Exception:
-            raise HTTPException(status_code=404, detail="Cannot access source file")
         import pymupdf as fitz
-        pdf_doc = fitz.open(stream=file_stream.read(), filetype="pdf")
+        pdf_doc = _open_source_pdf(job_id, doc)
         pg = vl.page_or_screen_index
         if pg < 0 or pg >= len(pdf_doc):
+            pdf_doc.close()
             raise HTTPException(status_code=400, detail="Page out of range")
         page = pdf_doc[pg]
         pw, ph = page.rect.width, page.rect.height
@@ -1515,26 +1523,18 @@ def create_app() -> FastAPI:
         pdf_doc.close()
         return Response(content=img_bytes, media_type="image/jpeg")
 
-    async def _render_block_png(doc: KnowledgeDocument, node: Any) -> bytes:
+    async def _render_block_png(job_id: str, doc: KnowledgeDocument, node: Any) -> bytes:
         """Render a block's source page region to PNG bytes (for /infer agents)."""
         vl = getattr(node, "visual_layout", None)
         if vl is None or vl.bounding_box is None:
             raise HTTPException(400, "Block has no region")
-        source_uri = doc.source_uri or ""
-        if not source_uri.startswith("sep://"):
-            raise HTTPException(400, "Only SEP documents supported")
-        provider_id, file_id = source_uri.replace("sep://", "").split("/", 1)
-        prov = _resolve_sep_provider(provider_id)
-        stream = await prov.get_file_stream(file_id)
         import pymupdf as fitz
-        pdf_doc = fitz.open(stream=stream.read(), filetype="pdf")
+        pdf_doc = _open_source_pdf(job_id, doc)
         pg = vl.page_or_screen_index
         page = pdf_doc[pg]
         pw, ph = page.rect.width, page.rect.height
         bb = vl.bounding_box
         clip = fitz.Rect(bb.x0 * pw, bb.y0 * ph, bb.x1 * pw, bb.y1 * ph)
-        # 100dpi is enough for vision-LLMs to read tables; higher dpi triggers
-        # OOM in Qwen2.5-VL on T4 (visual token explosion).
         data = page.get_pixmap(clip=clip, dpi=100).tobytes("png")
         pdf_doc.close()
         return data
@@ -1574,7 +1574,7 @@ def create_app() -> FastAPI:
         host, _model, _kind = _pick_agent_for_role("table")
         if not host:
             raise HTTPException(503, "No agent with role 'table' available")
-        png = await _render_block_png(doc, node)
+        png = await _render_block_png(job_id, doc, node)
         latex = await asyncio.to_thread(_call_infer, host, "table", base64.b64encode(png).decode())
         if not latex:
             raise HTTPException(503, "Table agent failed")
