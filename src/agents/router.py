@@ -150,7 +150,7 @@ def call_infer(
             req = urllib.request.Request(
                 f"{host}/infer", data=payload, headers=headers,
             )
-            with urllib.request.urlopen(req, timeout=20) as r:
+            with urllib.request.urlopen(req, timeout=45) as r:
                 return json.loads(r.read()).get("text", "")
         except Exception as exc:
             log.warning("agent %s/infer attempt %d: %s", host, attempt, exc)
