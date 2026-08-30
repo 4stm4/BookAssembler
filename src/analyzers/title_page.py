@@ -210,8 +210,18 @@ class TitlePageAnalyzer(BaseAnalyzer):
             if page is not None and page < TITLE_MAX_PAGES:
                 page_groups.setdefault(page, []).append(loc)
 
+        already_titled: Set[int] = set()
+        for container in doc.root_containers:
+            for child in container.children:
+                if isinstance(child, TitlePageBlock) and not child.is_tombstoned:
+                    vl = getattr(child, "visual_layout", None)
+                    if vl and hasattr(vl, "page_or_screen_index"):
+                        already_titled.add(vl.page_or_screen_index)
+
         title_page_count = 0
         for page in sorted(page_groups.keys()):
+            if page in already_titled:
+                continue
             locs = page_groups[page]
             texts = [_get_text(loc[0]) for loc in locs if _get_text(loc[0])]
             score = _score_page_blocks(texts)
