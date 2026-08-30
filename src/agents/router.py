@@ -101,25 +101,61 @@ def pick(role: str) -> Tuple[Optional[str], Optional[str], str]:
     return None, None, "ollama"
 
 
-def call_infer(host: str, task: str, image_png: bytes, prompt: Optional[str] = None) -> Optional[str]:
-    """Send a PNG region to a multimodel/got-ocr agent — get recognized text.
+def _token_for_host(host: str) -> Optional[str]:
+    """Look up Bearer token for a host from agents.json."""
+    for a in load_agents():
+        if a.get("host", "").rstrip("/") == host.rstrip("/"):
+            return a.get("token")
+    return None
 
-    Tries /infer first (multimodel), falls back to /ocr (legacy got-ocr).
-    """
+
+def call_infer(
+    host: str, task: str, image_png: bytes,
+    prompt: Optional[str] = None, kind: str = "multimodel",
+    model: Optional[str] = None,
+) -> Optional[str]:
+    """Send an image to an agent for inference. Supports multimodel, got-ocr, and ollama."""
     b64 = base64.b64encode(image_png).decode()
+
+    if kind == "ollama":
+        body = {
+            "model": model or "llava:7b",
+            "prompt": prompt or f"Describe this image for {task}.",
+            "images": [b64],
+            "stream": False,
+            "options": {"temperature": 0.0, "seed": 42},
+        }
+        payload = json.dumps(body).encode()
+        try:
+            req = urllib.request.Request(
+                f"{host}/api/generate", data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return json.loads(r.read()).get("response", "")
+        except Exception as exc:
+            log.warning("ollama vision %s failed: %s", host, exc)
+            return None
+
     body = {"image_b64": b64, "task": task}
     if prompt:
         body["prompt"] = prompt
     payload = json.dumps(body).encode()
+    headers: dict = {"Content-Type": "application/json"}
+    token = _token_for_host(host)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     for path in ("/infer", "/ocr"):
         try:
             req = urllib.request.Request(
-                f"{host}{path}", data=payload,
-                headers={"Content-Type": "application/json"},
+                f"{host}{path}", data=payload, headers=headers,
             )
-            with urllib.request.urlopen(req, timeout=240) as r:
+            with urllib.request.urlopen(req, timeout=45) as r:
                 return json.loads(r.read()).get("text", "")
-        except Exception:
+        except Exception as exc:
+            log.warning("agent %s%s failed: %s", host, path, exc)
+            if "timed out" in str(exc):
+                break
             continue
-    log.warning("agent /infer and /ocr both failed at %s", host)
+    log.warning("agent inference failed at %s", host)
     return None

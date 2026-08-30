@@ -39,6 +39,19 @@ MIN_BLOCKS = 5            # need enough blocks to look like a grid
 MIN_SHORT_RATIO = 0.7     # most blocks are short (labels/cells, not paragraphs)
 
 
+def _pixmap_to_jpeg(pixmap: Any, quality: int = 30, max_dim: int = 512) -> bytes:
+    import io
+    from PIL import Image
+    img = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+    w, h = img.size
+    if max(w, h) > max_dim:
+        scale = max_dim / max(w, h)
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
 def _text(node: Any) -> str:
     if isinstance(node, ParagraphBlock):
         return " ".join(
@@ -128,11 +141,15 @@ class PageAgentAnalyzer(BaseAnalyzer):
 
             try:
                 if classify_mode:
-                    role, types = self._classify_page(pdf_path, pg, host, blocks)
+                    role, types = self._classify_page(
+                        pdf_path, pg, host, blocks, kind=_kind, model=_model,
+                    )
                     log.info("PageAgent: page %d role=%s, %d block types",
                              pg, role, len(types))
                     if role == "table":
-                        latex = self._recognize_table(pdf_path, pg, host, blocks)
+                        latex = self._recognize_table(
+                            pdf_path, pg, host, blocks, kind=_kind, model=_model,
+                        )
                         if latex:
                             self._replace_with_table(blocks, latex, pg)
                             continue
@@ -148,7 +165,9 @@ class PageAgentAnalyzer(BaseAnalyzer):
                     if not (titled or numeric / len(blocks) >= MIN_NUMERIC_RATIO
                             or short / len(blocks) >= MIN_SHORT_RATIO):
                         continue
-                    latex = self._recognize_table(pdf_path, pg, host, blocks)
+                    latex = self._recognize_table(
+                        pdf_path, pg, host, blocks, kind=_kind, model=_model,
+                    )
                     if latex:
                         self._replace_with_table(blocks, latex, pg)
                 consecutive_failures = 0
@@ -160,6 +179,7 @@ class PageAgentAnalyzer(BaseAnalyzer):
     def _classify_page(
         self, pdf_path: str, page_index: int, host: str,
         blocks: List[Tuple[Any, ContainerUnit]],
+        kind: str = "multimodel", model: Optional[str] = None,
     ) -> Tuple[str, Dict[int, str]]:
         """Ask a vision agent to classify a page and every block on it.
 
@@ -172,24 +192,24 @@ class PageAgentAnalyzer(BaseAnalyzer):
         pdf = fitz.open(pdf_path)
         try:
             page = pdf[page_index]
-            png = page.get_pixmap(dpi=100).tobytes("png")
+            png = _pixmap_to_jpeg(page.get_pixmap(dpi=72))
         finally:
             pdf.close()
 
+        sample = blocks[:15]
         listing = "\n".join(
-            f"{i + 1}. \"{_text(b)[:120]}\"" for i, (b, _) in enumerate(blocks)
+            f"{i + 1}. \"{_text(b)[:60]}\"" for i, (b, _) in enumerate(sample)
         )
         prompt = (
             "This image is one page of a scanned book. Along with it you get the "
-            "text blocks extracted from the page, in reading order.\n\n"
+            "text blocks extracted from the page (sample).\n\n"
             f"BLOCKS:\n{listing}\n\n"
-            "First decide the PAGE ROLE: title, toc, table, diagram, figure, code, "
-            "formula, text. Then classify EACH block: paragraph, heading, "
+            "Decide the PAGE ROLE: title, toc, table, diagram, figure, code, "
+            "formula, text. Classify each listed block: paragraph, heading, "
             "toc_entry, caption, code, formula, list_item, table_cell, title, label.\n"
-            'Reply with ONLY JSON: {"role":"...","blocks":[{"n":1,"type":"..."},...]}. '
-            "No prose, no code fences."
+            'Reply JSON only: {"role":"...","blocks":[{"n":1,"type":"..."},...]}.'
         )
-        text = call_infer(host, "vision", png, prompt=prompt) or ""
+        text = call_infer(host, "vision", png, prompt=prompt, kind=kind, model=model) or ""
         role = "text"
         types: Dict[int, str] = {}
         m = _re.search(r"\{.*\}", text, _re.DOTALL)
@@ -228,6 +248,7 @@ class PageAgentAnalyzer(BaseAnalyzer):
     def _recognize_table(
         self, pdf_path: str, page_index: int, host: str,
         blocks: List[Tuple[Any, ContainerUnit]],
+        kind: str = "multimodel", model: Optional[str] = None,
     ) -> Optional[str]:
         """Render the page region covering these blocks and send to the agent."""
         import pymupdf as fitz
@@ -245,12 +266,11 @@ class PageAgentAnalyzer(BaseAnalyzer):
             page = pdf[page_index]
             pw, ph = page.rect.width, page.rect.height
             clip = fitz.Rect(x0 * pw, y0 * ph, x1 * pw, y1 * ph)
-            # 100dpi is enough for vision-LLMs; 150+ triggers OOM on T4.
-            png = page.get_pixmap(clip=clip, dpi=100).tobytes("png")
+            png = _pixmap_to_jpeg(page.get_pixmap(clip=clip, dpi=72))
         finally:
             pdf.close()
 
-        latex = call_infer(host, "table", png)
+        latex = call_infer(host, "table", png, kind=kind, model=model)
         if not latex or "tabular" not in latex.lower():
             return None
         # Strip markdown fences the LLM often wraps around code.
