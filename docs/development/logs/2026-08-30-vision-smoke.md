@@ -27,7 +27,19 @@
 - Single-column short-text blocks without separators → not a table
 - Before fix: dozens of false tables; after: 4 real tables in 568-page book
 
+## Retry & JPEG Optimization (session 3)
+- JPEG quality=30, max_dim=512px, DPI 72 → payload ~15KB (was ~200KB PNG)
+- Retry: 3 attempts × 20s timeout on /infer only (skip /ocr on timeout)
+- Bearer token auth added for Cloudflare-tunneled runners
+- rpi5 upload bottleneck: ~1.3 KB/s to Cloudflare → systematic timeouts on some pages
+- PDP-11 (34 pages): pages 1–3 classified OK, page 4 = 3/3 timeout (systematic), page 5 saved by retry
+- llava:7b on orangepi removed — ARM CPU vision inference impractical (~minutes per image)
+
+## Observations
+- Timeout is not random — specific pages consistently fail (likely payload size or tunnel latency spike)
+- Two concurrent jobs doubled tunnel load and worsened timeouts
+- pyjobkit queue suggested as future improvement for async vision tasks
+
 ## Next Steps
-- Increase KAE_RUNNER_IDLE_TIMEOUT to 3600s in Kaggle secrets
-- Full E2E test with live Kaggle runner (requires user to restart notebook)
-- Pull llava:7b on orangepi as local fallback when Kaggle is unavailable
+- Queue-based approach via pyjobkit for reliable async vision inference
+- Consider pre-uploading images to S3/object-store to avoid rpi5 upload bottleneck
