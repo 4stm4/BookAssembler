@@ -23,6 +23,7 @@ from src.analyzers.definition_detector import DefinitionDetectorAnalyzer
 from src.analyzers.diagram_detector import DiagramDetectorAnalyzer
 from src.analyzers.entity_extractor import EntityExtractorAnalyzer
 from src.analyzers.ephemera_detector import EphemeraDetectorAnalyzer
+from src.analyzers.font_stats import FontStatsAnalyzer
 from src.analyzers.footnote_detector import FootnoteDetectorAnalyzer
 from src.analyzers.formula_detector import FormulaDetectorAnalyzer
 from src.analyzers.llm_refinement import LLMRefinementAnalyzer
@@ -44,6 +45,7 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
     return [
         NormalizationAnalyzer(),
         ReadingOrderAnalyzer(),
+        FontStatsAnalyzer(),
         EphemeraDetectorAnalyzer(),
         DiagramDetectorAnalyzer(),
         HeadingAnalyzer(),
@@ -83,6 +85,7 @@ __all__ = [
     "DefinitionDetectorAnalyzer",
     "EntityExtractorAnalyzer",
     "EphemeraDetectorAnalyzer",
+    "FontStatsAnalyzer",
     "FootnoteDetectorAnalyzer",
     "FormulaDetectorAnalyzer",
     "HeadingAnalyzer",
