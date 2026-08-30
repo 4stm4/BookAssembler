@@ -52,6 +52,21 @@ def find_vision_host(hosts: Optional[List[str]] = None) -> Optional[str]:
     return None
 
 
+def _token_for_host(host: str) -> Optional[str]:
+    agents_path = os.path.join(
+        os.environ.get("KAE_SSD_PATH", "/data/kae"), "agents.json"
+    )
+    if os.path.exists(agents_path):
+        try:
+            with open(agents_path) as f:
+                for a in json.load(f):
+                    if a.get("host", "").rstrip("/") == host.rstrip("/"):
+                        return a.get("token")
+        except Exception:
+            pass
+    return None
+
+
 def vision_generate(
     host: str,
     model: str,
@@ -77,9 +92,13 @@ def vision_generate(
             "stream": False,
             "options": {"temperature": 0.0, "seed": 42},
         }).encode()
+    headers: dict = {"Content-Type": "application/json"}
+    token = _token_for_host(host)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(
         url, data=payload,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
