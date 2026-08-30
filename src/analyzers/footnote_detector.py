@@ -172,13 +172,16 @@ class FootnoteDetectorAnalyzer(BaseAnalyzer):
 
             marker, number, remainder = parsed
 
-            # If we have layout hints, require both small font AND low position.
             fs = _font_size(child)
             y0 = _bbox_bottom_y(child)
-            if fs is not None and small_threshold is not None and fs >= small_threshold:
-                new_children.append(child)
-                continue
-            if y0 is not None and y0 < 0.70:
+            font_role = (child.metadata or {}).get("font_role")
+            font_is_footnote = font_role == "footnote"
+
+            if not font_is_footnote:
+                if fs is not None and small_threshold is not None and fs >= small_threshold:
+                    new_children.append(child)
+                    continue
+            if y0 is not None and y0 < 0.70 and not font_is_footnote:
                 # Not near the bottom → probably not a footnote (e.g. numbered
                 # step in body text). Leave it as ParagraphBlock.
                 new_children.append(child)
@@ -187,14 +190,15 @@ class FootnoteDetectorAnalyzer(BaseAnalyzer):
             body_text = (remainder + _full_text(child)[len(text):]).strip()
             if not body_text:
                 body_text = remainder.strip()
+            cls_conf = 0.85 if font_is_footnote else 0.75
             footnote = FootnoteBlock(
                 marker=marker,
                 footnote_number=number,
                 text=body_text,
                 visual_layout=child.visual_layout,
                 extraction_confidence=child.extraction_confidence,
-                classification_confidence=0.75,
-                confidence_score=min(child.extraction_confidence, 0.75),
+                classification_confidence=cls_conf,
+                confidence_score=min(child.extraction_confidence, cls_conf),
             )
             footnote.id = child.id  # RFC 0001 §2.3
             new_children.append(footnote)

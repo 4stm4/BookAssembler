@@ -153,8 +153,9 @@ class FormulaDetectorAnalyzer(BaseAnalyzer):
                 continue
 
             math_font = _math_font(child)
+            font_role_math = (child.metadata or {}).get("font_role") == "math"
             heuristic = _looks_like_formula(text)
-            if not (math_font or heuristic):
+            if not (math_font or heuristic or font_role_math):
                 new_children.append(child)
                 continue
 
@@ -165,16 +166,17 @@ class FormulaDetectorAnalyzer(BaseAnalyzer):
                 formula_number=number,
                 visual_layout=child.visual_layout,
                 extraction_confidence=child.extraction_confidence,
-                classification_confidence=0.75 if math_font else 0.60,
+                classification_confidence=0.80 if (math_font or font_role_math) else 0.60,
                 confidence_score=min(
                     child.extraction_confidence,
-                    0.75 if math_font else 0.60,
+                    0.80 if (math_font or font_role_math) else 0.60,
                 ),
             )
             formula.id = child.id  # RFC 0001 §2.3
             formula.metadata = dict(child.metadata or {})
             formula.metadata["needs_vision_ocr"] = True
-            formula.metadata["detector_signal"] = "font" if math_font else "density"
+            signal = "font" if math_font else ("font_role" if font_role_math else "density")
+            formula.metadata["detector_signal"] = signal
             new_children.append(formula)
 
         container.children = new_children
