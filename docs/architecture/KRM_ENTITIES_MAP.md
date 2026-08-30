@@ -2,7 +2,7 @@
 
 | Статус | Версия | Дата |
 |---|---|---|
-| Draft | 0.4.0 | 2026-08-26 |
+| Release | 1.0.0 | 2026-08-31 |
 
 Инвентаризация всех типов узлов Knowledge Representation Model (см. RFC 0002) —
 что объявлено в `src/krm/models.py`, что реально создаётся в пайплайне (и кем),
@@ -54,15 +54,15 @@
 | `WarningSpec` | ⚠️ | то же самое |
 | `FootnoteBlock` | ✅ | `FootnoteDetectorAnalyzer` (маркер + маленький кегль + низ страницы) |
 | `CalloutBlock` (note/warning/tip) | ✅ | `CalloutDetectorAnalyzer` (префикс Note/Warning/⚠/…) → mdframed |
-| `SidebarBlock` | ❌ | боковой блок сливается с основным потоком |
+| `SidebarBlock` | ✅ | `SidebarDetectorAnalyzer` — боковые врезки (note/aside/sidebar) |
 | `BibEntryBlock` | ✅ | `BibliographyDetectorAnalyzer` (контейнер «Bibliography/References/Литература») → `thebibliography` |
-| `IndexEntryBlock` | ❌ | предметный указатель — обычные параграфы |
-| `AlgorithmBlock` | ❌ | псевдокод неотличим от `CodeBlock` |
+| `IndexEntryBlock` | ✅ | `IndexDetectorAnalyzer` — записи предметного указателя |
+| `AlgorithmBlock` | ✅ | `AlgorithmDetectorAnalyzer` — нумерованный псевдокод → `algorithmicx` |
 | `TheoremSpec` (Theorem/Lemma/Corollary/Proposition) | ✅ | `TheoremDetectorAnalyzer` — prefix detection |
 | `ProofSpec` | ✅ | `TheoremDetectorAnalyzer` — proof prefix + links to proved statement |
 | `ExampleSpec` | ✅ | `TheoremDetectorAnalyzer` — example prefix detection |
 | `RemarkSpec` | ✅ | `TheoremDetectorAnalyzer` — remark prefix detection |
-| `EphemeraBlock` (pagenum / running header / footer) | ❌ | сейчас автоматически tombstone'ятся `title_page` эвристикой, но своего типа нет |
+| `EphemeraBlock` (pagenum / running header / footer) | ✅ | `EphemeraDetectorAnalyzer` — колонтитулы и номера страниц |
 
 ## 4. Слой Container
 
@@ -129,10 +129,11 @@ graph TD
     Struct --> Callout["CalloutBlock ✅<br/>note/warning/tip"]
     Struct --> Foot["FootnoteBlock ✅"]
     Struct --> BibE["BibEntryBlock ✅"]
-    Struct --> IdxE["IndexEntryBlock ❌"]
+    Struct --> IdxE["IndexEntryBlock ✅"]
     Struct --> TocE["TocEntryBlock ✅"]
-    Struct --> Algo["AlgorithmBlock ❌"]
-    Struct --> Eph["EphemeraBlock ❌<br/>pagenum/header/footer"]
+    Struct --> Side["SidebarBlock ✅"]
+    Struct --> Algo["AlgorithmBlock ✅"]
+    Struct --> Eph["EphemeraBlock ✅<br/>pagenum/header/footer"]
 
     Base --> Sem["SemanticUnit (декоратор ABC)"]
     Sem --> Def["DefinitionSpec ✅"]
@@ -155,7 +156,8 @@ graph TD
     class StyledSpan,TextLine,Para,Title,Table,Fig,Diag,Code,Cap,Blank,Doc ok
     class ListB,ListIt,Formula,TocE,Callout,Foot,BibE ok
     class MentionSpan,FootRefSpan,MathInl,Def,Instr,Warn warn
-    class IdxE,Algo,Eph,Thm,Proof,Ex,Rem miss
+    class Thm,Proof,Ex,Rem ok
+    class IdxE,Algo,Eph,Side ok
 ```
 
 ---
@@ -189,11 +191,15 @@ graph TD
 8. Расширение `EntityType` — `Person`, `Organization`, `Product`,
    `BibliographyCite` (уже объявлен, но не пишется), `Signal`, `Formula`.
 
-**P3 — служебное:**
-9. `EphemeraBlock` вместо неявного tombstone — явный тип для колонтитулов
-   и номеров страниц (сейчас логика размазана по `TitlePageAnalyzer`).
-10. `AlgorithmBlock` — специализация `CodeBlock` для нумерованного
-    псевдокода (стандарт `algorithmicx` в LaTeX-сборке).
+**P3 — ✅ ВЫПОЛНЕНО:**
+9. ✅ `EphemeraBlock` — явный тип для колонтитулов и номеров страниц,
+   детектор + сериализация + LaTeX + чанкер. 7 тестов.
+10. ✅ `AlgorithmBlock` — специализация `CodeBlock` для нумерованного
+    псевдокода, `algorithmicx` в LaTeX-сборке. 7 тестов.
+11. ✅ `IndexEntryBlock` — записи предметного указателя (term, pages),
+    `makeidx` в LaTeX. 7 тестов.
+12. ✅ `SidebarBlock` — боковые врезки (note/aside/sidebar),
+    `mdframed` в LaTeX. 7 тестов.
 
 ## Что делать со «⚠️ объявлено, не создаётся»
 

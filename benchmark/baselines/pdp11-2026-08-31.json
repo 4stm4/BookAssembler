@@ -1,0 +1,15 @@
+{
+  "block_counts": {
+    "AlgorithmBlock": 1,
+    "BibEntryBlock": 1,
+    "ContainerUnit": 8,
+    "EphemeraBlock": 3,
+    "IndexEntryBlock": 2,
+    "ParagraphBlock": 9,
+    "TocEntryBlock": 4
+  },
+  "kg_edge_count": 23,
+  "kg_entity_count": 24,
+  "latex_hash": "ab06b4b0cfdfdea3d75d79635f8ecb9d0e632f35c183587a944042380a3282d2",
+  "latex_length": 1864
+}
