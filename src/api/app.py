@@ -22,7 +22,7 @@ import io
 import json
 import logging
 import os
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, BinaryIO, Dict, List, Optional
 from uuid import uuid4
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
@@ -932,40 +932,70 @@ def create_app() -> FastAPI:
     ) -> DocumentUploadResponse:
         """
         Uploads a document or text payload and initializes a processing Job.
+
+        For PDF/supported files: saves the file, then parses via the appropriate
+        adapter and runs the full analyzer pipeline in background.
+        For text payloads: creates a simple document synchronously.
         """
         source_uri = "upload://file.txt"
+        raw_bytes: Optional[bytes] = None
 
         if file is not None and file.filename:
             source_uri = f"upload://{file.filename}"
-            _raw_bytes = await file.read()
+            raw_bytes = await file.read()
         elif payload is not None and payload.source_uri:
             source_uri = payload.source_uri
 
         job = job_manager.create_job(source_uri=source_uri)
 
-        # Create initial document and attach to docs store
+        ext = ""
+        if "." in source_uri:
+            ext = source_uri.rsplit(".", 1)[1].lower()
+
+        if raw_bytes and ext and adapter_registry.get_adapter_for_extension(ext):
+            upload_dir = os.path.join(kae_ssd_path, job.job_id)
+            os.makedirs(upload_dir, exist_ok=True)
+            filename = os.path.basename(source_uri.replace("upload://", ""))
+            saved_path = os.path.join(upload_dir, filename)
+            with open(saved_path, "wb") as f:
+                f.write(raw_bytes)
+
+            file_stream = open(saved_path, "rb")
+            job_manager.update_status(job.job_id, JobStatus.RUNNING)
+            progress_store[job.job_id] = {"step": 0, "total": 10, "stage": "Запуск..."}
+            asyncio.create_task(_run_pipeline_background(job, file_stream, ext))
+
+            return DocumentUploadResponse(
+                job_id=job.job_id,
+                status="PROCESSING",
+                source_uri=job.source_uri,
+            )
+
         doc = KnowledgeDocument(source_uri=source_uri)
         container = ContainerUnit(title="Root Section", level=1)
-        
-        content_text = payload.content if (payload and payload.content) else "Sample uploaded text content"
-        paragraph = ParagraphBlock(
-            confidence_score=0.5,
-            inlines=[TextLineInline(spans=[StyledTextSpan(text=content_text)])]
-        )
-        container.children.append(paragraph)
+        content_text = payload.content if (payload and payload.content) else ""
+        if raw_bytes and not content_text:
+            content_text = raw_bytes.decode("utf-8", errors="replace")
+        if not content_text:
+            content_text = ""
+        if content_text:
+            paragraph = ParagraphBlock(
+                confidence_score=0.5,
+                inlines=[TextLineInline(spans=[StyledTextSpan(text=content_text)])]
+            )
+            container.children.append(paragraph)
         doc.root_containers.append(container)
 
         docs_store[job.job_id] = doc
         _persist_doc(job.job_id, doc)
 
-        # Run analyzer pipeline
         rg = ReadingGraph()
         kg = KnowledgeGraph()
         pipeline = PipelineRunner(create_default_pipeline())
         pipeline.execute(doc, rg, kg)
         graphs_store[job.job_id] = {"rg": rg, "kg": kg}
-
         hitl_manager.flag_low_confidence_nodes(doc, threshold=0.80)
+        job_manager.update_status(job.job_id, JobStatus.COMPLETED)
 
         return DocumentUploadResponse(
             job_id=job.job_id,
@@ -1201,13 +1231,12 @@ def create_app() -> FastAPI:
             for item in items
         ]
 
-    async def _process_import_background(
+    async def _run_pipeline_background(
         job: Any,
-        provider_id: str,
-        file_id: str,
+        file_stream: BinaryIO,
         ext: str,
     ) -> None:
-        """Background task: parse PDF and run analyzer pipeline."""
+        """Background task: parse file via adapter and run analyzer pipeline."""
         job_id = job.job_id
         adapter = adapter_registry.get_adapter_for_extension(ext)
         if not adapter:
@@ -1231,8 +1260,6 @@ def create_app() -> FastAPI:
                 "job_type": "import", "progress": 0.0, "status": "RUNNING",
                 "stage": "Чтение файла...",
             })
-            sep_provider = _resolve_sep_provider(provider_id)
-            file_stream = await sep_provider.get_file_stream(file_id)
 
             progress_store[job_id] = {"step": 1, "total": 10, "stage": "Парсинг PDF..."}
             loop = asyncio.get_event_loop()
@@ -1306,6 +1333,22 @@ def create_app() -> FastAPI:
                 "job_type": "import", "progress": 0.0, "status": "FAILED",
                 "error": str(parse_err),
             })
+
+    async def _process_import_background(
+        job: Any,
+        provider_id: str,
+        file_id: str,
+        ext: str,
+    ) -> None:
+        """Background task: fetch file from SEP provider and process."""
+        job_id = job.job_id
+        try:
+            sep_provider = _resolve_sep_provider(provider_id)
+            file_stream = await sep_provider.get_file_stream(file_id)
+        except Exception as e:
+            job_manager.update_status(job_id, JobStatus.FAILED, error=str(e))
+            return
+        await _run_pipeline_background(job, file_stream, ext)
 
     @app.post(
         "/api/v1/sep/providers/{provider_id}/import",
