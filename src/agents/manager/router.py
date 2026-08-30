@@ -58,16 +58,25 @@ def vision_generate(
     prompt: str,
     image_b64: str,
     timeout: int = 120,
+    kind: str = "ollama",
 ) -> Optional[str]:
-    """Call ollama /api/generate with an image for vision inference."""
-    url = f"{host}/api/generate"
-    payload = json.dumps({
-        "model": model,
-        "prompt": prompt,
-        "images": [image_b64],
-        "stream": False,
-        "options": {"temperature": 0.0, "seed": 42},
-    }).encode()
+    """Call a vision backend (ollama or multimodel runner) with an image."""
+    if kind == "multimodel":
+        url = f"{host}/infer"
+        payload = json.dumps({
+            "image_b64": image_b64,
+            "task": "vision",
+            "prompt": prompt,
+        }).encode()
+    else:
+        url = f"{host}/api/generate"
+        payload = json.dumps({
+            "model": model,
+            "prompt": prompt,
+            "images": [image_b64],
+            "stream": False,
+            "options": {"temperature": 0.0, "seed": 42},
+        }).encode()
     req = urllib.request.Request(
         url, data=payload,
         headers={"Content-Type": "application/json"},
@@ -75,6 +84,8 @@ def vision_generate(
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
+            if kind == "multimodel":
+                return data.get("text", data.get("response", ""))
             return data.get("response", "")
     except Exception as e:
         log.warning("Vision generate failed on %s: %s", host, e)
@@ -85,6 +96,7 @@ def formula_vision_fallback(
     host: str,
     model: str,
     image_bytes: bytes,
+    kind: str = "ollama",
 ) -> Optional[str]:
     """Use vision model to extract LaTeX from a formula image."""
     b64 = base64.b64encode(image_bytes).decode()
@@ -93,7 +105,7 @@ def formula_vision_fallback(
         "Extract the formula and write it as valid LaTeX code. "
         "Output ONLY the LaTeX expression, nothing else."
     )
-    return vision_generate(host, model, prompt, b64)
+    return vision_generate(host, model, prompt, b64, kind=kind)
 
 
 class AgentRouter:
@@ -109,8 +121,36 @@ class AgentRouter:
                 self._hosts.append(extra)
         self._vision_host: Optional[str] = None
         self._vision_model: Optional[str] = None
+        self._kind: str = "ollama"
 
     def discover_vision(self) -> bool:
+        # 1. Check agents.json for a multimodel runner with "vision" role
+        agents_path = os.path.join(
+            os.environ.get("KAE_SSD_PATH", "/data/kae"), "agents.json"
+        )
+        if os.path.exists(agents_path):
+            try:
+                with open(agents_path) as f:
+                    agents = json.load(f)
+                for a in agents:
+                    if "vision" in (a.get("roles") or []) and a.get("kind") == "multimodel":
+                        host = a["host"].rstrip("/")
+                        try:
+                            req = urllib.request.Request(f"{host}/health", method="GET")
+                            with urllib.request.urlopen(req, timeout=10) as resp:
+                                data = json.loads(resp.read())
+                                if data.get("ready"):
+                                    self._vision_host = host
+                                    self._vision_model = (data.get("models_loaded") or [""])[0]
+                                    self._kind = "multimodel"
+                                    log.info("Vision agent discovered: %s on %s", self._vision_model, host)
+                                    return True
+                        except Exception as e:
+                            log.debug("Vision agent %s unreachable: %s", host, e)
+            except Exception:
+                pass
+
+        # 2. Fallback: check ollama hosts for vision models
         for host in self._hosts:
             h = host.rstrip("/")
             models = _probe_models(h)
@@ -119,6 +159,7 @@ class AgentRouter:
                 if base in VISION_MODELS or m in VISION_MODELS:
                     self._vision_host = h
                     self._vision_model = m
+                    self._kind = "ollama"
                     log.info("Vision model discovered: %s on %s", m, h)
                     return True
         return False
@@ -129,7 +170,7 @@ class AgentRouter:
 
     def route(self, role: str) -> Optional[Dict[str, str]]:
         if role == "vision" and self._vision_host and self._vision_model:
-            return {"host": self._vision_host, "model": self._vision_model}
+            return {"host": self._vision_host, "model": self._vision_model, "kind": self._kind}
         if role in ("text", "table"):
-            return {"host": self._hosts[0].rstrip("/"), "model": ""}
+            return {"host": self._hosts[0].rstrip("/"), "model": "", "kind": "ollama"}
         return None

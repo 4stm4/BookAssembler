@@ -82,6 +82,7 @@ def _analyzers_to_test():
     skip = {
         "LLMRefinementAnalyzer",
         "PageAgentAnalyzer",
+        "VisionFallbackAnalyzer",
     }
     return [a for a in create_default_pipeline() if type(a).__name__ not in skip]
 

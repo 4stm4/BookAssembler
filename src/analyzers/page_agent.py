@@ -116,39 +116,46 @@ class PageAgentAnalyzer(BaseAnalyzer):
                      getattr(doc, "source_uri", None))
             return
 
+        consecutive_failures = 0
         for pg, blocks in sorted(pages.items()):
             if pg in table_pages:
-                continue  # TableDetector already got it
+                continue
             if len(blocks) < MIN_BLOCKS:
                 continue
+            if consecutive_failures >= 3:
+                log.warning("PageAgent: 3 consecutive failures, aborting remaining pages")
+                break
 
-            if classify_mode:
-                # Ask the vision agent to classify the whole page — it sees the
-                # image and the block list, decides the page role and per-block type.
-                role, types = self._classify_page(pdf_path, pg, host, blocks)
-                log.info("PageAgent: page %d role=%s, %d block types",
-                         pg, role, len(types))
-                if role == "table":
+            try:
+                if classify_mode:
+                    role, types = self._classify_page(pdf_path, pg, host, blocks)
+                    log.info("PageAgent: page %d role=%s, %d block types",
+                             pg, role, len(types))
+                    if role == "table":
+                        latex = self._recognize_table(pdf_path, pg, host, blocks)
+                        if latex:
+                            self._replace_with_table(blocks, latex, pg)
+                            continue
+                    if types:
+                        self._apply_types(blocks, types)
+                else:
+                    texts = [_text(b) for b, _ in blocks]
+                    joined = " ".join(texts).lower()
+                    numeric = sum(1 for t in texts if _looks_numeric(t))
+                    short = sum(1 for t in texts if len(t) <= 40)
+                    titled = ("table " in joined or " analysis of" in joined
+                              or " cost of " in joined or "monthly use" in joined)
+                    if not (titled or numeric / len(blocks) >= MIN_NUMERIC_RATIO
+                            or short / len(blocks) >= MIN_SHORT_RATIO):
+                        continue
                     latex = self._recognize_table(pdf_path, pg, host, blocks)
                     if latex:
                         self._replace_with_table(blocks, latex, pg)
-                        continue
-                if types:
-                    self._apply_types(blocks, types)
-            else:
-                # Fallback: table-only heuristic
-                texts = [_text(b) for b, _ in blocks]
-                joined = " ".join(texts).lower()
-                numeric = sum(1 for t in texts if _looks_numeric(t))
-                short = sum(1 for t in texts if len(t) <= 40)
-                titled = ("table " in joined or " analysis of" in joined
-                          or " cost of " in joined or "monthly use" in joined)
-                if not (titled or numeric / len(blocks) >= MIN_NUMERIC_RATIO
-                        or short / len(blocks) >= MIN_SHORT_RATIO):
-                    continue
-                latex = self._recognize_table(pdf_path, pg, host, blocks)
-                if latex:
-                    self._replace_with_table(blocks, latex, pg)
+                consecutive_failures = 0
+            except Exception as e:
+                consecutive_failures += 1
+                log.warning("PageAgent: page %d failed: %s", pg, e)
+                continue
 
     def _classify_page(
         self, pdf_path: str, page_index: int, host: str,

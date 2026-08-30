@@ -66,10 +66,10 @@ class TestColumnCount:
 
 
 class TestTableWithSeparators:
-    def test_3_row_table_detected(self):
-        """MIN_TABLE_ROWS reduced to 3, so 3 aligned rows should form a table."""
+    def test_3_row_table_with_separator_detected(self):
+        """3 aligned rows with adjacent separator should form a table."""
         step = 0.03
-        children = []
+        children = [_para("-------------------", y0=0.17, y1=0.185)]
         for i in range(3):
             y0 = 0.2 + i * step
             children.append(_para(f"Cell {i}", y0=y0, y1=y0 + 0.015))
@@ -83,6 +83,24 @@ class TestTableWithSeparators:
 
         tables = [c for c in container.children if isinstance(c, TableBlock)]
         assert len(tables) == 1
+
+    def test_3_short_single_col_blocks_not_table(self):
+        """3 short single-word blocks without separators should NOT be a table (diagram labels)."""
+        step = 0.03
+        children = []
+        for i, label in enumerate(["Register", "Datum", "Memory"]):
+            y0 = 0.2 + i * step
+            children.append(_para(label, y0=y0, y1=y0 + 0.015))
+
+        container = ContainerUnit(title="Ch1", level=1, children=children)
+        doc = KnowledgeDocument(title="Test", root_containers=[container])
+        rg, kg = ReadingGraph(), KnowledgeGraph()
+
+        analyzer = TableDetectorAnalyzer()
+        analyzer.run(doc, rg, kg)
+
+        tables = [c for c in container.children if isinstance(c, TableBlock)]
+        assert len(tables) == 0
 
     def test_separator_tombstoned(self):
         """Separator lines adjacent to tables get tombstoned."""
