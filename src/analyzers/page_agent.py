@@ -293,6 +293,14 @@ def _resolve_source_path(doc: KnowledgeDocument) -> Optional[str]:
     if uri.startswith("file://"):
         p = uri[len("file://") :]
         return p if os.path.exists(p) else None
+    if uri.startswith("upload://"):
+        filename = uri.replace("upload://", "")
+        ssd = os.environ.get("KAE_SSD_PATH", "/data/kae")
+        for d in os.listdir(ssd) if os.path.isdir(ssd) else []:
+            cand = os.path.join(ssd, d, filename)
+            if os.path.isfile(cand):
+                return cand
+        return None
     if uri.startswith("sep://"):
         try:
             _, rel = uri.replace("sep://", "").split("/", 1)
