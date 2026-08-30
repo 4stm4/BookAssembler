@@ -145,17 +145,16 @@ def call_infer(
     token = _token_for_host(host)
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    for path in ("/infer", "/ocr"):
+    for attempt in range(3):
         try:
             req = urllib.request.Request(
-                f"{host}{path}", data=payload, headers=headers,
+                f"{host}/infer", data=payload, headers=headers,
             )
-            with urllib.request.urlopen(req, timeout=45) as r:
+            with urllib.request.urlopen(req, timeout=20) as r:
                 return json.loads(r.read()).get("text", "")
         except Exception as exc:
-            log.warning("agent %s%s failed: %s", host, path, exc)
-            if "timed out" in str(exc):
+            log.warning("agent %s/infer attempt %d: %s", host, attempt, exc)
+            if "timed out" not in str(exc):
                 break
-            continue
-    log.warning("agent inference failed at %s", host)
+    log.warning("agent inference failed at %s (%d attempts)", host, attempt + 1)
     return None
