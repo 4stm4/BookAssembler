@@ -1,24 +1,33 @@
 # Vision Smoke Test — 30 Aug 2026
 
 ## Architecture
-- First tier: Ollama with llava:7b on orangepi (192.168.88.199:11434)
-- Second tier: Kaggle GPU (opt-in, KAE_MANAGER_BACKEND=kaggle)
+- Primary: Kaggle GPU (Qwen2.5-VL-7B) via Cloudflare tunnel → agents.json
+- Fallback: Ollama with llava:7b on orangepi (not yet pulled)
+- Router: `src/agents/router.py` — `pick()` checks agents.json, probes `/health`
 
-## AgentRouter
-- Probes /api/tags on each configured host
-- Matches model names against VISION_MODELS set (llava variants)
-- Routes "vision" role to first host with a vision model
+## AgentRouter (src/agents/manager/router.py)
+- `discover_vision()`: agents.json → multimodel runners with "vision" role → `/health` probe
+- `vision_generate()`: multimodel → POST `/infer`, ollama → POST `/api/generate`
+- `route()` returns `{host, model, kind}` — kind is "ollama" or "multimodel"
 
-## Vision API
-- `vision_generate(host, model, prompt, image_b64)` → POST /api/generate
-- `formula_vision_fallback(host, model, image_bytes)` → LaTeX extraction prompt
+## Vision API Endpoints
+- Multimodel: `POST /infer` with `{image_b64, task: "vision", prompt}`
+- Ollama: `POST /api/generate` with `{model, prompt, images: [b64], stream: false}`
+- Response: multimodel returns `{text}`, ollama returns `{response}`
 
-## Smoke Status
-- Router unit tests: 10/10 pass (mocked urllib)
-- Live test requires `ssh orangepi 'ollama pull llava:7b'` (~4.5GB download)
-- Formula fallback prompt tested via mock — real inference pending model pull
+## Smoke Test Results
+- Kaggle runner (Qwen2.5-VL-7B): registered in agents.json, health OK when running
+- Runner idle timeout (900s) causes 502 — pipeline circuit breaker handles gracefully
+- PageAgent: 3 consecutive failures → abort (no pipeline hang)
+- VisionFallback: skips cleanly when no vision model found
+- Pipeline completed without vision: 280 paragraphs, 7 diagrams, 4 tables
+
+## TableDetector Fix (related)
+- False positives on diagram labels eliminated
+- Single-column short-text blocks without separators → not a table
+- Before fix: dozens of false tables; after: 4 real tables in 568-page book
 
 ## Next Steps
-- Pull llava:7b on orangepi when bandwidth is available
-- Wire formula_vision_fallback into FormulaDetector for needs_vision_ocr blocks
-- E2E test with PDP-11 manual pages containing schematics
+- Increase KAE_RUNNER_IDLE_TIMEOUT to 3600s in Kaggle secrets
+- Full E2E test with live Kaggle runner (requires user to restart notebook)
+- Pull llava:7b on orangepi as local fallback when Kaggle is unavailable
