@@ -137,3 +137,64 @@ class TestMetadataDecorator:
     def test_semantic_units_on_doc(self):
         doc = _run(_make_doc("Lemma 1. X.", "Proof: Y."))
         assert len(doc.semantic_units) == 2
+
+
+class TestCrossBlockContext:
+    def test_theorem_body_marked(self):
+        doc = _run(_make_doc(
+            "Theorem 1. Let G be a group.",
+            "Then G has an identity element.",
+            "This follows from the axioms.",
+            "Example 1. Consider Z.",
+        ))
+        children = doc.root_containers[0].children
+        assert children[0].metadata["semantic_decorator"] == "theorem"
+        assert children[1].metadata["semantic_decorator"] == "theorem_body"
+        assert children[1].metadata["belongs_to"] == children[0].id
+        assert children[2].metadata["semantic_decorator"] == "theorem_body"
+        assert children[3].metadata["semantic_decorator"] == "example"
+
+    def test_proof_body_and_end_marker(self):
+        doc = _run(_make_doc(
+            "Theorem 1. Statement.",
+            "Proof. We show that...",
+            "By induction on n...",
+            "□",
+            "Regular paragraph after proof.",
+        ))
+        children = doc.root_containers[0].children
+        assert children[1].metadata["semantic_decorator"] == "proof"
+        assert children[2].metadata["semantic_decorator"] == "proof_body"
+        assert children[3].metadata["semantic_decorator"] == "proof_body"
+        assert children[3].metadata.get("proof_end") is True
+        assert "semantic_decorator" not in (children[4].metadata or {})
+
+    def test_proof_links_to_theorem(self):
+        doc = _run(_make_doc(
+            "Theorem 2.1. Important result.",
+            "Proof. Straightforward.",
+        ))
+        proof_spec = [s for s in doc.semantic_units if isinstance(s, ProofSpec)][0]
+        theorem_id = doc.root_containers[0].children[0].id
+        assert proof_spec.proved_statement_id == theorem_id
+
+    def test_remark_body_continuation(self):
+        doc = _run(_make_doc(
+            "Remark 1. Note that...",
+            "This is worth emphasizing.",
+            "Theorem 2. Next result.",
+        ))
+        children = doc.root_containers[0].children
+        assert children[0].metadata["semantic_decorator"] == "remark"
+        assert children[1].metadata["semantic_decorator"] == "remark_body"
+        assert children[2].metadata["semantic_decorator"] == "theorem"
+
+    def test_non_paragraph_breaks_context(self):
+        doc = _make_doc("Theorem 1. Statement.")
+        container = doc.root_containers[0]
+        sub = ContainerUnit(title="Section", level=2, children=[])
+        container.children.append(sub)
+        p = ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text="After section.")])])
+        container.children.append(p)
+        _run(doc)
+        assert "semantic_decorator" not in (p.metadata or {})

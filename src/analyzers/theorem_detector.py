@@ -123,14 +123,29 @@ class TheoremDetectorAnalyzer(BaseAnalyzer):
                 self._process(child, doc)
 
         last_theorem_id = ""
+        active_env: Optional[str] = None
+        active_id: str = ""
+
         for child in container.children:
             if not isinstance(child, ParagraphBlock) or child.is_tombstoned:
+                active_env = None
                 continue
             if type(child) is not ParagraphBlock:
+                active_env = None
                 continue
 
             text = _first_text(child)
             if not text:
+                continue
+
+            # Check for proof end markers in any context
+            text_lower = text.strip().rstrip(".").lower()
+            if active_env == "proof" and text_lower in _PROOF_END_MARKERS:
+                child.metadata = child.metadata or {}
+                child.metadata["semantic_decorator"] = "proof_body"
+                child.metadata["proof_end"] = True
+                child.metadata["belongs_to"] = active_id
+                active_env = None
                 continue
 
             m = _THEOREM_RE.match(text)
@@ -152,6 +167,8 @@ class TheoremDetectorAnalyzer(BaseAnalyzer):
                     child.metadata["theorem_name"] = m.group("name")
                 doc.semantic_units.append(spec)
                 last_theorem_id = child.id
+                active_env = "theorem"
+                active_id = child.id
                 continue
 
             m = _PROOF_RE.match(text)
@@ -163,6 +180,8 @@ class TheoremDetectorAnalyzer(BaseAnalyzer):
                 child.metadata = child.metadata or {}
                 child.metadata["semantic_decorator"] = "proof"
                 doc.semantic_units.append(spec)
+                active_env = "proof"
+                active_id = child.id
                 continue
 
             m = _EXAMPLE_RE.match(text)
@@ -175,6 +194,8 @@ class TheoremDetectorAnalyzer(BaseAnalyzer):
                 child.metadata = child.metadata or {}
                 child.metadata["semantic_decorator"] = "example"
                 doc.semantic_units.append(spec)
+                active_env = "example"
+                active_id = child.id
                 continue
 
             m = _REMARK_RE.match(text)
@@ -187,4 +208,12 @@ class TheoremDetectorAnalyzer(BaseAnalyzer):
                 child.metadata = child.metadata or {}
                 child.metadata["semantic_decorator"] = "remark"
                 doc.semantic_units.append(spec)
+                active_env = "remark"
+                active_id = child.id
                 continue
+
+            # Cross-block context: continuation of an active environment
+            if active_env:
+                child.metadata = child.metadata or {}
+                child.metadata["semantic_decorator"] = f"{active_env}_body"
+                child.metadata["belongs_to"] = active_id
