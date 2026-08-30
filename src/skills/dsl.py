@@ -13,7 +13,7 @@ Combinators: and, or, not
 """
 
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 class DSLError(Exception):
@@ -73,6 +73,8 @@ def _tokenize(expr: str) -> List[str]:
             j = i + 1
             while j < len(expr) and expr[j] != c:
                 j += 1
+            if j >= len(expr):
+                raise DSLError(f"Unterminated string starting at position {i}")
             tokens.append(expr[i + 1 : j])
             i = j + 1
             continue
@@ -82,6 +84,12 @@ def _tokenize(expr: str) -> List[str]:
         tokens.append(expr[i:j])
         i = j
     return tokens
+
+
+def _expect(tokens: List[str], pos: int) -> str:
+    if pos >= len(tokens):
+        raise DSLError("Unexpected end of expression")
+    return tokens[pos]
 
 
 def evaluate(expr: str, ctx: DSLContext) -> bool:
@@ -130,13 +138,13 @@ def _parse_atom(tokens: List[str], pos: int, ctx: DSLContext) -> tuple:
         return val, pos
 
     if tok == "contains":
-        pos += 1  # (
+        pos += 1
         if pos < len(tokens) and tokens[pos] == "(":
             pos += 1
-        field = tokens[pos]; pos += 1
+        field = _expect(tokens, pos); pos += 1
         if pos < len(tokens) and tokens[pos] == ",":
             pos += 1
-        value = tokens[pos]; pos += 1
+        value = _expect(tokens, pos); pos += 1
         if pos < len(tokens) and tokens[pos] == ")":
             pos += 1
         field_val = str(ctx.get_field(field))
@@ -146,10 +154,10 @@ def _parse_atom(tokens: List[str], pos: int, ctx: DSLContext) -> tuple:
         pos += 1
         if pos < len(tokens) and tokens[pos] == "(":
             pos += 1
-        field = tokens[pos]; pos += 1
+        field = _expect(tokens, pos); pos += 1
         if pos < len(tokens) and tokens[pos] == ",":
             pos += 1
-        value = tokens[pos]; pos += 1
+        value = _expect(tokens, pos); pos += 1
         if pos < len(tokens) and tokens[pos] == ")":
             pos += 1
         return str(ctx.get_field(field)) == value, pos
@@ -158,10 +166,10 @@ def _parse_atom(tokens: List[str], pos: int, ctx: DSLContext) -> tuple:
         pos += 1
         if pos < len(tokens) and tokens[pos] == "(":
             pos += 1
-        value = tokens[pos]; pos += 1
+        value = _expect(tokens, pos); pos += 1
         if pos < len(tokens) and tokens[pos] == ",":
             pos += 1
-        field = tokens[pos]; pos += 1
+        field = _expect(tokens, pos); pos += 1
         if pos < len(tokens) and tokens[pos] == ")":
             pos += 1
         field_val = ctx.get_field(field)
@@ -173,28 +181,36 @@ def _parse_atom(tokens: List[str], pos: int, ctx: DSLContext) -> tuple:
         pos += 1
         if pos < len(tokens) and tokens[pos] == "(":
             pos += 1
-        field = tokens[pos]; pos += 1
+        field = _expect(tokens, pos); pos += 1
         if pos < len(tokens) and tokens[pos] == ",":
             pos += 1
-        pattern = tokens[pos]; pos += 1
+        pattern = _expect(tokens, pos); pos += 1
         if pos < len(tokens) and tokens[pos] == ")":
             pos += 1
         field_val = str(ctx.get_field(field))
-        return bool(re.search(pattern, field_val)), pos
+        try:
+            compiled = re.compile(pattern, re.IGNORECASE)
+        except re.error as e:
+            raise DSLError(f"Invalid regex '{pattern}': {e}")
+        return bool(compiled.search(field_val)), pos
 
     if tok == "has_language":
         pos += 1
         if pos < len(tokens) and tokens[pos] == "(":
             pos += 1
-        lang = tokens[pos]; pos += 1
+        lang = _expect(tokens, pos); pos += 1
         if pos < len(tokens) and tokens[pos] == ")":
             pos += 1
         return lang.lower() in [l.lower() for l in ctx.languages], pos
 
     if tok == "page_count":
         pos += 1
-        op = tokens[pos]; pos += 1
-        val = int(tokens[pos]); pos += 1
+        op = _expect(tokens, pos); pos += 1
+        try:
+            val = int(_expect(tokens, pos))
+        except ValueError:
+            raise DSLError(f"Expected integer after '{op}', got '{tokens[pos]}'")
+        pos += 1
         pc = ctx.page_count
         if op == ">":
             return pc > val, pos

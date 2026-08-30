@@ -52,10 +52,21 @@ def _ast_hash(doc: KnowledgeDocument) -> str:
             d["metadata"] = dict(node.metadata)
         if hasattr(node, "classification_confidence"):
             d["cc"] = round(node.classification_confidence, 6)
+        if hasattr(node, "extraction_confidence"):
+            d["ec"] = round(node.extraction_confidence, 6)
         if hasattr(node, "children"):
             d["children"] = [_node_dict(c) for c in node.children]
         if hasattr(node, "inlines"):
-            d["inlines"] = len(node.inlines or [])
+            d["inlines"] = [
+                {"spans": [s.text for s in getattr(il, "spans", [])]}
+                for il in (node.inlines or [])
+            ]
+        if hasattr(node, "rows"):
+            d["rows"] = [[getattr(cell, "text", "") for cell in row] for row in (node.rows or [])]
+        if hasattr(node, "items"):
+            d["items"] = [_node_dict(it) for it in (node.items or [])]
+        if hasattr(node, "content") and not hasattr(node, "children"):
+            d["content"] = [_node_dict(c) for c in (node.content or [])]
         return d
 
     tree = {

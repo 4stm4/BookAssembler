@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import os
+import re
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -48,6 +49,8 @@ def verify_signature(
 
 
 def load_trusted_key(pubkey_id: str, keys_dir: Optional[Path] = None) -> Optional[bytes]:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", pubkey_id):
+        return None
     d = keys_dir or _TRUSTED_KEYS_DIR
     key_path = d / f"{pubkey_id}.pub"
     if not key_path.exists():

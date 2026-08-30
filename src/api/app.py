@@ -565,7 +565,7 @@ def create_app() -> FastAPI:
                 }
             elif isinstance(node, SidebarBlock):
                 children = [
-                    _serialize_body(c) for c in node.content
+                    serialize_node(c) for c in node.content
                     if not getattr(c, "is_tombstoned", False)
                 ]
                 return {

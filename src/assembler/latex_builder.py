@@ -256,17 +256,27 @@ def build_latex(doc: KnowledgeDocument, target_lang: str = "") -> str:
             pass  # ephemera (headers/footers/pagenums) are intentionally omitted
         elif isinstance(node, AlgorithmBlock):
             name = _esc(node.algorithm_name) if node.algorithm_name else ""
-            num = node.algorithm_number or ""
+            num = _esc(str(node.algorithm_number or ""))
             pseudo = _esc(node.pseudocode)
             body.append(f"\\begin{{algorithm}}\n\\caption{{{num}. {name}}}\n{pseudo}\n\\end{{algorithm}}\n")
         elif isinstance(node, SidebarBlock):
-            inner = "".join(
-                _esc(_translated(c, _para_text(c), target_lang))
-                for c in node.content if isinstance(c, ParagraphBlock)
-            )
-            body.append(f"\\begin{{minipage}}{{0.35\\textwidth}}\n{inner}\n\\end{{minipage}}\n")
+            parts: List[str] = []
+            for c in (node.content or []):
+                if getattr(c, "is_tombstoned", False):
+                    continue
+                if isinstance(c, ParagraphBlock):
+                    parts.append(_esc(_translated(c, _para_text(c), target_lang)))
+                elif isinstance(c, ListBlock):
+                    env = "enumerate" if getattr(c, "ordered", False) else "itemize"
+                    items = "".join(f"\\item {_esc(_para_text(it))}\n" for it in (c.items or []) if isinstance(it, ListItemBlock))
+                    parts.append(f"\\begin{{{env}}}\n{items}\\end{{{env}}}\n")
+                elif isinstance(c, CodeBlock):
+                    parts.append(f"\\begin{{verbatim}}\n{getattr(c, 'code', '')}\n\\end{{verbatim}}\n")
+                elif hasattr(c, "inlines"):
+                    parts.append(_esc(_para_text(c)))
+            body.append(f"\\begin{{minipage}}{{0.35\\textwidth}}\n{''.join(parts)}\n\\end{{minipage}}\n")
         elif isinstance(node, IndexEntryBlock):
-            refs = ", ".join(node.page_refs) if node.page_refs else ""
+            refs = ", ".join(_esc(r) for r in node.page_refs) if node.page_refs else ""
             body.append(f"\\noindent {_esc(node.term)}\\dotfill {refs}\\\\\n")
         elif isinstance(node, ParagraphBlock):
             txt = _esc(_translated(node, _para_text(node), target_lang))
