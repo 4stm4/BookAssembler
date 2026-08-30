@@ -14,6 +14,7 @@ Algorithm:
    multi-column table.
 """
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
@@ -30,11 +31,29 @@ from src.krm.models import (
     TextLineInline,
 )
 
-MIN_TABLE_ROWS = 5
-Y_STEP_TOLERANCE = 0.008
-X_OVERLAP_THRESHOLD = 0.3
-MAX_CELL_TEXT_LEN = 80
-MAX_BLOCK_HEIGHT = 0.04
+MIN_TABLE_ROWS = 3
+Y_STEP_TOLERANCE = 0.012
+X_OVERLAP_THRESHOLD = 0.25
+MAX_CELL_TEXT_LEN = 120
+MAX_BLOCK_HEIGHT = 0.05
+
+
+_SEPARATOR_RE = re.compile(r"^[\s\-_=|+:·.─━┃│┼┤├┬┴]{3,}$")
+_TAB_SPLIT_RE = re.compile(r"\t|  {2,}|(?:\s{2,}\|?\s{2,})")
+
+
+def _looks_like_separator(text: str) -> bool:
+    return bool(_SEPARATOR_RE.match(text.strip()))
+
+
+def _count_columns(text: str) -> int:
+    parts = _TAB_SPLIT_RE.split(text.strip())
+    return len([p for p in parts if p.strip()])
+
+
+def _has_table_font_role(block: ParagraphBlock) -> bool:
+    md = getattr(block, "metadata", None) or {}
+    return md.get("font_role") in ("body", "caption", "code")
 
 
 def _get_text(block: ParagraphBlock) -> str:
@@ -164,12 +183,17 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                 self._process_container(child)
 
         para_blocks: List[Tuple[int, ParagraphBlock]] = []
+        separator_indices: set = set()
         for idx, child in enumerate(container.children):
             if isinstance(child, ParagraphBlock) and _bbox(child) is not None and _page_idx(child) is not None:
+                text = _get_text(child)
                 bb = _bbox(child)
+                if _looks_like_separator(text):
+                    separator_indices.add(idx)
+                    continue
                 if (bb.y1 - bb.y0) > MAX_BLOCK_HEIGHT:
                     continue
-                if len(_get_text(child)) > MAX_CELL_TEXT_LEN:
+                if len(text) > MAX_CELL_TEXT_LEN:
                     continue
                 para_blocks.append((idx, child))
 
@@ -209,7 +233,11 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                         indices_to_remove.add(orig_idx)
 
                     row_count = len(grid)
-                    cls_conf = min(0.90, 0.50 + row_count * 0.05)
+                    run_indices = {orig_idx for orig_idx, _ in run}
+                    has_separators = bool(separator_indices & {i - 1 for i in run_indices} |
+                                         separator_indices & {i + 1 for i in run_indices})
+                    sep_boost = 0.10 if has_separators else 0.0
+                    cls_conf = min(0.90, 0.50 + row_count * 0.05 + sep_boost)
                     avg_ext = sum(
                         b.extraction_confidence for _, b in run
                     ) / len(run)
@@ -223,6 +251,11 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                         confidence_score=min(avg_ext, cls_conf),
                     )
                     replacements[first_idx] = table
+
+        # Tombstone separators adjacent to detected tables
+        for sep_idx in separator_indices:
+            if (sep_idx - 1) in indices_to_remove or (sep_idx + 1) in indices_to_remove:
+                indices_to_remove.add(sep_idx)
 
         if not indices_to_remove:
             return
