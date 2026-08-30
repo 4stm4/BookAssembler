@@ -6,10 +6,11 @@
     "EphemeraBlock": 3,
     "IndexEntryBlock": 2,
     "ParagraphBlock": 9,
+    "TableBlock": 1,
     "TocEntryBlock": 4
   },
   "kg_edge_count": 23,
   "kg_entity_count": 24,
-  "latex_hash": "ab06b4b0cfdfdea3d75d79635f8ecb9d0e632f35c183587a944042380a3282d2",
-  "latex_length": 1864
+  "latex_hash": "f990c387b2be65ad694a654f3221794ea714629f65cc962531a6e41fc675b7dc",
+  "latex_length": 2121
 }
