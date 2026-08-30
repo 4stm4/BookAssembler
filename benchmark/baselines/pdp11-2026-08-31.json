@@ -1,16 +1,27 @@
 {
   "block_counts": {
-    "AlgorithmBlock": 1,
-    "BibEntryBlock": 1,
-    "ContainerUnit": 8,
-    "EphemeraBlock": 3,
-    "IndexEntryBlock": 2,
-    "ParagraphBlock": 9,
-    "TableBlock": 1,
-    "TocEntryBlock": 4
+    "BlankPageBlock": 4,
+    "CaptionBlock": 5,
+    "ContainerUnit": 4,
+    "EphemeraBlock": 32,
+    "ParagraphBlock": 202,
+    "TableBlock": 3,
+    "TitlePageBlock": 1
   },
-  "kg_edge_count": 23,
-  "kg_entity_count": 24,
-  "latex_hash": "f990c387b2be65ad694a654f3221794ea714629f65cc962531a6e41fc675b7dc",
-  "latex_length": 2121
+  "vision_classifications": {
+    "caption": 4,
+    "heading": 17,
+    "label": 3,
+    "list_item": 29,
+    "paragraph": 31,
+    "table_cell": 2,
+    "title": 10
+  },
+  "vision_model": "Qwen2.5-VL-7B-Instruct",
+  "vision_agent": "Kaggle-T4-Cloudflare",
+  "pages_classified": 14,
+  "pages_timeout": 8,
+  "pages_total": 34,
+  "agent_tables": 3,
+  "total_blocks": 251
 }
