@@ -233,6 +233,12 @@ class BlockClassifierAnalyzer(BaseAnalyzer):
             if isinstance(child, ContainerUnit):
                 self._process_container(child)
 
+        if any(
+            isinstance(c, ContainerUnit) and getattr(c, "semantic_type", None) == "toc"
+            for c in container.children
+        ):
+            return
+
         toc_runs: List[List[Tuple[int, ParagraphBlock]]] = []
         current_run: List[Tuple[int, ParagraphBlock]] = []
         last_page: Optional[int] = None

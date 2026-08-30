@@ -210,6 +210,7 @@ class LLMRefinementAnalyzer(BaseAnalyzer):
                     block.metadata = {}
                 block.metadata["llm_suggested_type"] = block_type
                 block.metadata["llm_model"] = OLLAMA_MODEL
+                block.metadata["llm_refined_at"] = time.time()
                 refined += 1
 
         total_time = time.time() - t_start
@@ -224,6 +225,8 @@ class LLMRefinementAnalyzer(BaseAnalyzer):
             if isinstance(child, ContainerUnit):
                 self._collect_low_confidence(child, results)
             elif isinstance(child, ParagraphBlock):
+                if (child.metadata or {}).get("llm_refined_at"):
+                    continue
                 if child.classification_confidence < CONFIDENCE_THRESHOLD:
                     text = _get_text(child)
                     if text.strip():

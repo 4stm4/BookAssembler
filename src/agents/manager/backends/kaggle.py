@@ -77,20 +77,37 @@ class KaggleKernelBackend:
         return api
 
     async def start(self) -> Optional[str]:
-        """Push a new kernel version — Kaggle enqueues and runs it."""
+        """Push a new kernel version — Kaggle enqueues and runs it.
+
+        Prefers bin/push-kaggle-runner.sh if it exists (no kaggle package needed
+        on the host); falls back to the Python kaggle API otherwise.
+        """
+        import asyncio
+        import subprocess
+
+        use_script = os.environ.get("KAE_KAGGLE_USE_SCRIPT", "")
+        if use_script:
+            push_script = os.path.join(os.path.dirname(__file__), "../../../../bin/push-kaggle-runner.sh")
+            push_script = os.path.normpath(push_script)
+            if os.path.isfile(push_script):
+                log.info("Kaggle: pushing via %s", push_script)
+                proc = await asyncio.to_thread(
+                    subprocess.run,
+                    ["bash", push_script],
+                    capture_output=True, timeout=120,
+                )
+                if proc.returncode != 0:
+                    log.warning("push-kaggle-runner.sh failed: %s", proc.stderr.decode()[:500])
+                return None
+
         if not self.kernel_dir or not os.path.isdir(self.kernel_dir):
             raise RuntimeError(
                 f"kernel_dir '{self.kernel_dir}' does not exist; "
                 "cannot push kernel (set KAE_KAGGLE_KERNEL_DIR)"
             )
-        # kernels_push_cli takes the folder path and reads kernel-metadata.json
-        # inside it — the same layout `kaggle kernels init` produces.
         log.info("Kaggle: pushing kernel %s from %s", self.kernel, self.kernel_dir)
-        # NB: kernels_push_cli is sync/blocking; run it in a worker thread so
-        # we don't block the Manager's event loop.
-        import asyncio
         await asyncio.to_thread(self._api.kernels_push_cli, self.kernel_dir)
-        return None  # URL comes back via /runner/announce (RFC 0022 §5.2)
+        return None
 
     async def stop(self) -> None:
         # Kaggle exposes no public "cancel kernel" endpoint; the Runner
