@@ -14,8 +14,11 @@ Algorithm:
    multi-column table.
 """
 
+import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
+
+log = logging.getLogger(__name__)
 
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
 from src.graph.knowledge_graph import KnowledgeGraph
@@ -174,8 +177,11 @@ class TableDetectorAnalyzer(BaseAnalyzer):
         kg: KnowledgeGraph,
         context: Optional[Dict[str, Any]] = None,
     ) -> None:
+        self._table_count = 0
         for container in doc.root_containers:
             self._process_container(container)
+        if self._table_count:
+            log.info("TableDetectorAnalyzer: %d table(s) detected", self._table_count)
 
     def _process_container(self, container: ContainerUnit) -> None:
         for child in list(container.children):
@@ -236,8 +242,19 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                     run_indices = {orig_idx for orig_idx, _ in run}
                     has_separators = bool(separator_indices & {i - 1 for i in run_indices} |
                                          separator_indices & {i + 1 for i in run_indices})
+
+                    is_single_col = all(
+                        _count_columns(_get_text(b)) <= 1 for _, b in run
+                    )
+                    avg_text_len = sum(len(_get_text(b).strip()) for _, b in run) / max(1, row_count)
+                    if is_single_col and row_count < 5 and not has_separators:
+                        continue
+                    if is_single_col and avg_text_len < 15 and not has_separators:
+                        continue
+
                     sep_boost = 0.10 if has_separators else 0.0
-                    cls_conf = min(0.90, 0.50 + row_count * 0.05 + sep_boost)
+                    col_penalty = 0.15 if is_single_col else 0.0
+                    cls_conf = min(0.90, 0.50 + row_count * 0.05 + sep_boost - col_penalty)
                     avg_ext = sum(
                         b.extraction_confidence for _, b in run
                     ) / len(run)
@@ -251,6 +268,7 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                         confidence_score=min(avg_ext, cls_conf),
                     )
                     replacements[first_idx] = table
+                    self._table_count += 1
 
         # Tombstone separators adjacent to detected tables
         for sep_idx in separator_indices:

@@ -182,6 +182,7 @@ class VisionFallbackAnalyzer(BaseAnalyzer):
             return
         host = endpoint["host"]
         model = endpoint["model"]
+        kind = endpoint.get("kind", "ollama")
 
         formulas: List[FormulaBlock] = []
         low_conf: List[ParagraphBlock] = []
@@ -205,7 +206,7 @@ class VisionFallbackAnalyzer(BaseAnalyzer):
             crop = _page_crop_b64(doc, formula)
             if not crop:
                 continue
-            result = vision_generate(host, model, FORMULA_PROMPT, crop, timeout=60)
+            result = vision_generate(host, model, FORMULA_PROMPT, crop, timeout=60, kind=kind)
             if result and result.strip():
                 latex = result.strip()
                 if latex.startswith("$"):
@@ -231,7 +232,7 @@ class VisionFallbackAnalyzer(BaseAnalyzer):
             crop = _page_crop_b64(doc, block)
             if not crop:
                 continue
-            result = vision_generate(host, model, CLASSIFY_PROMPT, crop, timeout=30)
+            result = vision_generate(host, model, CLASSIFY_PROMPT, crop, timeout=30, kind=kind)
             block_type, conf = _parse_classify_response(result)
             if block_type:
                 block.metadata = block.metadata or {}
