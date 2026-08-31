@@ -210,7 +210,11 @@ class LLMRefinementAnalyzer(BaseAnalyzer):
                     block.metadata = {}
                 block.metadata["llm_suggested_type"] = block_type
                 block.metadata["llm_model"] = OLLAMA_MODEL
-                block.metadata["llm_refined_at"] = time.time()
+                # Idempotency marker (RFC 0014). Deliberately a constant, not a
+                # timestamp: it lands in the KRM, and a wall clock there would
+                # make two runs of the same source differ byte-for-byte,
+                # breaking RFC 0009 §5.2.
+                block.metadata["llm_refined"] = True
                 refined += 1
 
         total_time = time.time() - t_start
@@ -225,7 +229,10 @@ class LLMRefinementAnalyzer(BaseAnalyzer):
             if isinstance(child, ContainerUnit):
                 self._collect_low_confidence(child, results)
             elif isinstance(child, ParagraphBlock):
-                if (child.metadata or {}).get("llm_refined_at"):
+                md = child.metadata or {}
+                # "llm_refined_at" is the legacy timestamp marker — still
+                # honoured so documents persisted before the switch stay skipped.
+                if md.get("llm_refined") or md.get("llm_refined_at"):
                     continue
                 if child.classification_confidence < CONFIDENCE_THRESHOLD:
                     text = _get_text(child)

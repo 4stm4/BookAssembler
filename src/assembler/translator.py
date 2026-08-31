@@ -236,11 +236,13 @@ def _generate_pdf(
         return h.hexdigest()
 
     from src.analyzers.llm_refinement import OLLAMA_MODEL
+    from src.assembler.latex_builder import SOURCE_DATE_EPOCH
 
     lock = {
         "lock_version": "1.0",
         "build_id": f"build-{job_id}",
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "source_date_epoch": SOURCE_DATE_EPOCH,
         "target_lang": target_lang,
         "input_artifacts": [{"source_uri": doc.source_uri}],
         "analyzers": {"pdf_extractor": "PdfSourceAdapter"},
