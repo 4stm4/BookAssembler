@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
+from src.krm.identity import derive_composite_id
 from src.krm.models import (
     ContainerUnit,
     KnowledgeDocument,
@@ -259,6 +260,9 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                         b.extraction_confidence for _, b in run
                     ) / len(run)
                     table = TableBlock(
+                        id=derive_composite_id(
+                            "table", *[b.id for _, b in run]
+                        ),
                         grid=grid,
                         parent_container_id=container.id,
                         provenance_info=run[0][1].provenance_info,

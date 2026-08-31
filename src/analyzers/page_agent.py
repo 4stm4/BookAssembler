@@ -20,6 +20,7 @@ from src.agents import call_infer, pick
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
+from src.krm.identity import derive_composite_id
 from src.krm.models import (
     ContainerUnit,
     KnowledgeDocument,
@@ -327,7 +328,10 @@ class PageAgentAnalyzer(BaseAnalyzer):
             first_idx = 0
 
         # Empty spatial grid: the LaTeX in metadata is what latex_builder uses.
-        table = TableBlock(grid=[[TableCell(content=[])]])
+        table = TableBlock(
+            id=derive_composite_id("agent-table", *[b.id for b, _ in blocks]),
+            grid=[[TableCell(content=[])]],
+        )
         # Keep the region the table actually occupies (RFC 0021 §5.4) — a
         # whole-page box would tell the assembler this spans the entire sheet.
         table.visual_layout = VisualLayout(

@@ -26,6 +26,7 @@ from src.adapters.base import (
     BaseSourceAdapter,
     SourceAdapterParseError,
 )
+from src.krm.identity import derive_source_id
 from src.krm.models import (
     CodeBlock,
     ContainerUnit,
@@ -183,6 +184,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
         # HeadingAnalyzer builds the heading hierarchy downstream. Typography
         # (font size, bold) is preserved in each block's StyleDescriptor.
         current_container = ContainerUnit(
+            id=derive_source_id("root-container", source_uri, None, None, title),
             title=title,
             level=1,
             provenance_info=provenance,
@@ -222,6 +224,9 @@ class PdfSourceAdapter(BaseSourceAdapter):
                         image_uri = f"artifact://{img_sha}"
 
                     fig = FigureBlock(
+                        id=derive_source_id(
+                            "figure", source_uri, page_idx, norm_rect, image_uri
+                        ),
                         image_uri=image_uri,
                         mime_type=mime,
                         alt_text="",
@@ -305,6 +310,9 @@ class PdfSourceAdapter(BaseSourceAdapter):
                 if is_mono_block:
                     ext_conf = _extraction_confidence(full_text)
                     code = CodeBlock(
+                        id=derive_source_id(
+                            "code", source_uri, page_idx, norm_rect, full_text
+                        ),
                         code_text=full_text,
                         parent_container_id=current_container.id,
                         provenance_info=provenance,
@@ -325,6 +333,9 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     )
                     ext_conf = _extraction_confidence(full_text)
                     para = ParagraphBlock(
+                        id=derive_source_id(
+                            "paragraph", source_uri, page_idx, norm_rect, full_text
+                        ),
                         inlines=[TextLineInline(spans=[styled_span])],
                         parent_container_id=current_container.id,
                         provenance_info=provenance,
@@ -337,6 +348,9 @@ class PdfSourceAdapter(BaseSourceAdapter):
 
             if not page_has_text:
                 placeholder = ParagraphBlock(
+                    id=derive_source_id(
+                        "ocr-placeholder", source_uri, page_idx, None, ""
+                    ),
                     inlines=[TextLineInline(spans=[StyledTextSpan(text="")])],
                     parent_container_id=current_container.id,
                     provenance_info=provenance,

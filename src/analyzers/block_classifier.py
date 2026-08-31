@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
+from src.krm.identity import derive_composite_id
 from src.krm.models import (
     ContainerUnit,
     KnowledgeDocument,
@@ -318,6 +319,9 @@ class BlockClassifierAnalyzer(BaseAnalyzer):
             first_idx = run[0][0]
             run_confidence = min(0.90, 0.60 + match_ratio * 0.30 + len(run) * 0.01)
             toc_container = ContainerUnit(
+                id=derive_composite_id(
+                    "toc-container", *[b.id for _, b in run]
+                ),
                 title="Оглавление",
                 level=container.level + 1,
                 semantic_type="toc",
