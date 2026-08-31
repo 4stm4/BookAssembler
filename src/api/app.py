@@ -1668,7 +1668,19 @@ def create_app() -> FastAPI:
             return _generate_pdf(doc, "", output_path, job_id, page_aware=True)
 
         await asyncio.to_thread(_run)
-        return {"status": "completed", "download_url": f"/api/v1/jobs/{job_id}/download/translated"}
+        audit_logger.log("BOOK_ASSEMBLED", "api", {
+            "job_id": job_id, "target_lang": "", "mode": "preview",
+            "output": output_path,
+        })
+        return {"status": "completed", "download_url": f"/api/v1/jobs/{job_id}/download/preview"}
+
+    @app.get("/api/v1/jobs/{job_id}/download/preview")
+    async def download_preview(job_id: str):
+        path = os.path.join(kae_ssd_path, job_id, "preview_pages.pdf")
+        if not os.path.exists(path):
+            raise HTTPException(status_code=404, detail="No preview PDF found")
+        return FileResponse(path, filename=os.path.basename(path),
+                            media_type="application/pdf")
 
     @app.post("/api/v1/jobs/{job_id}/assemble")
     async def assemble_translated_book(job_id: str, body: AssembleRequest) -> Dict[str, Any]:
