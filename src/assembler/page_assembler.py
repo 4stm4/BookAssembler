@@ -164,6 +164,44 @@ def _update_role(slot: PageSlot, node: Any) -> None:
         slot.role = agent_role
 
 
+def layout_for(slot: PageSlot) -> str:
+    """Which render strategy a page gets (RFC 0021 §3): positional | reflow | blank.
+
+    The single source of truth for that decision. The editor asks the server for
+    it rather than reimplementing the rule in TypeScript — a second copy would
+    drift from this one exactly as the LaTeX reflow renderer once drifted from
+    the linear builder.
+    """
+    def renders_something(b: Any) -> bool:
+        if isinstance(b, BlankPageBlock):
+            return False
+        # A container contributes a heading or nothing at all.
+        if isinstance(b, ContainerUnit):
+            return bool(b.title)
+        return True
+
+    if slot.role == "blank" and not any(renders_something(b) for b in slot.blocks):
+        return "blank"
+    if slot.role in POSITIONAL_ROLES:
+        return "positional"
+    return "reflow"
+
+
+def page_layout_map(doc: KnowledgeDocument) -> List[Dict[str, Any]]:
+    """Per-page layout decision plus the ids on each page, for the editor."""
+    pages = group_by_page(doc)
+    out: List[Dict[str, Any]] = []
+    for idx in sorted(pages):
+        slot = pages[idx]
+        out.append({
+            "page_index": idx,
+            "role": slot.role,
+            "layout": layout_for(slot),
+            "block_ids": [b.id for b in slot.blocks],
+        })
+    return out
+
+
 def assemble_pages(doc: KnowledgeDocument, target_lang: str = "") -> str:
     """Assemble a full LaTeX document page-by-page (RFC 0021 §3 hybrid render)."""
     pages = group_by_page(doc)
@@ -171,17 +209,13 @@ def assemble_pages(doc: KnowledgeDocument, target_lang: str = "") -> str:
 
     for pg_idx in sorted(pages.keys()):
         slot = pages[pg_idx]
-        others = [b for b in slot.blocks if not isinstance(b, BlankPageBlock)]
-        log.debug("page %d role=%s blocks=%d (%s)", pg_idx, slot.role,
-                  len(slot.blocks),
+        layout = layout_for(slot)
+        log.debug("page %d role=%s layout=%s blocks=%d (%s)", pg_idx, slot.role,
+                  layout, len(slot.blocks),
                   ", ".join(sorted({type(b).__name__ for b in slot.blocks})))
-        # A page detected as blank can still carry a container heading or a
-        # block the detector did not account for. Emitting only \clearpage
-        # would discard them, so fall back to reflow whenever anything else
-        # is present.
-        if slot.role == "blank" and not others:
+        if layout == "blank":
             parts.append("\\clearpage\n")
-        elif slot.role in POSITIONAL_ROLES:
+        elif layout == "positional":
             parts.append(_render_positional(slot, target_lang))
         else:
             parts.append(_render_reflow(slot, target_lang))

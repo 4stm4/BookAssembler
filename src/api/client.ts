@@ -6,6 +6,7 @@ import {
   GraphVisualizationData,
   HITLTask,
   KAEJobEvent,
+  PageLayout,
   SEPProvider,
   SEPRemoteFile,
 } from '../types';
@@ -194,6 +195,16 @@ export class KAEApiClient {
   async getJobResult(jobId: string): Promise<any> {
     const res = await fetch(`${API_BASE}/jobs/${jobId}/result`);
     if (!res.ok) throw new Error(`Failed to fetch job result: ${res.statusText}`);
+    return res.json();
+  }
+
+  /**
+   * Per-page render strategy (RFC 0021 §3). The positional-vs-reflow rule is
+   * the assembler's; the editor reads the decision rather than recomputing it.
+   */
+  async getPageLayouts(jobId: string): Promise<{ job_id: string; pages: PageLayout[] }> {
+    const res = await fetch(`${API_BASE}/jobs/${jobId}/pages`);
+    if (!res.ok) throw new Error(`Failed to fetch page layouts: ${res.statusText}`);
     return res.json();
   }
 

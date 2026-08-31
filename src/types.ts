@@ -281,9 +281,25 @@ export interface KRMNode {
   caption_text?: string;
   labels?: Array<{ text: string; x0: number; y0: number; x1: number; y1: number }>;
   bbox?: [number, number, number, number];
+  style?: {
+    font_family?: string;
+    font_size_pt?: number;
+    is_bold?: boolean;
+    is_italic?: boolean;
+    is_monospace?: boolean;
+    text_color_rgb?: [number, number, number];
+  };
   target_type?: string;
   label_number?: string;
   target_block_id?: string;
+}
+
+/** Per-page render strategy, decided server-side (RFC 0021 §3). */
+export interface PageLayout {
+  page_index: number;
+  role: string;
+  layout: 'positional' | 'reflow' | 'blank';
+  block_ids: string[];
 }
 
 export interface GraphVisualizationData {
