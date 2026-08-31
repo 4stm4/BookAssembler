@@ -82,8 +82,15 @@ def pdf_bytes() -> bytes:
     page.insert_text((72, 280), "Year  Count  Total")
     page.insert_text((72, 300), "1979  12     144")
     page.insert_text((72, 320), "1980  15     225")
+    # Caption and front matter: node types the first version of this fixture
+    # never produced, which is why non-derived ids on CaptionBlock and
+    # TitlePageBlock survived until the real book was diffed.
+    page.insert_text((72, 360), "Figure 1-1  Block diagram of the system.")
     page2 = doc.new_page()
-    page2.insert_text((72, 120), "More text on a second page for the analyzers.")
+    page2.insert_text((72, 120), "TRINITY COLLEGE COMPUTER LABORATORY")
+    page2.insert_text((72, 140), "Copyright 1980, University Press Inc.")
+    page2.insert_text((72, 160), "ISBN 0-000-00000-0")
+    page2.insert_text((72, 200), "More text on a second page for the analyzers.")
     data = doc.tobytes()
     doc.close()
     return data
@@ -113,6 +120,34 @@ class TestPipelineDeterminism:
     def test_three_runs_agree(self, pdf_bytes):
         hashes = {_krm_hash(_run_pipeline(pdf_bytes)) for _ in range(3)}
         assert len(hashes) == 1
+
+    def test_every_node_id_is_derived(self, pdf_bytes):
+        """No constructor may fall back to uuid4 for source-derived content.
+
+        Stated over the whole tree rather than per type: a new analyzer that
+        forgets to derive or inherit an id fails here without anyone having to
+        remember to extend a list. CaptionBlock and TitlePageBlock were exactly
+        that kind of miss.
+        """
+        from src.krm.identity import is_derived
+
+        doc = _run_pipeline(pdf_bytes)
+        offenders = []
+
+        def walk(n, depth=0):
+            if not is_derived(n.id):
+                offenders.append(f"{type(n).__name__}({n.id[:8]})")
+            for attr in ("children", "items", "content"):
+                for c in getattr(n, attr, None) or []:
+                    walk(c, depth + 1)
+
+        for c in doc.root_containers:
+            walk(c)
+
+        assert not offenders, (
+            "nodes carrying a random uuid4 instead of a derived id: "
+            + ", ".join(sorted(set(offenders)))
+        )
 
     def test_different_source_uri_changes_ids(self, pdf_bytes):
         """Identity is keyed on the source, so two documents never collide."""

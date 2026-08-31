@@ -149,6 +149,7 @@ class CaptionAnalyzer(BaseAnalyzer):
                 extraction_confidence=child.extraction_confidence,
                 classification_confidence=0.90,
             )
+            caption.id = child.id  # RFC 0001 §2.3: reclassification keeps identity
             caption.update_confidence()
             replacements[idx] = caption
 
