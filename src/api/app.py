@@ -1652,6 +1652,23 @@ def create_app() -> FastAPI:
 
     class AssembleRequest(BaseModel):
         target_lang: str = "Russian"
+        page_aware: bool = True
+
+    @app.post("/api/v1/jobs/{job_id}/assemble/preview")
+    async def assemble_preview(job_id: str) -> Dict[str, Any]:
+        """Assemble document from KRM without translation (page-aware layout)."""
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        from src.assembler.translator import _generate_pdf
+        output_path = os.path.join(kae_ssd_path, job_id, "preview_pages.pdf")
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        def _run():
+            return _generate_pdf(doc, "", output_path, job_id, page_aware=True)
+
+        await asyncio.to_thread(_run)
+        return {"status": "completed", "download_url": f"/api/v1/jobs/{job_id}/download/translated"}
 
     @app.post("/api/v1/jobs/{job_id}/assemble")
     async def assemble_translated_book(job_id: str, body: AssembleRequest) -> Dict[str, Any]:

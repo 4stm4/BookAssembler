@@ -194,12 +194,15 @@ def translate_and_assemble(
         if (i + 1) % 10 == 0:
             log.info("Translated %d/%d blocks (%.0fs)", i + 1, total, time.time() - t_start)
 
-    _generate_pdf(doc, target_lang, output_path, job_id)
+    _generate_pdf(doc, target_lang, output_path, job_id, page_aware=True)
     log.info("Translation complete: %d blocks in %.0fs → %s", total, time.time() - t_start, output_path)
     return output_path
 
 
-def _generate_pdf(doc: KnowledgeDocument, target_lang: str, output_path: str, job_id: str) -> None:
+def _generate_pdf(
+    doc: KnowledgeDocument, target_lang: str, output_path: str, job_id: str,
+    page_aware: bool = False,
+) -> None:
     """
     RFC 0012 / 0021: build a XeLaTeX document from the KRM tree and compile it to
     PDF, then emit book.json + kae.lock with output hashes alongside the PDF.
@@ -216,7 +219,7 @@ def _generate_pdf(doc: KnowledgeDocument, target_lang: str, output_path: str, jo
     base = os.path.splitext(os.path.basename(output_path))[0]
     tex_path = os.path.join(out_dir, f"{base}.tex")
 
-    tex_source = build_latex(doc, target_lang)
+    tex_source = build_latex(doc, target_lang, page_aware=page_aware)
     with open(tex_path, "w", encoding="utf-8") as f:
         f.write(tex_source)
 
