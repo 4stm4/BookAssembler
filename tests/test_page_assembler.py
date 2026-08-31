@@ -321,3 +321,22 @@ class TestAssemblePages:
         out = assemble_pages(doc, target_lang="ru")
         assert "Русский текст" in out
         assert "English text" not in out
+
+
+class TestPositionalPageKeepsStructure:
+    def test_container_heading_on_positional_page_survives(self):
+        """Regression: nodes without a bbox were skipped on positional pages,
+        so every \\chapter landing on a title/toc page was lost."""
+        tp = TitlePageBlock(
+            book_title="B", page_role="title",
+            inlines=[TextLineInline(spans=[StyledTextSpan(text="Cover text")])],
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(0.2, 0.3, 0.8, 0.5),
+                page_or_screen_index=0,
+            ),
+        )
+        c = ContainerUnit(title="Book Title", level=1, children=[tp])
+        out = assemble_pages(_doc(c))
+        assert "\\chapter{Book Title}" in out
+        assert "Cover text" in out
+        assert "tikzpicture" in out

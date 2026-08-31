@@ -204,23 +204,34 @@ def _font_size_cmd(style: Any) -> str:
 
 def _render_positional(slot: PageSlot, target_lang: str) -> str:
     """Render a positional page using tikzpicture overlay (RFC 0021 §3)."""
-    lines: List[str] = []
-    lines.append("\\clearpage\n")
-    lines.append("\\begin{tikzpicture}[remember picture, overlay, "
-                 "shift={(current page.north west)}]\n")
-
     page_w, page_h = 210.0, 297.0  # A4 mm
     atomic: List[Any] = []
+    flow: List[Any] = []
+    placed: List[Any] = []
 
     for block in slot.blocks:
         if isinstance(block, _ATOMIC):
             atomic.append(block)
-            continue
-        vl = getattr(block, "visual_layout", None)
-        bb = getattr(vl, "bounding_box", None) if vl else None
-        style = getattr(vl, "style", None) if vl else None
-        if not bb:
-            continue
+        elif getattr(getattr(block, "visual_layout", None), "bounding_box", None):
+            placed.append(block)
+        else:
+            # No bbox to position by — container headings above all. Emitting
+            # them in normal flow ahead of the page keeps document structure;
+            # dropping them (the earlier behaviour) lost every \chapter on a
+            # title or toc page.
+            flow.append(block)
+
+    lines: List[str] = []
+    for block in flow:
+        render_node(lines, block, target_lang, recurse=False)
+    lines.append("\\clearpage\n")
+    lines.append("\\begin{tikzpicture}[remember picture, overlay, "
+                 "shift={(current page.north west)}]\n")
+
+    for block in placed:
+        vl = block.visual_layout
+        bb = vl.bounding_box
+        style = getattr(vl, "style", None)
 
         x_mm = bb.x0 * page_w
         y_mm = bb.y0 * page_h
