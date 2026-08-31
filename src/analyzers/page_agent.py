@@ -146,6 +146,7 @@ class PageAgentAnalyzer(BaseAnalyzer):
                     )
                     log.info("PageAgent: page %d role=%s, %d block types",
                              pg, role, len(types))
+                    self._apply_page_role(blocks, role)
                     if role == "table":
                         latex = self._recognize_table(
                             pdf_path, pg, host, blocks, kind=_kind, model=_model,
@@ -225,6 +226,25 @@ class PageAgentAnalyzer(BaseAnalyzer):
             except Exception:
                 log.warning("PageAgent: bad JSON from vision agent on page %d", page_index)
         return role, types
+
+    def _apply_page_role(
+        self, blocks: List[Tuple[Any, ContainerUnit]], role: str
+    ) -> None:
+        """Persist the vision-derived page role onto the page's blocks.
+
+        The assembler reads metadata['page_role'] to decide between positional
+        and reflow rendering (RFC 0021 §3). Without this the classification was
+        computed, logged and thrown away, and every page fell back to reflow.
+        """
+        if not role:
+            return
+        for b, _ in blocks:
+            md = getattr(b, "metadata", None)
+            if not isinstance(md, dict):
+                md = {}
+                b.metadata = md
+            md["page_role"] = role
+            md["page_role_source"] = "PageAgent"
 
     def _apply_types(
         self, blocks: List[Tuple[Any, ContainerUnit]], types: Dict[int, str]
