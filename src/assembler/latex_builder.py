@@ -54,7 +54,7 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 \newtheorem{exampleenv}{Example}[chapter]
 \theoremstyle{definition}
 \newtheorem{definitionenv}{Definition}[chapter]
-\usepackage[ruled,vlined]{algorithm2e}
+\usepackage{framed}  % lightweight alternative to algorithm2e
 \usepackage[framemethod=default]{mdframed}
 \usepackage{tikz}
 \usepackage[a4paper,margin=2.2cm]{geometry}
@@ -271,7 +271,7 @@ def build_latex(
             name = _esc(node.algorithm_name) if node.algorithm_name else ""
             num = _esc(str(node.algorithm_number or ""))
             pseudo = _esc(node.pseudocode)
-            body.append(f"\\begin{{algorithm}}\n\\caption{{{num}. {name}}}\n{pseudo}\n\\end{{algorithm}}\n")
+            body.append(f"\\begin{{framed}}\n\\textbf{{{num}. {name}}}\\\\\n{pseudo}\n\\end{{framed}}\n")
         elif isinstance(node, SidebarBlock):
             parts: List[str] = []
             for c in (node.content or []):
