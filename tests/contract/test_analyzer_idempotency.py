@@ -20,25 +20,65 @@ from src.krm.models import (
 )
 
 
-def _make_doc() -> KnowledgeDocument:
-    """Build a small but representative document for idempotency testing."""
-    paras = []
-    for i in range(5):
-        vl = VisualLayout(
-            page_or_screen_index=0,
-            bounding_box=NormalizedRect(
-                x0=0.1, y0=0.1 + i * 0.15, x1=0.9, y1=0.2 + i * 0.15
-            ),
-        )
-        span = StyledTextSpan(text=f"Paragraph {i} with some content about topic {i}")
-        inline = TextLineInline(spans=[span])
-        p = ParagraphBlock(inlines=[inline], visual_layout=vl)
-        p.extraction_confidence = 0.5
-        p.classification_confidence = 0.5
-        paras.append(p)
+def _para(text: str, page: int, y0: float, conf: float = 0.5) -> ParagraphBlock:
+    p = ParagraphBlock(
+        inlines=[TextLineInline(spans=[StyledTextSpan(text=text)])],
+        visual_layout=VisualLayout(
+            page_or_screen_index=page,
+            bounding_box=NormalizedRect(x0=0.1, y0=y0, x1=0.9, y1=y0 + 0.04),
+        ),
+    )
+    p.extraction_confidence = conf
+    p.classification_confidence = conf
+    return p
 
-    container = ContainerUnit(title="Chapter 1", level=1, children=paras)
-    return KnowledgeDocument(title="Test Doc", root_containers=[container])
+
+def _make_doc() -> KnowledgeDocument:
+    """A document that actually activates the detectors.
+
+    Five identical paragraphs made every table/list/formula/callout detector
+    idempotent vacuously — they had nothing to detect, so a double run trivially
+    matched. Each group below is shaped to trip one detector.
+    """
+    blocks = []
+    y = 0.04
+
+    def add(text: str, page: int = 0, conf: float = 0.5) -> None:
+        nonlocal y
+        blocks.append(_para(text, page, y, conf))
+        y = round(y + 0.05, 4)
+
+    add("Chapter 1  Introduction", conf=0.4)
+    add("The quick brown fox jumps over the lazy dog repeatedly.")
+    add("A second paragraph of ordinary body text for the classifier.")
+
+    # list
+    add("1. first item")
+    add("2. second item")
+    add("3. third item")
+
+    # table-ish grid: short, numeric, aligned
+    add("Year   Count   Total")
+    add("1979   12      144")
+    add("1980   15      225")
+    add("1981   18      324")
+
+    # formula / callout / footnote / bibliography shapes
+    add("E = mc^2")
+    add("Note: this paragraph is shaped like a callout.")
+    add("1. Knuth, D. The Art of Computer Programming. 1968.")
+    add("* footnote marker text at the bottom of the page", conf=0.3)
+
+    y = 0.04
+    add("Second page text so page-level analyzers see more than one page.", page=1)
+    add("Another line of body text on the second page.", page=1)
+
+    container = ContainerUnit(title="Chapter 1", level=1, children=blocks)
+    return KnowledgeDocument(
+        title="Test Doc",
+        source_uri="file://idempotency.pdf",
+        root_containers=[container],
+    )
 
 
 def _ast_hash(doc: KnowledgeDocument) -> str:
@@ -78,13 +118,30 @@ def _ast_hash(doc: KnowledgeDocument) -> str:
 
 
 def _analyzers_to_test():
-    """Return analyzers that can run without external services."""
-    skip = {
-        "LLMRefinementAnalyzer",
-        "PageAgentAnalyzer",
-        "VisionFallbackAnalyzer",
-    }
-    return [a for a in create_default_pipeline() if type(a).__name__ not in skip]
+    """Every analyzer in the default pipeline.
+
+    Nothing is skipped: the ones that call out to a model are covered by
+    stubbing the call (see `stub_llm`), because their idempotency rests on the
+    "already refined" guard rather than on what the model answers.
+    """
+    return list(create_default_pipeline())
+
+
+@pytest.fixture(autouse=True)
+def stub_llm(monkeypatch):
+    """Answer every LLM/vision call deterministically and offline.
+
+    LLMRefinementAnalyzer was the analyzer the RFC 0014 gap was about, so
+    excluding it left the contract unverified. A fixed reply is enough: a second
+    run must skip the blocks the first one marked, whatever the reply was.
+    """
+    from src.analyzers import llm_refinement
+
+    reply = '[{"index": 1, "type": "paragraph", "confidence": 0.8}]'
+    monkeypatch.setattr(llm_refinement, "_call_ollama", lambda *a, **k: reply)
+    monkeypatch.setattr(
+        "src.agents.router.pick", lambda role: (None, None, ""), raising=False
+    )
 
 
 class TestAnalyzerIdempotency:
