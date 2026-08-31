@@ -377,13 +377,28 @@ def _render_table(table: TableBlock) -> str:
     return "\n".join(lines)
 
 
-def compile_xelatex(tex_path: str, work_dir: str) -> str:
+SOURCE_DATE_EPOCH = 0  # 1970-01-01; fixed so rebuilds are byte-identical
+
+
+def compile_xelatex(
+    tex_path: str, work_dir: str, source_date_epoch: int = SOURCE_DATE_EPOCH,
+) -> str:
     """
     Compile a .tex file to PDF via XeLaTeX (RFC 0012 §3.3, runs in the locked
     Docker image with pinned TeX Live). Returns the PDF path. Two passes resolve
     the table of contents / references.
+
+    SOURCE_DATE_EPOCH pins the timestamps XeTeX embeds as /CreationDate and
+    /ModDate (and, with FORCE_SOURCE_DATE, the ones \\today expands to). Without
+    it every rebuild produces a different PDF, so the output_hashes recorded in
+    kae.lock would never reproduce (RFC 0021 §5.3).
     """
     base = os.path.splitext(os.path.basename(tex_path))[0]
+    env = {
+        **os.environ,
+        "SOURCE_DATE_EPOCH": str(source_date_epoch),
+        "FORCE_SOURCE_DATE": "1",
+    }
     for _ in range(2):
         proc = subprocess.run(
             ["xelatex", "-interaction=nonstopmode", "-halt-on-error", tex_path],
@@ -391,6 +406,7 @@ def compile_xelatex(tex_path: str, work_dir: str) -> str:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=1800,
+            env=env,
         )
     pdf_path = os.path.join(work_dir, f"{base}.pdf")
     if not os.path.exists(pdf_path):
