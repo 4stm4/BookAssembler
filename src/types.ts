@@ -262,6 +262,15 @@ export interface SEPRemoteFile {
   modified_at_utc: string;
 }
 
+export interface KRMStyle {
+  font_family?: string;
+  font_size_pt?: number;
+  is_bold?: boolean;
+  is_italic?: boolean;
+  is_monospace?: boolean;
+  text_color_rgb?: [number, number, number];
+}
+
 export interface KRMNode {
   id: string;
   type: string;
@@ -281,14 +290,14 @@ export interface KRMNode {
   caption_text?: string;
   labels?: Array<{ text: string; x0: number; y0: number; x1: number; y1: number }>;
   bbox?: [number, number, number, number];
-  style?: {
-    font_family?: string;
-    font_size_pt?: number;
-    is_bold?: boolean;
-    is_italic?: boolean;
-    is_monospace?: boolean;
-    text_color_rgb?: [number, number, number];
-  };
+  /** Per-line geometry kept from the sources a merged block absorbed
+   *  (RFC 0021 §5.4). Present on title pages; absent on ordinary blocks. */
+  lines?: Array<{
+    text: string;
+    bbox: [number, number, number, number];
+    style?: KRMStyle;
+  }>;
+  style?: KRMStyle;
   target_type?: string;
   label_number?: string;
   target_block_id?: string;
