@@ -27,13 +27,13 @@
 | 0007 §5 | Chunks: Breadcrumbs, No Code/Table Rupture, RAG-ready | 🔧 | chunker есть; целостность спец-блоков не гарантирована | P2 |
 | 0008 §5.2 | **Адаптер без бизнес-логики** (не строит заголовки/таблицы) | ✅ | детекция заголовков перенесена в `HeadingAnalyzer`; адаптер плоский | — |
 | 0008 §5.1 | Ошибки парсинга → `SourceAdapterParseError` | 🔧 | обёртка исключений неполная | P2 |
-| 0009 §5.2 | Детерминизм байт-в-байт при повторном прогоне | ✅ | LLM детерминирован (temp=0/seed=42); contract-тест `test_bit_determinism.py` проверяет идентичный KRM-хеш | — |
+| 0009 §5.2 | Детерминизм байт-в-байт при повторном прогоне | 🔧 | Сделано: LLM temp=0/seed=42; из KRM убраны стенные часы; `SOURCE_DATE_EPOCH`+`FORCE_SOURCE_DATE` пинят `/CreationDate` в PDF. **Блокер:** `id` узлов — `uuid4` (`krm/models.py:109`), поэтому новый прогон того же файла даёт другой KRM-хеш; принято решение выводить `id` через `uuid5` от контента — не реализовано. `test_bit_determinism.py` проверяет только чистоту `build_latex`, а не повторный прогон пайплайна | P2 |
 | 0010 | Plugin API, изоляция OOM/crash | ➖ | плагинной системы нет | P3 |
 | 0011 §1 | Lineage переведённых сегментов (bbox+page+sha256, DAG) | ✅ | `_record_translation`: source_id+bbox+in/out хеши+model; источник не мутируется | — |
 | 0011 §2.1 | Координатная сетка | ✅ | разведено: 0011 приведён к `[0,1]` согласно 0002 | — |
 | 0012 | Сборка: **XeLaTeX** в locked Docker, `kae.lock`/`book.json`, детерминизм | ✅ | XeLaTeX (`latex_builder.py`) — проверено: PDF с кириллицей компилируется на ARM; kae.lock/book.json+hashes; LLM temp=0/seed=42 | — |
 | 0013 | Выход → content-addressed `.kap` bundle (SHA-256) | ✅ | `.kap` tar.gz с manifest.json (SHA-256 артефактов) при сборке | — |
-| 0014 §Idempotency | Двойной прогон анализатора → идентичный AST hash | ✅ | contract-тест `test_analyzer_idempotency.py`; LLMRefinement skip если `llm_refined_at`; title_page skip классифицированные | — |
+| 0014 §Idempotency | Двойной прогон анализатора → идентичный AST hash | 🔧 | Guard'ы в коде есть: `llm_refinement.py` пропускает блоки с `llm_refined`, `title_page.py` — уже классифицированные. **Доказательства нет:** `test_analyzer_idempotency.py` исключает из проверки `LLMRefinementAnalyzer` (тот самый, из-за которого стояло ❌), `PageAgentAnalyzer` и `VisionFallbackAnalyzer`, а фикстура из 5 однотипных абзацев не активирует детекторы таблиц/списков/формул/callout'ов — они идемпотентны вакуумно | P2 |
 | 0016 | Human-in-the-Loop | ✅ | HITLManager реализован | — |
 | 0017 | Confidence calibration (dual confidence) | ✅ | extraction/classification confidence есть | — |
 | 0018 | Retrieval & dataset eval | ➖ | вне текущего объёма | P3 |
