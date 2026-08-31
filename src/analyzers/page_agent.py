@@ -1,19 +1,26 @@
 """
 PageAgentAnalyzer — pipeline stage that pulls a vision agent into extraction.
 
-For pages that look like tables (dense grid of short numeric blocks that
-TableDetector didn't cluster), the analyzer renders the region, sends it to the
-first reachable agent with role "table" (see src/agents.router), and stores the
-returned LaTeX on a new TableBlock. Absorbed source blocks are tombstoned
-(RFC 0001 §2.4).
+With a vision agent, every page with content is rendered and sent for
+classification: the reply carries the page role (title/toc/table/…), a type for
+each listed block, and — when the page is a table — its LaTeX, all in one
+request. Absorbed source blocks are tombstoned, never deleted (RFC 0001 §2.4).
 
-Runs after TableDetectorAnalyzer: if there's already a spatial TableBlock on the
-page, we skip it — the extractor did its job. If not, but heuristics say
-"table-like", we ask the agent.
+Requests for different pages are independent and go out concurrently: the agent
+answers in seconds while a single upload through the tunnel takes far longer, so
+a serial pipeline left the GPU idle for most of the run. Replies are collected
+without touching the KRM, then applied strictly in page order — the tree must
+not depend on which response arrived first (RFC 0009 §5.2).
+
+Without a vision agent only `table`-role recognition is available, and then the
+old heuristics still gate which pages are worth a request.
 """
 
 import logging
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.agents import call_infer, pick
@@ -40,8 +47,35 @@ MIN_NUMERIC_RATIO = 0.35  # numeric density hint (real tables have ≥35% numeri
 MIN_BLOCKS = 5            # need enough blocks to look like a grid
 MIN_SHORT_RATIO = 0.7     # most blocks are short (labels/cells, not paragraphs)
 
+# Requests in flight. The agent answers in seconds; a single upload through the
+# tunnel takes far longer, so the GPU is idle unless the waits overlap.
+VISION_CONCURRENCY = int(os.environ.get("KAE_VISION_CONCURRENCY", "6"))
+# One systematically bad page must not abort the book, but a dead agent should
+# stop the run rather than time out once per page.
+FAILURE_BUDGET_RATIO = 0.35
+MIN_FAILURE_BUDGET = 3
 
-def _pixmap_to_jpeg(pixmap: Any, quality: int = 30, max_dim: int = 512) -> bytes:
+# Image fidelity. These were cut to q=30/512px purely to shrink upload time on a
+# serial pipeline; that cost recognition accuracy to work around a bottleneck
+# that overlapping requests address directly. Tunable because the right value
+# depends on the link — raise once throughput has been measured end to end.
+RENDER_DPI = int(os.environ.get("KAE_VISION_DPI", "110"))
+JPEG_QUALITY = int(os.environ.get("KAE_VISION_JPEG_QUALITY", "55"))
+JPEG_MAX_DIM = int(os.environ.get("KAE_VISION_MAX_DIM", "900"))
+
+
+@dataclass
+class _PageResult:
+    """What the agent said about one page. Carries no KRM references."""
+    role: str = "text"
+    types: Dict[int, str] = field(default_factory=dict)
+    table_latex: Optional[str] = None
+    failed: bool = False
+
+
+def _pixmap_to_jpeg(
+    pixmap: Any, quality: int = JPEG_QUALITY, max_dim: int = JPEG_MAX_DIM,
+) -> bytes:
     import io
     from PIL import Image
     img = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
@@ -52,6 +86,24 @@ def _pixmap_to_jpeg(pixmap: Any, quality: int = 30, max_dim: int = 512) -> bytes
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=quality)
     return buf.getvalue()
+
+
+def _clean_tabular(raw: Any) -> Optional[str]:
+    """Return a LaTeX tabular from a model reply, or None if there is none.
+
+    Models wrap code in markdown fences often enough that accepting the raw
+    string would put ``` into the document.
+    """
+    if not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    if not s or "tabular" not in s.lower():
+        return None
+    if s.startswith("```"):
+        s = s.split("\n", 1)[1] if "\n" in s else s[3:]
+        if s.rstrip().endswith("```"):
+            s = s.rstrip()[:-3].rstrip()
+    return s or None
 
 
 def _text(node: Any) -> str:
@@ -131,62 +183,147 @@ class PageAgentAnalyzer(BaseAnalyzer):
                      getattr(doc, "source_uri", None))
             return
 
-        consecutive_failures = 0
-        for pg, blocks in sorted(pages.items()):
-            if pg in table_pages:
-                continue
-            if len(blocks) < MIN_BLOCKS:
-                continue
-            if consecutive_failures >= 3:
-                log.warning("PageAgent: 3 consecutive failures, aborting remaining pages")
-                break
+        candidates = [
+            (pg, blocks) for pg, blocks in sorted(pages.items())
+            if self._is_candidate(pg, blocks, table_pages, classify_mode)
+        ]
+        if not candidates:
+            return
 
-            try:
-                if classify_mode:
-                    role, types = self._classify_page(
-                        pdf_path, pg, host, blocks, kind=_kind, model=_model,
-                    )
-                    log.info("PageAgent: page %d role=%s, %d block types",
-                             pg, role, len(types))
-                    self._apply_page_role(blocks, role)
-                    if role == "table":
-                        latex = self._recognize_table(
-                            pdf_path, pg, host, blocks, kind=_kind, model=_model,
-                        )
-                        if latex:
-                            self._replace_with_table(blocks, latex, pg)
-                            continue
-                    if types:
-                        self._apply_types(blocks, types)
-                else:
-                    texts = [_text(b) for b, _ in blocks]
-                    joined = " ".join(texts).lower()
-                    numeric = sum(1 for t in texts if _looks_numeric(t))
-                    short = sum(1 for t in texts if len(t) <= 40)
-                    titled = ("table " in joined or " analysis of" in joined
-                              or " cost of " in joined or "monthly use" in joined)
-                    if not (titled or numeric / len(blocks) >= MIN_NUMERIC_RATIO
-                            or short / len(blocks) >= MIN_SHORT_RATIO):
-                        continue
-                    latex = self._recognize_table(
-                        pdf_path, pg, host, blocks, kind=_kind, model=_model,
-                    )
-                    if latex:
-                        self._replace_with_table(blocks, latex, pg)
-                consecutive_failures = 0
-            except Exception as e:
-                consecutive_failures += 1
-                log.warning("PageAgent: page %d failed: %s", pg, e)
+        results = self._fetch_pages(
+            candidates, pdf_path, host, classify_mode, _kind, _model,
+        )
+
+        # Mutations run sequentially in page order, never in completion order:
+        # applying results as they arrive would make the KRM depend on network
+        # timing and break RFC 0009 §5.2.
+        for pg, blocks in candidates:
+            res = results.get(pg)
+            if res is None or res.failed:
                 continue
+            if res.role:
+                self._apply_page_role(blocks, res.role)
+            # TableDetector already produced a spatial table here; adding the
+            # agent's would leave the page with two tables for one grid.
+            if res.table_latex and pg not in table_pages:
+                self._replace_with_table(blocks, res.table_latex, pg)
+                continue
+            if res.types:
+                self._apply_types(blocks, res.types)
+
+    def _is_candidate(
+        self, pg: int, blocks: List[Tuple[Any, ContainerUnit]],
+        table_pages: Set[int], classify_mode: bool,
+    ) -> bool:
+        if classify_mode:
+            # A vision agent classifies the page and every block on it, which is
+            # useful on any page with content — including sparse ones and pages
+            # where TableDetector already found a table. Those two filters were
+            # sized for a serial pipeline and skipped over half the book; with
+            # requests overlapping there is no reason to pay them.
+            return bool(blocks)
+        if pg in table_pages:
+            return False
+        if len(blocks) < MIN_BLOCKS:
+            return False
+        # Without a vision agent only the table heuristic is available.
+        texts = [_text(b) for b, _ in blocks]
+        joined = " ".join(texts).lower()
+        numeric = sum(1 for t in texts if _looks_numeric(t))
+        short = sum(1 for t in texts if len(t) <= 40)
+        titled = ("table " in joined or " analysis of" in joined
+                  or " cost of " in joined or "monthly use" in joined)
+        return bool(titled
+                    or numeric / len(blocks) >= MIN_NUMERIC_RATIO
+                    or short / len(blocks) >= MIN_SHORT_RATIO)
+
+    def _fetch_pages(
+        self, candidates: List[Tuple[int, List[Tuple[Any, ContainerUnit]]]],
+        pdf_path: str, host: str, classify_mode: bool,
+        kind: str, model: Optional[str],
+    ) -> Dict[int, "_PageResult"]:
+        """Query the agent for every candidate page, several requests in flight.
+
+        The agent answers in seconds while a single upload through the tunnel
+        takes far longer, so serial requests left the GPU idle for most of the
+        run. Pages are independent, so the wait overlaps. This function performs
+        no KRM mutation — the caller applies results in page order.
+        """
+        results: Dict[int, _PageResult] = {}
+        failures = 0
+        budget = max(MIN_FAILURE_BUDGET, int(len(candidates) * FAILURE_BUDGET_RATIO))
+        started = time.time()
+
+        with ThreadPoolExecutor(max_workers=VISION_CONCURRENCY) as pool:
+            futures = {
+                pool.submit(
+                    self._analyze_page, pdf_path, pg, host, blocks,
+                    classify_mode, kind, model,
+                ): pg
+                for pg, blocks in candidates
+            }
+            for fut in as_completed(futures):
+                pg = futures[fut]
+                try:
+                    results[pg] = fut.result()
+                except Exception as exc:
+                    failures += 1
+                    results[pg] = _PageResult(failed=True)
+                    log.warning("PageAgent: page %d failed: %s", pg, exc)
+                if failures > budget:
+                    # A dead agent should stop the run; one bad page should not.
+                    log.warning(
+                        "PageAgent: %d failures over budget %d — cancelling rest",
+                        failures, budget,
+                    )
+                    for f in futures:
+                        f.cancel()
+                    break
+
+        ok = sum(1 for r in results.values() if not r.failed)
+        log.info(
+            "PageAgent: %d/%d pages in %.0fs (%d in flight, %d failed)",
+            ok, len(candidates), time.time() - started, VISION_CONCURRENCY, failures,
+        )
+        return results
+
+    def _analyze_page(
+        self, pdf_path: str, page_index: int, host: str,
+        blocks: List[Tuple[Any, ContainerUnit]],
+        classify_mode: bool, kind: str, model: Optional[str],
+    ) -> "_PageResult":
+        """One page's network work. Runs on a worker thread; touches no KRM."""
+        if not classify_mode:
+            latex = self._recognize_table(
+                pdf_path, page_index, host, blocks, kind=kind, model=model,
+            )
+            return _PageResult(role="", table_latex=latex)
+
+        role, types, latex = self._classify_page(
+            pdf_path, page_index, host, blocks, kind=kind, model=model,
+        )
+        log.info("PageAgent: page %d role=%s, %d block types",
+                 page_index, role, len(types))
+        if role == "table" and not latex:
+            # The page-level answer carried no usable table; fall back to the
+            # cropped, higher-fidelity request for this page only.
+            latex = self._recognize_table(
+                pdf_path, page_index, host, blocks, kind=kind, model=model,
+            )
+        return _PageResult(role=role, types=types, table_latex=latex)
 
     def _classify_page(
         self, pdf_path: str, page_index: int, host: str,
         blocks: List[Tuple[Any, ContainerUnit]],
         kind: str = "multimodel", model: Optional[str] = None,
-    ) -> Tuple[str, Dict[int, str]]:
+    ) -> Tuple[str, Dict[int, str], Optional[str]]:
         """Ask a vision agent to classify a page and every block on it.
 
-        Returns (page_role, {block_index: type}).
+        Returns (page_role, {block_index: type}, table_latex).
+
+        The table LaTeX is requested in the same call: asking for the role first
+        and the table afterwards meant two crossings of the tunnel for every
+        table page, and the crossing — not the inference — is what costs time.
         """
         import json as _json
         import re as _re
@@ -195,7 +332,7 @@ class PageAgentAnalyzer(BaseAnalyzer):
         pdf = fitz.open(pdf_path)
         try:
             page = pdf[page_index]
-            png = _pixmap_to_jpeg(page.get_pixmap(dpi=72))
+            png = _pixmap_to_jpeg(page.get_pixmap(dpi=RENDER_DPI))
         finally:
             pdf.close()
 
@@ -210,11 +347,15 @@ class PageAgentAnalyzer(BaseAnalyzer):
             "Decide the PAGE ROLE: title, toc, table, diagram, figure, code, "
             "formula, text. Classify each listed block: paragraph, heading, "
             "toc_entry, caption, code, formula, list_item, table_cell, title, label.\n"
-            'Reply JSON only: {"role":"...","blocks":[{"n":1,"type":"..."},...]}.'
+            "If the PAGE ROLE is table, also transcribe it as a LaTeX tabular "
+            'in the "table" field; otherwise set "table" to null.\n'
+            'Reply JSON only: {"role":"...","blocks":[{"n":1,"type":"..."},...],'
+            '"table":"\\\\begin{tabular}...\\\\end{tabular}"}.'
         )
         text = call_infer(host, "vision", png, prompt=prompt, kind=kind, model=model) or ""
         role = "text"
         types: Dict[int, str] = {}
+        latex: Optional[str] = None
         m = _re.search(r"\{.*\}", text, _re.DOTALL)
         if m:
             try:
@@ -225,9 +366,10 @@ class PageAgentAnalyzer(BaseAnalyzer):
                     t = str(item.get("type", "")).lower().strip()
                     if 0 <= idx < len(blocks) and t:
                         types[idx] = t
+                latex = _clean_tabular(data.get("table"))
             except Exception:
                 log.warning("PageAgent: bad JSON from vision agent on page %d", page_index)
-        return role, types
+        return role, types, latex
 
     def _apply_page_role(
         self, blocks: List[Tuple[Any, ContainerUnit]], role: str
@@ -290,16 +432,9 @@ class PageAgentAnalyzer(BaseAnalyzer):
         finally:
             pdf.close()
 
-        latex = call_infer(host, "table", png, kind=kind, model=model)
-        if not latex or "tabular" not in latex.lower():
-            return None
-        # Strip markdown fences the LLM often wraps around code.
-        s = latex.strip()
-        if s.startswith("```"):
-            s = s.split("\n", 1)[1] if "\n" in s else s[3:]
-            if s.rstrip().endswith("```"):
-                s = s.rstrip()[:-3].rstrip()
-        return s
+        return _clean_tabular(
+            call_infer(host, "table", png, kind=kind, model=model)
+        )
 
     def _replace_with_table(
         self, blocks: List[Tuple[Any, ContainerUnit]], latex: str, page_index: int,
