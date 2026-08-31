@@ -10,6 +10,8 @@ import base64
 import json
 import logging
 import os
+import socket
+import time
 import urllib.request
 from typing import Any, List, Optional, Tuple
 
@@ -109,6 +111,40 @@ def _token_for_host(host: str) -> Optional[str]:
     return None
 
 
+INFER_TIMEOUT = 45      # rpi5 uploads ~15KB through the tunnel at ~1.3 KB/s
+INFER_ATTEMPTS = 3
+INFER_BACKOFF = 2.0     # seconds, linear — an instant retry hits the same jam
+
+
+def _is_timeout(exc: Exception) -> bool:
+    return isinstance(exc, socket.timeout) or "timed out" in str(exc)
+
+
+def _post_infer(
+    url: str, payload: bytes, headers: dict,
+) -> Tuple[Optional[str], Optional[Exception]]:
+    """POST to one inference endpoint, retrying only on read timeout.
+
+    Returns (text, None) on success or (None, last_exception) on failure, so the
+    caller can tell a saturated link apart from a wrong endpoint.
+    """
+    last: Optional[Exception] = None
+    for attempt in range(INFER_ATTEMPTS):
+        try:
+            req = urllib.request.Request(url, data=payload, headers=headers)
+            with urllib.request.urlopen(req, timeout=INFER_TIMEOUT) as r:
+                return json.loads(r.read()).get("text", ""), None
+        except Exception as exc:
+            last = exc
+            log.warning("agent %s attempt %d/%d: %s",
+                        url, attempt + 1, INFER_ATTEMPTS, exc)
+            if not _is_timeout(exc):
+                break
+            if attempt + 1 < INFER_ATTEMPTS:
+                time.sleep(INFER_BACKOFF * (attempt + 1))
+    return None, last
+
+
 def call_infer(
     host: str, task: str, image_png: bytes,
     prompt: Optional[str] = None, kind: str = "multimodel",
@@ -145,16 +181,15 @@ def call_infer(
     token = _token_for_host(host)
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    for attempt in range(3):
-        try:
-            req = urllib.request.Request(
-                f"{host}/infer", data=payload, headers=headers,
-            )
-            with urllib.request.urlopen(req, timeout=45) as r:
-                return json.loads(r.read()).get("text", "")
-        except Exception as exc:
-            log.warning("agent %s/infer attempt %d: %s", host, attempt, exc)
-            if "timed out" not in str(exc):
-                break
-    log.warning("agent inference failed at %s (%d attempts)", host, attempt + 1)
+    for path in ("/infer", "/ocr"):
+        text, exc = _post_infer(f"{host}{path}", payload, headers)
+        if text is not None:
+            return text
+        # A timeout means the uplink is saturated, not that the endpoint is
+        # wrong — trying the other path would just queue more bytes behind it.
+        # Any other failure (e.g. 404 on /infer from a got-ocr agent) is worth
+        # retrying on the next path.
+        if exc is not None and _is_timeout(exc):
+            break
+    log.warning("agent inference failed at %s", host)
     return None
