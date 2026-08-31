@@ -6,6 +6,10 @@ Implements RFC 0021 §3 (hybrid render):
 - Positional pages (title, cover, toc, diagram): coordinate-based placement via
   tikzpicture overlay, preserving spatial relationships from the original scan.
 
+Node-level rendering is delegated to `latex_builder.render_node` — the same
+dispatcher the linear builder uses — so no node type can be handled in one mode
+and silently dropped in the other.
+
 Does NOT mutate KRM (RFC 0001 §2, RFC 0021 §5.1). Reads visual_layout, bbox,
 and StyleDescriptor to reconstruct layout.
 """
@@ -14,28 +18,37 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.assembler.latex_builder import (
+    _esc,
+    _para_text,
+    _translated,
+    render_node,
+)
 from src.krm.models import (
+    BibEntryBlock,
     BlankPageBlock,
     CalloutBlock,
     CaptionBlock,
     CodeBlock,
     ContainerUnit,
     EphemeraBlock,
-    FigureBlock,
     FootnoteBlock,
     FormulaBlock,
     KnowledgeDocument,
     ListBlock,
-    ListItemBlock,
     NormalizedRect,
     ParagraphBlock,
-    SidebarBlock,
     TableBlock,
     TitlePageBlock,
     TocEntryBlock,
 )
 
 log = logging.getLogger(__name__)
+
+# RFC 0007 §5.2 (No Code/Table Rupture): these never go through a tikz text node —
+# escaping would collapse their whitespace and destroy the markup. On a positional
+# page they are emitted in normal flow, below the overlay.
+_ATOMIC = (CodeBlock, TableBlock, FormulaBlock)
 
 POSITIONAL_ROLES = {"title", "cover", "half_title", "series", "copyright", "toc", "diagram"}
 REFLOW_ROLES = {"text", "code", "formula", "table", "figure"}
@@ -48,39 +61,83 @@ class PageSlot:
     blocks: List[Any] = field(default_factory=list)
 
 
-def group_by_page(doc: KnowledgeDocument) -> Dict[int, PageSlot]:
-    """Walk the KRM tree and group non-tombstoned leaf blocks by page index."""
-    pages: Dict[int, PageSlot] = {}
+def _page_of(node: Any) -> Optional[int]:
+    vl = getattr(node, "visual_layout", None)
+    return getattr(vl, "page_or_screen_index", None) if vl else None
 
-    def walk(node: Any) -> None:
+
+def group_by_page(doc: KnowledgeDocument) -> Dict[int, PageSlot]:
+    """Walk the KRM tree and group non-tombstoned nodes by page index.
+
+    ContainerUnit headings are placed on the page of their first content block,
+    so chapter/section titles survive page-aware assembly. Nodes without a
+    visual_layout inherit the page of the node before them rather than being
+    dropped.
+    """
+    pages: Dict[int, PageSlot] = {}
+    state = {"last_page": 0}
+
+    def place(pg: int, node: Any) -> None:
+        slot = pages.setdefault(pg, PageSlot(page_index=pg))
+        slot.blocks.append(node)
+        _update_role(slot, node)
+        state["last_page"] = pg
+
+    def first_page_under(node: Any) -> Optional[int]:
+        pg = _page_of(node)
+        if pg is not None:
+            return pg
+        for child in getattr(node, "children", []) or []:
+            pg = first_page_under(child)
+            if pg is not None:
+                return pg
+        return None
+
+    def walk(node: Any, pending: List[ContainerUnit]) -> None:
         if getattr(node, "is_tombstoned", False):
             return
         if isinstance(node, EphemeraBlock):
-            return
+            return  # headers/footers/page numbers are intentionally omitted
+
         if isinstance(node, ContainerUnit):
-            for ch in node.children:
-                walk(ch)
+            # A bibliography renders as one atomic `thebibliography` environment
+            # (RFC 0007 §5.2), so place the container itself and do not descend —
+            # its entries are emitted from inside that environment.
+            if node.semantic_type == "bibliography" and any(
+                isinstance(c, BibEntryBlock) for c in node.children
+            ):
+                pg = first_page_under(node)
+                place(pg if pg is not None else state["last_page"], node)
+                return
+            for child in node.children:
+                walk(child, pending + [node])
             return
-        vl = getattr(node, "visual_layout", None)
-        pg = getattr(vl, "page_or_screen_index", None) if vl else None
+
+        pg = _page_of(node)
         if pg is None:
-            return
-        if pg not in pages:
-            pages[pg] = PageSlot(page_index=pg)
-        slot = pages[pg]
-        slot.blocks.append(node)
-        _update_role(slot, node)
+            pg = state["last_page"]
+        for container in pending:
+            if not any(container is b for slot in pages.values() for b in slot.blocks):
+                place(pg, container)
+        place(pg, node)
 
     for c in doc.root_containers:
-        walk(c)
+        walk(c, [])
 
     for slot in pages.values():
-        slot.blocks.sort(key=lambda b: _sort_key(b))
+        slot.blocks.sort(key=_sort_key)
 
     return pages
 
 
 def _sort_key(block: Any) -> Tuple[float, float]:
+    """Reading order within a page: top-to-bottom, then left-to-right.
+
+    Container headings carry no bbox of their own and must stay above the
+    content they introduce, so they sort to the top of their page.
+    """
+    if isinstance(block, ContainerUnit):
+        return (-1.0, -1.0)
     vl = getattr(block, "visual_layout", None)
     bb = getattr(vl, "bounding_box", None) if vl else None
     if bb:
@@ -93,7 +150,7 @@ def _update_role(slot: PageSlot, node: Any) -> None:
         slot.role = getattr(node, "page_role", "title")
     elif isinstance(node, TocEntryBlock) and slot.role == "text":
         slot.role = "toc"
-    elif isinstance(node, BlankPageBlock):
+    elif isinstance(node, BlankPageBlock) and slot.role == "text":
         slot.role = "blank"
     md = getattr(node, "metadata", None) or {}
     agent_role = md.get("page_role")
@@ -118,35 +175,16 @@ def assemble_pages(doc: KnowledgeDocument, target_lang: str = "") -> str:
     return "".join(parts)
 
 
-def _translated(node: Any, fallback: str, target_lang: str) -> str:
-    if not target_lang:
-        return fallback
-    md = getattr(node, "metadata", None) or {}
-    seg = (md.get("translations") or {}).get(target_lang)
-    if seg and seg.get("target_text"):
-        return seg["target_text"]
-    return fallback
+def _render_reflow(slot: PageSlot, target_lang: str) -> str:
+    """Render a reflow page — linear LaTeX with alignment from bbox (RFC 0021 §3).
 
-
-_SPECIAL = {
-    "\\": r"\textbackslash{}",
-    "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#",
-    "_": r"\_", "{": r"\{", "}": r"\}",
-    "~": r"\textasciitilde{}", "^": r"\textasciicircum{}",
-}
-
-
-def _esc(text: str) -> str:
-    return "".join(_SPECIAL.get(ch, ch) for ch in (text or ""))
-
-
-def _para_text(block: ParagraphBlock) -> str:
-    parts: List[str] = []
-    for inline in (block.inlines or []):
-        for span in getattr(inline, "spans", []):
-            if hasattr(span, "text"):
-                parts.append(span.text)
-    return " ".join(parts).strip()
+    Containers render heading-only (`recurse=False`): their children are already
+    grouped onto their own pages by `group_by_page`.
+    """
+    body: List[str] = []
+    for block in slot.blocks:
+        render_node(body, block, target_lang, recurse=False)
+    return "".join(body)
 
 
 def _font_size_cmd(style: Any) -> str:
@@ -172,8 +210,12 @@ def _render_positional(slot: PageSlot, target_lang: str) -> str:
                  "shift={(current page.north west)}]\n")
 
     page_w, page_h = 210.0, 297.0  # A4 mm
+    atomic: List[Any] = []
 
     for block in slot.blocks:
+        if isinstance(block, _ATOMIC):
+            atomic.append(block)
+            continue
         vl = getattr(block, "visual_layout", None)
         bb = getattr(vl, "bounding_box", None) if vl else None
         style = getattr(vl, "style", None) if vl else None
@@ -183,7 +225,6 @@ def _render_positional(slot: PageSlot, target_lang: str) -> str:
         x_mm = bb.x0 * page_w
         y_mm = bb.y0 * page_h
         w_mm = bb.width * page_w
-        h_mm = bb.height * page_h
 
         text = _block_text(block, target_lang)
         if not text:
@@ -207,6 +248,8 @@ def _render_positional(slot: PageSlot, target_lang: str) -> str:
         )
 
     lines.append("\\end{tikzpicture}\n")
+    for block in atomic:
+        render_node(lines, block, target_lang, recurse=False)
     lines.append("\\clearpage\n")
     return "".join(lines)
 
@@ -221,9 +264,12 @@ def _tikz_align(bb: NormalizedRect) -> str:
 
 
 def _block_text(block: Any, target_lang: str) -> str:
+    """Flatten a block to plain text for placement inside a tikz node.
+
+    TitlePageBlock is a ParagraphBlock subclass, so the paragraph branch covers
+    both.
+    """
     if isinstance(block, ParagraphBlock):
-        return _translated(block, _para_text(block), target_lang)
-    if isinstance(block, TitlePageBlock):
         return _translated(block, _para_text(block), target_lang)
     if isinstance(block, CaptionBlock):
         return _translated(block, block.caption_text or "", target_lang)
@@ -234,10 +280,8 @@ def _block_text(block: Any, target_lang: str) -> str:
         return f"{num} {text} {'.' * 3} {page}".strip() if page else f"{num} {text}".strip()
     if isinstance(block, FootnoteBlock):
         return _translated(block, block.text, target_lang)
-    if isinstance(block, CodeBlock):
-        return block.code_text or ""
-    if isinstance(block, FormulaBlock):
-        return block.latex_expression or ""
+    if isinstance(block, ContainerUnit):
+        return _translated(block, block.title or "", target_lang)
     if isinstance(block, CalloutBlock):
         parts = []
         if block.label:
@@ -256,120 +300,3 @@ def _block_text(block: Any, target_lang: str) -> str:
                     items.append(t)
         return "\n".join(items)
     return ""
-
-
-def _render_reflow(slot: PageSlot, target_lang: str) -> str:
-    """Render a reflow page — linear LaTeX with alignment from bbox (RFC 0021 §3)."""
-    from src.assembler.latex_builder import (
-        _alignment,
-        _esc as lb_esc,
-        _heading_cmd,
-        _para_text as lb_para_text,
-        _render_table,
-        _translated as lb_translated,
-        _wrap_align,
-    )
-
-    body: List[str] = []
-
-    for block in slot.blocks:
-        if getattr(block, "is_tombstoned", False):
-            continue
-
-        if isinstance(block, ParagraphBlock) and not isinstance(block, TitlePageBlock):
-            txt = lb_esc(lb_translated(block, lb_para_text(block), target_lang))
-            if not txt:
-                continue
-            md = getattr(block, "metadata", None) or {}
-            dec = md.get("semantic_decorator")
-            if dec in ("theorem", "proof", "example", "remark", "definition"):
-                _ENV = {
-                    "theorem": {"theorem": "theorem", "lemma": "lemma",
-                                "corollary": "corollary", "proposition": "proposition"},
-                    "proof": "proof", "example": "exampleenv",
-                    "remark": "remark", "definition": "definitionenv",
-                }
-                if dec == "theorem":
-                    stype = md.get("statement_type", "theorem")
-                    env = _ENV["theorem"].get(stype, "theorem")
-                elif dec == "proof":
-                    env = "proof"
-                else:
-                    env = _ENV.get(dec, dec)
-                body.append(f"\\begin{{{env}}}\n{txt}\n\\end{{{env}}}\n")
-            else:
-                body.append(_wrap_align(txt, _alignment(block)) + "\n")
-
-        elif isinstance(block, TitlePageBlock):
-            txt = lb_esc(lb_para_text(block))
-            if txt:
-                body.append("\\begin{center}\n\\Large\n" + txt + "\n\\end{center}\n\\clearpage\n")
-
-        elif isinstance(block, CodeBlock):
-            code = block.code_text or ""
-            body.append("\\begin{verbatim}\n" + code + "\n\\end{verbatim}\n")
-
-        elif isinstance(block, FormulaBlock):
-            latex = (block.latex_expression or "").strip()
-            md = getattr(block, "metadata", None) or {}
-            has_real = not md.get("needs_vision_ocr", False)
-            if has_real and latex:
-                if block.is_numbered:
-                    tag = lb_esc(block.formula_number or "")
-                    body.append(f"\\begin{{equation}}\\tag{{{tag}}}\n{latex}\n\\end{{equation}}\n")
-                else:
-                    body.append(f"\\[\n{latex}\n\\]\n")
-            elif latex:
-                safe = lb_esc(latex)
-                body.append(f"\\[\n\\text{{{safe}}}\n\\]\n")
-
-        elif isinstance(block, TableBlock):
-            body.append(_render_table(block))
-
-        elif isinstance(block, CaptionBlock):
-            cap = lb_esc(lb_translated(block, block.caption_text or "", target_lang))
-            if cap:
-                body.append(f"\\textit{{{cap}}}\n\n")
-
-        elif isinstance(block, TocEntryBlock):
-            num = lb_esc(block.chapter_number or "")
-            title = lb_esc(lb_translated(block, block.entry_text, target_lang))
-            page = str(block.target_page + 1) if isinstance(block.target_page, int) else ""
-            left = f"{num}~{title}" if num else title
-            if page:
-                body.append(f"\\noindent {left}\\dotfill {page}\\\\\n")
-            else:
-                body.append(f"\\noindent {left}\\\\\n")
-
-        elif isinstance(block, FootnoteBlock):
-            text = lb_esc(lb_translated(block, block.text, target_lang))
-            marker = lb_esc(block.marker) if block.marker else ""
-            body.append(f"\\par\\noindent{{\\footnotesize {marker} {text}}}\\par\n")
-
-        elif isinstance(block, ListBlock):
-            env = "enumerate" if block.list_style in ("ordered", "alpha", "roman") else "itemize"
-            body.append(f"\\begin{{{env}}}\n")
-            for it in block.items:
-                if getattr(it, "is_tombstoned", False):
-                    continue
-                body.append("\\item ")
-                for child in it.content:
-                    if isinstance(child, ParagraphBlock):
-                        body.append(lb_esc(lb_translated(child, lb_para_text(child), target_lang)))
-                body.append("\n")
-            body.append(f"\\end{{{env}}}\n")
-
-        elif isinstance(block, CalloutBlock):
-            label = lb_esc(lb_translated(block, block.label or block.kind.title(), target_lang))
-            body.append("\\begin{mdframed}\n")
-            if label:
-                body.append(f"\\textbf{{{label}}}\\\\[0.2em]\n")
-            body.append("\\end{mdframed}\n")
-
-        elif isinstance(block, FigureBlock):
-            body.append("\\begin{center}[figure]\\end{center}\n")
-
-        elif isinstance(block, BlankPageBlock):
-            body.append("\\clearpage\n")
-
-    return "".join(body)
