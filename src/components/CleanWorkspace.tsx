@@ -19,10 +19,12 @@ import {
   Download,
   Eye,
   ChevronDown,
+  LayoutTemplate,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import kaeApi from '../api/client';
-import { HITLTask, KAEJobEvent, KRMNode } from '../types';
+import { HITLTask, KAEJobEvent, KRMNode, PageLayout } from '../types';
+import PageCanvas from './PageCanvas';
 import SEPSourcesDialog from './SEPSourcesDialog';
 
 const TYPE_COLORS: Record<string, string> = {
@@ -100,19 +102,57 @@ function groupChildrenByPage(children: KRMNode[]): Array<{ page: number | null; 
   return groups;
 }
 
+/** Page-layout map from the server. A context, not a prop, because the node
+ *  tree is rendered recursively and threading it through every level would be
+ *  noise. */
+const PageLayoutCtx = React.createContext<Record<number, PageLayout>>({});
+
 const PageGroup: React.FC<{
   page: number;
   jobId?: string;
   onRefinePage?: (page: number) => Promise<void>;
+  items?: KRMNode[];
   children: React.ReactNode;
-}> = ({ page, jobId, onRefinePage, children }) => {
+}> = ({ page, jobId, onRefinePage, items, children }) => {
+  const layout = React.useContext(PageLayoutCtx)[page]?.layout;
   const [status, setStatus] = useState<'idle' | 'running' | 'done'>('idle');
   const [showPreview, setShowPreview] = useState(false);
+  // Positional pages (cover, title, toc) open reconstructed — that layout is
+  // the information. Text pages stay a list, which reads better than a scan.
+  const canReconstruct = !!jobId && !!items?.some((n) => n.bbox);
+  const [view, setView] = useState<'list' | 'canvas'>(
+    layout === 'positional' ? 'canvas' : 'list'
+  );
+  useEffect(() => {
+    setView(layout === 'positional' ? 'canvas' : 'list');
+  }, [layout]);
+
   return (
     <div className="border border-slate-800/70 rounded-lg bg-slate-950/40">
       <div className="flex items-center justify-between px-2 py-1 border-b border-slate-800/70 bg-slate-900/40">
-        <div className="text-[11px] font-mono text-slate-400 uppercase tracking-wide">Страница {page + 1}</div>
+        <div className="text-[11px] font-mono text-slate-400 uppercase tracking-wide flex items-center gap-1.5">
+          Страница {page + 1}
+          {layout === 'positional' && (
+            <span className="px-1 rounded text-[9px] bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              позиционная
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-1.5">
+          {canReconstruct && (
+            <button
+              onClick={() => setView((v) => (v === 'canvas' ? 'list' : 'canvas'))}
+              className={`px-1.5 py-0.5 rounded text-[9px] font-mono border flex items-center gap-1 ${
+                view === 'canvas'
+                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                  : 'bg-slate-800/60 text-slate-400 border-slate-700 hover:bg-slate-700/60'
+              }`}
+              title="Восстановить страницу по координатам блоков"
+            >
+              <LayoutTemplate className="w-3 h-3" />
+              {view === 'canvas' ? 'страница' : 'список'}
+            </button>
+          )}
           {jobId && (
             <button
               onClick={() => setShowPreview(true)}
@@ -140,7 +180,13 @@ const PageGroup: React.FC<{
           )}
         </div>
       </div>
-      <div className="p-2 space-y-1">{children}</div>
+      <div className="p-2 space-y-1">
+        {view === 'canvas' && canReconstruct ? (
+          <PageCanvas jobId={jobId!} pageIndex={page} nodes={items!} />
+        ) : (
+          children
+        )}
+      </div>
       {showPreview && jobId && (
         <PagePreviewModal jobId={jobId} pageIndex={page} onClose={() => setShowPreview(false)} />
       )}
@@ -356,7 +402,7 @@ const KRMNodeView: React.FC<{
                 ))}
               </React.Fragment>
             ) : (
-              <PageGroup key={`pg-${group.page}-${gi}`} page={group.page} jobId={jobId} onRefinePage={onRefinePage}>
+              <PageGroup key={`pg-${group.page}-${gi}`} page={group.page} jobId={jobId} onRefinePage={onRefinePage} items={group.items}>
                 {group.items.map((child) => (
                   <KRMNodeView key={child.id} node={child} depth={depth + 1} jobId={jobId} onRefineRequest={onRefineRequest} onRefinePage={onRefinePage} />
                 ))}
@@ -397,6 +443,8 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
   const [sourceText, setSourceText] = useState<string>('');
   const [targetMarkdown, setTargetMarkdown] = useState<string>('');
   const [krmNodes, setKrmNodes] = useState<KRMNode[]>([]);
+  // Per-page render strategy from the assembler (RFC 0021 §3), keyed by page.
+  const [pageLayouts, setPageLayouts] = useState<Record<number, PageLayout>>({});
 
   // HITL Verification Banner State
   const [pendingHitlTasks, setPendingHitlTasks] = useState<HITLTask[]>([]);
@@ -449,6 +497,31 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
       setActiveJobId(initialJobId);
     }
   }, [initialJobId]);
+
+  // Refresh the page-layout map whenever the tree changes: re-running a page
+  // can turn it from reflow into positional (or back).
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeJobId || krmNodes.length === 0) {
+      setPageLayouts({});
+      return;
+    }
+    kaeApi
+      .getPageLayouts(activeJobId)
+      .then((res) => {
+        if (cancelled) return;
+        const byPage: Record<number, PageLayout> = {};
+        for (const p of res.pages) byPage[p.page_index] = p;
+        setPageLayouts(byPage);
+      })
+      .catch(() => {
+        // Layout is an enhancement; the list view stands on its own.
+        if (!cancelled) setPageLayouts({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeJobId, krmNodes]);
 
   // Fetch real KRM data when job is active
   useEffect(() => {
@@ -774,6 +847,7 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
           {/* Pane Content */}
           <div className="flex-1 overflow-y-auto p-5 font-mono text-xs leading-relaxed text-slate-300">
             {activeTabLeft === 'krm' ? (
+              <PageLayoutCtx.Provider value={pageLayouts}>
               <div className="space-y-4">
                 <div className="text-[11px] text-slate-400 uppercase tracking-wider font-sans font-semibold">
                   Иерархия узлов KRM (Knowledge Representation Model)
@@ -786,7 +860,7 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
                       ))}
                     </React.Fragment>
                   ) : (
-                    <PageGroup key={`root-pg-${group.page}-${gi}`} page={group.page} jobId={activeJobId || undefined} onRefinePage={handleRefinePage}>
+                    <PageGroup key={`root-pg-${group.page}-${gi}`} page={group.page} jobId={activeJobId || undefined} onRefinePage={handleRefinePage} items={group.items}>
                       {group.items.map((node) => (
                         <KRMNodeView key={node.id} node={node} depth={0} jobId={activeJobId || undefined} onRefineRequest={handleRefineRequest} onRefinePage={handleRefinePage} />
                       ))}
@@ -794,6 +868,7 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
                   )
                 ))}
               </div>
+              </PageLayoutCtx.Provider>
             ) : (
               <textarea
                 value={sourceText}

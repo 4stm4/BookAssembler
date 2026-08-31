@@ -1434,6 +1434,20 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
         return _serialize_document(doc)
 
+    @app.get("/api/v1/jobs/{job_id}/pages")
+    async def get_page_layout(job_id: str) -> Dict[str, Any]:
+        """Per-page render strategy for the editor (RFC 0021 §3).
+
+        The positional-vs-reflow rule lives in the assembler; the editor reads
+        the decision from here instead of holding a second implementation that
+        could drift out of step with the one that builds the PDF.
+        """
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        from src.assembler.page_assembler import page_layout_map
+        return {"job_id": job_id, "pages": page_layout_map(doc)}
+
     def _open_source_pdf(job_id: str, doc: KnowledgeDocument) -> Any:
         """Open the source PDF for a job, supporting both upload:// and sep:// URIs."""
         import pymupdf as fitz

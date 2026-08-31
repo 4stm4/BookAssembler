@@ -6,6 +6,7 @@ from src.assembler.page_assembler import (
     group_by_page,
     _render_positional,
     _render_reflow,
+    page_layout_map,
 )
 from src.krm.models import (
     BibEntryBlock,
@@ -368,3 +369,56 @@ class TestBlankPageKeepsContent:
         out = assemble_pages(_doc(c))
         assert "Kept text" in out
         assert "\\chapter{Kept Heading}" in out
+
+
+class TestLayoutDecision:
+    """The rule the editor consumes must match the one the PDF builder uses."""
+
+    def test_positional_for_title_page(self):
+        tp = TitlePageBlock(
+            book_title="B", page_role="title",
+            inlines=[TextLineInline(spans=[StyledTextSpan(text="Cover")])],
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(0.2, 0.3, 0.8, 0.5),
+                page_or_screen_index=0,
+            ),
+        )
+        c = ContainerUnit(children=[tp])
+        pages = page_layout_map(_doc(c))
+        assert pages[0]["layout"] == "positional"
+        assert pages[0]["role"] == "title"
+
+    def test_reflow_for_text_page(self):
+        c = ContainerUnit(children=[_para("body", page=2)])
+        pages = page_layout_map(_doc(c))
+        assert pages[0]["layout"] == "reflow"
+
+    def test_blank_only_page_is_blank(self):
+        bp = BlankPageBlock(
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(0.0, 0.0, 1.0, 1.0),
+                page_or_screen_index=1,
+            ),
+        )
+        c = ContainerUnit(children=[bp])
+        pages = page_layout_map(_doc(c))
+        assert pages[0]["layout"] == "blank"
+
+    def test_blank_page_with_content_is_not_blank(self):
+        bp = BlankPageBlock(
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(0.0, 0.0, 1.0, 1.0),
+                page_or_screen_index=1,
+            ),
+        )
+        c = ContainerUnit(children=[bp, _para("kept", page=1, y0=0.5, y1=0.6)])
+        pages = page_layout_map(_doc(c))
+        assert pages[0]["layout"] == "reflow"
+
+    def test_map_reports_block_ids_and_pages_sorted(self):
+        c = ContainerUnit(title="ch", children=[
+            _para("p2", page=2), _para("p0", page=0),
+        ])
+        pages = page_layout_map(_doc(c))
+        assert [p["page_index"] for p in pages] == [0, 2]
+        assert all(p["block_ids"] for p in pages)
