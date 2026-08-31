@@ -422,3 +422,60 @@ class TestLayoutDecision:
         pages = page_layout_map(_doc(c))
         assert [p["page_index"] for p in pages] == [0, 2]
         assert all(p["block_ids"] for p in pages)
+
+
+class TestTitlePageGeometry:
+    """RFC 0021 §5.4: a merged title page keeps its sources' geometry."""
+
+    def _title_doc(self):
+        from src.analyzers.title_page import TitlePageAnalyzer
+        from src.graph.knowledge_graph import KnowledgeGraph
+        from src.graph.reading_graph import ReadingGraph
+
+        lines = [
+            _para("TRINITY COLLEGE", page=0, y0=0.20, y1=0.24),
+            _para("COMPUTER LABORATORY", page=0, y0=0.26, y1=0.30),
+            _para("ANNUAL REPORT 1979/80", page=0, y0=0.32, y1=0.36),
+            _para("Copyright 1980, University Press Inc.", page=0, y0=0.80, y1=0.84),
+        ]
+        c = ContainerUnit(title="front", children=lines)
+        doc = _doc(c)
+        TitlePageAnalyzer().run(doc, ReadingGraph(), KnowledgeGraph())
+        tp = next(
+            ch for ch in c.children
+            if isinstance(ch, TitlePageBlock) and not ch.is_tombstoned
+        )
+        return doc, tp
+
+    def test_bbox_is_not_the_whole_page(self):
+        _doc_, tp = self._title_doc()
+        bb = tp.visual_layout.bounding_box
+        assert (bb.x0, bb.y0, bb.x1, bb.y1) != (0.0, 0.0, 1.0, 1.0)
+        assert bb.y0 == pytest.approx(0.20)
+        assert bb.y1 == pytest.approx(0.84)
+
+    def test_each_source_line_keeps_its_own_geometry(self):
+        _doc_, tp = self._title_doc()
+        boxes = [
+            il.visual_layout.bounding_box
+            for il in tp.inlines
+            if getattr(il, "visual_layout", None)
+        ]
+        assert len(boxes) == 4
+        assert [round(b.y0, 2) for b in boxes] == [0.20, 0.26, 0.32, 0.80]
+
+    def test_sources_are_tombstoned_not_deleted(self):
+        """RFC 0001 §2.4 — the originals stay reachable with their bbox."""
+        doc, tp = self._title_doc()
+        container = doc.root_containers[0]
+        merged = [ch for ch in container.children if ch.is_tombstoned]
+        assert len(merged) == 4
+        assert all(ch.visual_layout.bounding_box for ch in merged)
+
+    def test_title_page_renders_one_node_per_line(self):
+        _doc_, tp = self._title_doc()
+        slot = PageSlot(page_index=0, role="title", blocks=[tp])
+        out = _render_positional(slot, "")
+        assert out.count("\\node") == 4
+        assert "TRINITY COLLEGE" in out
+        assert "ANNUAL REPORT 1979/80" in out

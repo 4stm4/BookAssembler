@@ -260,6 +260,11 @@ def _render_positional(slot: PageSlot, target_lang: str) -> str:
     for block in slot.blocks:
         if isinstance(block, _ATOMIC):
             atomic.append(block)
+        elif _positioned_lines(block):
+            # A merged block whose inlines kept their own geometry (a title
+            # page) is placed line by line — that layout is what makes the page
+            # a title page (RFC 0021 §3, §5.4).
+            placed.extend(_positioned_lines(block))
         elif getattr(getattr(block, "visual_layout", None), "bounding_box", None):
             placed.append(block)
         else:
@@ -313,6 +318,20 @@ def _render_positional(slot: PageSlot, target_lang: str) -> str:
     return "".join(lines)
 
 
+def _positioned_lines(block: Any) -> List[Any]:
+    """Inlines of `block` that carry their own bbox, if more than one does.
+
+    A block whose lines were merged from separate source nodes keeps each one's
+    geometry on the inline (RFC 0021 §5.4). One such line is just the block, so
+    only a genuine multi-line layout is worth placing separately.
+    """
+    lines = [
+        il for il in (getattr(block, "inlines", None) or [])
+        if getattr(getattr(il, "visual_layout", None), "bounding_box", None)
+    ]
+    return lines if len(lines) > 1 else []
+
+
 def _tikz_align(bb: NormalizedRect) -> str:
     mid = (bb.x0 + bb.x1) / 2.0
     if abs(mid - 0.5) < 0.08 and bb.x0 > 0.15:
@@ -328,6 +347,10 @@ def _block_text(block: Any, target_lang: str) -> str:
     TitlePageBlock is a ParagraphBlock subclass, so the paragraph branch covers
     both.
     """
+    spans = getattr(block, "spans", None)
+    if spans is not None and not hasattr(block, "inlines"):
+        # An inline placed on its own (see _positioned_lines).
+        return " ".join(s.text for s in spans if hasattr(s, "text")).strip()
     if isinstance(block, ParagraphBlock):
         return _translated(block, _para_text(block), target_lang)
     if isinstance(block, CaptionBlock):

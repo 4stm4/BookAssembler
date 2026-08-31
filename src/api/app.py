@@ -232,6 +232,40 @@ def create_app() -> FastAPI:
             walk(c.children)
         return count
 
+    def _serialize_lines(node: Any) -> List[Dict[str, Any]]:
+        """Inlines that carry their own bbox, as flat {text, bbox, style}.
+
+        Set when a merged block kept the geometry of the source lines it
+        absorbed (RFC 0021 §5.4); empty for ordinary single-line blocks.
+        """
+        out: List[Dict[str, Any]] = []
+        for inline in (getattr(node, "inlines", None) or []):
+            vl = getattr(inline, "visual_layout", None)
+            bb = getattr(vl, "bounding_box", None) if vl else None
+            if not bb:
+                continue
+            text = " ".join(
+                s.text for s in getattr(inline, "spans", []) if hasattr(s, "text")
+            ).strip()
+            if not text:
+                continue
+            entry: Dict[str, Any] = {
+                "text": text,
+                "bbox": [bb.x0, bb.y0, bb.x1, bb.y1],
+            }
+            st = getattr(vl, "style", None)
+            if st:
+                entry["style"] = {
+                    "font_family": st.font_family,
+                    "font_size_pt": st.font_size_pt,
+                    "is_bold": st.is_bold,
+                    "is_italic": st.is_italic,
+                    "is_monospace": st.is_monospace,
+                    "text_color_rgb": list(st.text_color_rgb),
+                }
+            out.append(entry)
+        return out if len(out) > 1 else []
+
     def _serialize_document(doc: KnowledgeDocument) -> Dict[str, Any]:
         def _first_page(node: Any) -> Optional[int]:
             """Smallest page index found anywhere in this node's subtree."""
@@ -364,6 +398,14 @@ def create_app() -> FastAPI:
                 vl = getattr(node, "visual_layout", None)
                 if vl and hasattr(vl, "page_or_screen_index"):
                     result["page_index"] = vl.page_or_screen_index
+                if vl and getattr(vl, "bounding_box", None):
+                    bb = vl.bounding_box
+                    result["bbox"] = [bb.x0, bb.y0, bb.x1, bb.y1]
+                # Per-line geometry of the merged sources (RFC 0021 §5.4) — what
+                # lets the editor place a title page instead of drawing one box.
+                lines = _serialize_lines(node)
+                if lines:
+                    result["lines"] = lines
                 return result
             elif isinstance(node, ParagraphBlock):
                 text_parts = []

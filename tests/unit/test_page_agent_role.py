@@ -1,7 +1,8 @@
 """PageAgent persists the vision-derived page role so the assembler can use it."""
 import pytest
 
-from src.analyzers.page_agent import PageAgentAnalyzer, _union_bbox
+from src.analyzers.page_agent import PageAgentAnalyzer
+from src.krm.geometry import union_bbox as _union_bbox
 from src.assembler.page_assembler import group_by_page
 from src.krm.models import (
     ContainerUnit,

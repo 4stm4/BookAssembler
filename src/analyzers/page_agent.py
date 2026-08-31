@@ -20,6 +20,7 @@ from src.agents import call_infer, pick
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
+from src.krm.geometry import union_bbox
 from src.krm.identity import derive_composite_id
 from src.krm.models import (
     ContainerUnit,
@@ -60,23 +61,6 @@ def _text(node: Any) -> str:
             for s in getattr(i, "spans", []) if hasattr(s, "text")
         ).strip()
     return (getattr(node, "title", "") or "").strip()
-
-
-def _union_bbox(nodes: List[Any], pad: float = 0.0) -> Optional[NormalizedRect]:
-    """Smallest normalized rect covering every node that carries a bbox."""
-    bbs = [
-        n.visual_layout.bounding_box
-        for n in nodes
-        if getattr(n, "visual_layout", None)
-    ]
-    if not bbs:
-        return None
-    return NormalizedRect(
-        max(0.0, min(b.x0 for b in bbs) - pad),
-        max(0.0, min(b.y0 for b in bbs) - pad),
-        min(1.0, max(b.x1 for b in bbs) + pad),
-        min(1.0, max(b.y1 for b in bbs) + pad),
-    )
 
 
 def _looks_numeric(text: str) -> bool:
@@ -291,7 +275,7 @@ class PageAgentAnalyzer(BaseAnalyzer):
         """Render the page region covering these blocks and send to the agent."""
         import pymupdf as fitz
 
-        region = _union_bbox([b for b, _ in blocks], pad=0.02)
+        region = union_bbox([b for b, _ in blocks], pad=0.02)
         if region is None:
             return None
 
@@ -335,7 +319,7 @@ class PageAgentAnalyzer(BaseAnalyzer):
         # Keep the region the table actually occupies (RFC 0021 §5.4) — a
         # whole-page box would tell the assembler this spans the entire sheet.
         table.visual_layout = VisualLayout(
-            bounding_box=_union_bbox([b for b, _ in blocks])
+            bounding_box=union_bbox([b for b, _ in blocks])
             or NormalizedRect(0.0, 0.0, 1.0, 1.0),
             page_or_screen_index=page_index,
         )

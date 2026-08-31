@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Image as ImageIcon, Type } from 'lucide-react';
-import type { KRMNode } from '../types';
+import type { KRMNode, KRMStyle } from '../types';
 
 /**
  * Reconstructs a source page from KRM: blocks placed by their normalized bbox,
@@ -54,8 +54,29 @@ const PageCanvas: React.FC<{
     return () => ro.disconnect();
   }, []);
 
-  const placed = nodes.filter((n) => n.bbox);
-  const unplaced = nodes.filter((n) => !n.bbox && nodeText(n));
+  // A merged block that kept its sources' geometry (a title page) is drawn line
+  // by line — that arrangement is what makes it a title page (RFC 0021 §5.4).
+  type Placed = {
+    key: string; nodeId: string; text: string;
+    bbox: [number, number, number, number]; style?: KRMStyle; type: string;
+  };
+  const placed: Placed[] = [];
+  for (const n of nodes) {
+    if (n.lines?.length) {
+      n.lines.forEach((ln, i) =>
+        placed.push({
+          key: `${n.id}:${i}`, nodeId: n.id, text: ln.text,
+          bbox: ln.bbox, style: ln.style, type: n.type,
+        })
+      );
+    } else if (n.bbox) {
+      placed.push({
+        key: n.id, nodeId: n.id, text: nodeText(n),
+        bbox: n.bbox, style: n.style, type: n.type,
+      });
+    }
+  }
+  const unplaced = nodes.filter((n) => !n.bbox && !n.lines?.length && nodeText(n));
 
   return (
     <div className="space-y-2">
@@ -80,7 +101,12 @@ const PageCanvas: React.FC<{
       <div
         ref={ref}
         className="relative w-full bg-white rounded shadow-inner overflow-hidden"
-        style={{ aspectRatio: `${PAGE_W_MM} / ${PAGE_H_MM}` }}
+        style={{
+          aspectRatio: `${PAGE_W_MM} / ${PAGE_H_MM}`,
+          // The editor pane is font-mono; a reconstructed page must not inherit
+          // that or every block renders in the wrong typeface.
+          fontFamily: 'Georgia, "Times New Roman", serif',
+        }}
       >
         {showScan && (
           <img
@@ -90,17 +116,18 @@ const PageCanvas: React.FC<{
           />
         )}
 
-        {placed.map((node) => {
-          const [x0, y0, x1, y1] = node.bbox!;
-          const text = nodeText(node);
-          const st = node.style;
+        {placed.map((item) => {
+          const [x0, y0, x1, y1] = item.bbox;
+          const text = item.text;
+          const st = item.style;
           const pt = st?.font_size_pt ?? 11;
-          const selected = selectedId === node.id;
+          const selected = selectedId === item.nodeId;
+          const node = nodes.find((n) => n.id === item.nodeId)!;
           return (
             <div
-              key={node.id}
+              key={item.key}
               onClick={() => onSelect?.(node)}
-              title={`${node.type} · ${(x0 * 100).toFixed(1)}%, ${(y0 * 100).toFixed(1)}%`}
+              title={`${item.type} · ${(x0 * 100).toFixed(1)}%, ${(y0 * 100).toFixed(1)}%`}
               className={`absolute overflow-hidden leading-tight cursor-pointer transition-colors ${
                 selected ? 'ring-2 ring-cyan-400 bg-cyan-400/10' : 'hover:bg-cyan-400/10'
               }`}
@@ -116,7 +143,13 @@ const PageCanvas: React.FC<{
                 color: rgb(st?.text_color_rgb) ?? '#111',
               }}
             >
-              {text}
+              {text || (
+                // Figures and other textless blocks still occupy the page —
+                // an empty div would make them look like nothing is there.
+                <span className="block w-full h-full border border-dashed border-slate-400 rounded-sm text-[8px] text-slate-500 px-0.5">
+                  {item.type.replace('Block', '')}
+                </span>
+              )}
             </div>
           );
         })}

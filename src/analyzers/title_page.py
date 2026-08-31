@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
+from src.krm.geometry import union_bbox
 from src.krm.identity import derive_composite_id
 from src.krm.models import (
     BlankPageBlock,
@@ -252,12 +253,32 @@ class TitlePageAnalyzer(BaseAnalyzer):
             )
             first_vl = next((_page_of(l[0]) for l in locs if _page_of(l[0]) is not None), None)
             if first_vl is not None:
-                from src.krm.models import VisualLayout, NormalizedRect
-                tp.visual_layout = VisualLayout(bounding_box=NormalizedRect(0.0, 0.0, 1.0, 1.0), page_or_screen_index=first_vl)
+                from src.krm.models import VisualLayout
+                # RFC 0021 §5.4 forbids zeroing coordinates: the title page
+                # covers the region its sources covered, not the whole sheet.
+                region = union_bbox([l[0] for l in locs])
+                if region is not None:
+                    tp.visual_layout = VisualLayout(
+                        bounding_box=region, page_or_screen_index=first_vl,
+                    )
             tp.extraction_confidence = 0.90
             tp.classification_confidence = 0.90
-            full_text = "\n".join(texts)
-            tp.inlines = [TextLineInline(spans=[StyledTextSpan(text=full_text)])]
+            # One inline per source line, each keeping that line's own bbox and
+            # StyleDescriptor. Joining them into a single span would discard the
+            # geometry of every source node, which RFC 0021 §5.4 requires to stay
+            # available and §3 needs to place a title page positionally.
+            tp.inlines = []
+            for node, _parent, _idx in locs:
+                text = _get_text(node)
+                if not text.strip():
+                    continue
+                line = TextLineInline(spans=[StyledTextSpan(text=text)])
+                line.visual_layout = getattr(node, "visual_layout", None)
+                tp.inlines.append(line)
+            if not tp.inlines:
+                tp.inlines = [
+                    TextLineInline(spans=[StyledTextSpan(text="\n".join(texts))])
+                ]
 
             first_parent: Optional[ContainerUnit] = None
             first_index = 999999
