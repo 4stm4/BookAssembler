@@ -127,6 +127,12 @@ def group_by_page(doc: KnowledgeDocument) -> Dict[int, PageSlot]:
     for slot in pages.values():
         slot.blocks.sort(key=_sort_key)
 
+    headings = sum(
+        1 for s in pages.values() for b in s.blocks
+        if isinstance(b, ContainerUnit) and b.title
+    )
+    log.info("page assembly: %d pages, %d blocks, %d container headings",
+             len(pages), sum(len(s.blocks) for s in pages.values()), headings)
     return pages
 
 
@@ -165,7 +171,15 @@ def assemble_pages(doc: KnowledgeDocument, target_lang: str = "") -> str:
 
     for pg_idx in sorted(pages.keys()):
         slot = pages[pg_idx]
-        if slot.role == "blank":
+        others = [b for b in slot.blocks if not isinstance(b, BlankPageBlock)]
+        log.debug("page %d role=%s blocks=%d (%s)", pg_idx, slot.role,
+                  len(slot.blocks),
+                  ", ".join(sorted({type(b).__name__ for b in slot.blocks})))
+        # A page detected as blank can still carry a container heading or a
+        # block the detector did not account for. Emitting only \clearpage
+        # would discard them, so fall back to reflow whenever anything else
+        # is present.
+        if slot.role == "blank" and not others:
             parts.append("\\clearpage\n")
         elif slot.role in POSITIONAL_ROLES:
             parts.append(_render_positional(slot, target_lang))

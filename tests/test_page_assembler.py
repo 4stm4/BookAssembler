@@ -340,3 +340,31 @@ class TestPositionalPageKeepsStructure:
         assert "\\chapter{Book Title}" in out
         assert "Cover text" in out
         assert "tikzpicture" in out
+
+
+class TestBlankPageKeepsContent:
+    def test_blank_only_page_emits_clearpage(self):
+        bp = BlankPageBlock(
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(0.0, 0.0, 1.0, 1.0),
+                page_or_screen_index=1,
+            ),
+        )
+        c = ContainerUnit(children=[bp])
+        out = assemble_pages(_doc(c))
+        assert "\\clearpage" in out
+
+    def test_blank_page_with_other_content_does_not_discard_it(self):
+        """Regression: role=blank emitted only \\clearpage, dropping every
+        other block that shared the page — including container headings."""
+        bp = BlankPageBlock(
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(0.0, 0.0, 1.0, 1.0),
+                page_or_screen_index=1,
+            ),
+        )
+        c = ContainerUnit(title="Kept Heading", level=1,
+                          children=[bp, _para("Kept text", page=1, y0=0.5, y1=0.6)])
+        out = assemble_pages(_doc(c))
+        assert "Kept text" in out
+        assert "\\chapter{Kept Heading}" in out
