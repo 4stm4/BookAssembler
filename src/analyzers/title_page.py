@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
+from src.krm.identity import derive_composite_id
 from src.krm.models import (
     BlankPageBlock,
     ContainerUnit,
@@ -238,6 +239,11 @@ class TitlePageAnalyzer(BaseAnalyzer):
 
             meta = _extract_metadata(texts)
             tp = TitlePageBlock(
+                # Aggregates the front-matter blocks it absorbs, so its identity
+                # is derived from theirs (RFC 0009 §5.2).
+                id=derive_composite_id(
+                    "title-page", *[l[0].id for l in locs]
+                ),
                 book_title=meta["book_title"],
                 authors=meta["authors"],
                 publisher=meta["publisher"],
