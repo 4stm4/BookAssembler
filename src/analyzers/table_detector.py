@@ -192,6 +192,11 @@ class TableDetectorAnalyzer(BaseAnalyzer):
         para_blocks: List[Tuple[int, ParagraphBlock]] = []
         separator_indices: set = set()
         for idx, child in enumerate(container.children):
+            # RFC 0014: blocks already merged into a table on an earlier run are
+            # tombstoned. Collecting them again would cluster the same run twice
+            # and insert a duplicate TableBlock — with an identical derived id.
+            if getattr(child, "is_tombstoned", False):
+                continue
             if isinstance(child, ParagraphBlock) and _bbox(child) is not None and _page_idx(child) is not None:
                 text = _get_text(child)
                 bb = _bbox(child)
