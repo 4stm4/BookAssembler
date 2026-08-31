@@ -24,6 +24,7 @@ from src.analyzers.base import (
 )
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
+from src.krm.identity import derive_composite_id
 from src.krm.models import (
     BaseKRMNode,
     ContainerUnit,
@@ -148,6 +149,7 @@ class ListDetectorAnalyzer(BaseAnalyzer):
                 for para, marker, _ in buffer:
                     items.append(
                         ListItemBlock(
+                            id=derive_composite_id("list-item", para.id),
                             marker=marker,
                             content=[para],
                             visual_layout=para.visual_layout,
@@ -158,6 +160,9 @@ class ListDetectorAnalyzer(BaseAnalyzer):
                     )
                 new_children.append(
                     ListBlock(
+                        id=derive_composite_id(
+                            "list", *[p.id for p, _, _ in buffer]
+                        ),
                         list_style=style,
                         items=items,
                         classification_confidence=0.85,
