@@ -242,7 +242,6 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                             ]
                         )
                         grid.append([cell])
-                        indices_to_remove.add(orig_idx)
 
                     row_count = len(grid)
                     run_indices = {orig_idx for orig_idx, _ in run}
@@ -277,6 +276,11 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                         confidence_score=min(avg_ext, cls_conf),
                     )
                     replacements[first_idx] = table
+                    # Only now, with a table to hold them: marking the rows
+                    # before the validation below meant a rejected run left its
+                    # blocks tombstoned with nothing to absorb them — silent
+                    # deletion, which RFC 0001 §2.4 exists to prevent.
+                    indices_to_remove |= run_indices
                     self._table_count += 1
 
         # Tombstone separators adjacent to detected tables
