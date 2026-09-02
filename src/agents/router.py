@@ -111,7 +111,9 @@ def _token_for_host(host: str) -> Optional[str]:
     return None
 
 
-INFER_TIMEOUT = 45      # generous: the cost is generation, not transfer
+# A classification answers in ~1.7s; the ceiling is for a page that turns out
+# heavier than expected. OCR needs its own, far larger budget — see OCR_TIMEOUT.
+INFER_TIMEOUT = 45
 INFER_ATTEMPTS = 3
 INFER_BACKOFF = 2.0     # seconds, linear
 
@@ -122,6 +124,7 @@ def _is_timeout(exc: Exception) -> bool:
 
 def _post_infer(
     url: str, payload: bytes, headers: dict,
+    timeout: Optional[int] = None, attempts: Optional[int] = None,
 ) -> Tuple[Optional[str], Optional[Exception]]:
     """POST to one inference endpoint, retrying only on read timeout.
 
@@ -129,18 +132,20 @@ def _post_infer(
     caller can tell a saturated link apart from a wrong endpoint.
     """
     last: Optional[Exception] = None
-    for attempt in range(INFER_ATTEMPTS):
+    timeout = timeout or INFER_TIMEOUT
+    attempts = attempts or INFER_ATTEMPTS
+    for attempt in range(attempts):
         try:
             req = urllib.request.Request(url, data=payload, headers=headers)
-            with urllib.request.urlopen(req, timeout=INFER_TIMEOUT) as r:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
                 return json.loads(r.read()).get("text", ""), None
         except Exception as exc:
             last = exc
             log.warning("agent %s attempt %d/%d: %s",
-                        url, attempt + 1, INFER_ATTEMPTS, exc)
+                        url, attempt + 1, attempts, exc)
             if not _is_timeout(exc):
                 break
-            if attempt + 1 < INFER_ATTEMPTS:
+            if attempt + 1 < attempts:
                 time.sleep(INFER_BACKOFF * (attempt + 1))
     return None, last
 
@@ -150,6 +155,7 @@ def call_infer(
     host: str, task: str, image_png: bytes,
     prompt: Optional[str] = None, kind: str = "multimodel",
     model: Optional[str] = None,
+    timeout: Optional[int] = None, attempts: Optional[int] = None,
 ) -> Optional[str]:
     """Send an image to an agent for inference (RFC 0022 §4.2).
 
@@ -186,7 +192,8 @@ def call_infer(
     if token:
         headers["Authorization"] = f"Bearer {token}"
     for path in ("/infer", "/ocr"):
-        text, exc = _post_infer(f"{host}{path}", payload, headers)
+        text, exc = _post_infer(f"{host}{path}", payload, headers,
+                                timeout=timeout, attempts=attempts)
         if text is not None:
             return text
         # A timeout says the agent is busy or wedged, not that the endpoint is
