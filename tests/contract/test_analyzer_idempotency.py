@@ -135,7 +135,7 @@ def stub_llm(monkeypatch):
     excluding it left the contract unverified. A fixed reply is enough: a second
     run must skip the blocks the first one marked, whatever the reply was.
     """
-    from src.analyzers import llm_refinement
+    from src.analyzers.llm_refinement import analyzer as llm_refinement
 
     reply = '[{"index": 1, "type": "paragraph", "confidence": 0.8}]'
     monkeypatch.setattr(llm_refinement, "_call_ollama", lambda *a, **k: reply)
