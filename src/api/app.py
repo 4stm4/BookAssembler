@@ -602,6 +602,9 @@ def create_app() -> FastAPI:
                     "type": "EphemeraBlock",
                     "ephemera_type": node.ephemera_type,
                     "repeated_text": node.repeated_text,
+                    # The UI reads "text"; without it a running head renders as
+                    # an empty box on the reconstructed page.
+                    "text": node.repeated_text,
                     "confidence_score": node.confidence_score,
                 }
             elif isinstance(node, AlgorithmBlock):

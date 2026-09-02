@@ -44,3 +44,4 @@ scratchpad/
 .manager/
 .runner/
 .scratchpad/
+.claude/settings.local.json

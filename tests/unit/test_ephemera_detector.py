@@ -16,11 +16,11 @@ from src.krm.models import (
 )
 
 
-def _make_para(text: str, y0: float, y1: float) -> ParagraphBlock:
+def _make_para(text: str, y0: float, y1: float, page: int = 0) -> ParagraphBlock:
     span = StyledTextSpan(text=text)
     inline = TextLineInline(spans=[span])
     vl = VisualLayout(
-        page_or_screen_index=0,
+        page_or_screen_index=page,
         bounding_box=NormalizedRect(x0=0.1, y0=y0, x1=0.9, y1=y1),
     )
     return ParagraphBlock(inlines=[inline], visual_layout=vl)
@@ -65,10 +65,19 @@ class TestPageNumber:
 
 class TestHeader:
     def test_short_text_top(self):
-        result = _run([_make_para("Chapter 3", 0.01, 0.04)])
+        # A running head repeats; the same line on one page only is a page
+        # title and stays part of the document.
+        result = _run([
+            _make_para("Chapter 3", 0.01, 0.04, page=0),
+            _make_para("Chapter 3", 0.01, 0.04, page=1),
+        ])
         assert isinstance(result[0], EphemeraBlock)
         assert result[0].ephemera_type == "header"
         assert result[0].repeated_text == "Chapter 3"
+
+    def test_one_off_top_line_is_not_a_header(self):
+        result = _run([_make_para("CONTENTS", 0.01, 0.04)])
+        assert isinstance(result[0], ParagraphBlock)
 
     def test_long_text_top_not_promoted(self):
         long_text = "A" * 85
@@ -78,7 +87,10 @@ class TestHeader:
 
 class TestFooter:
     def test_short_text_bottom(self):
-        result = _run([_make_para("Copyright 2026", 0.95, 0.99)])
+        result = _run([
+            _make_para("Copyright 2026", 0.95, 0.99, page=0),
+            _make_para("Copyright 2026", 0.95, 0.99, page=1),
+        ])
         assert isinstance(result[0], EphemeraBlock)
         assert result[0].ephemera_type == "footer"
 
@@ -90,11 +102,14 @@ class TestFooter:
 class TestMixed:
     def test_preserves_body_text(self):
         body = _make_para("Normal paragraph", 0.3, 0.35)
-        header = _make_para("Chapter 1", 0.01, 0.04)
+        header = _make_para("Chapter 1", 0.01, 0.04, page=0)
+        header2 = _make_para("Chapter 1", 0.01, 0.04, page=1)
         footer = _make_para("5", 0.95, 0.99)
-        result = _run([header, body, footer])
+        result = _run([header, body, footer, header2])
         types = [type(r).__name__ for r in result]
-        assert types == ["EphemeraBlock", "ParagraphBlock", "EphemeraBlock"]
+        assert types == [
+            "EphemeraBlock", "ParagraphBlock", "EphemeraBlock", "EphemeraBlock",
+        ]
 
     def test_no_visual_layout_skipped(self):
         span = StyledTextSpan(text="42")
