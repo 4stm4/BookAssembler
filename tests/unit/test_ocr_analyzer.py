@@ -160,3 +160,60 @@ class TestPipeline:
         assert "OCRAnalyzer" in names
         assert names.index("OCRAnalyzer") < names.index("HeadingAnalyzer")
         assert names.index("OCRAnalyzer") < names.index("TableDetectorAnalyzer")
+
+
+class TestMeasuredParameters:
+    """Values set from a timing run, not from intuition.
+
+    Measured on a scanned Intel-3212 page against Qwen2.5-VL:
+    512px answered in 24.6s with a correct transcription, 700px and 900px did
+    not answer within 150s and 180s. The limit is a cliff, so the defaults sit
+    at the size that demonstrably works.
+    """
+
+    def test_page_size_stays_at_the_size_that_answers(self):
+        from src.analyzers import ocr
+        assert ocr.OCR_MAX_DIM <= 512, (
+            "raised above the only size measured to answer; 700px timed out"
+        )
+
+    def test_timeout_leaves_room_over_the_observed_cost(self):
+        from src.analyzers import ocr
+        assert ocr.OCR_TIMEOUT >= 100, (
+            "24.6s was one page of ~1100 characters; a denser page needs more"
+        )
+
+    def test_ocr_timeout_exceeds_the_classification_one(self):
+        """OCR generates a page of text; classification generates a word."""
+        from src.agents import router
+        from src.analyzers import ocr
+        assert ocr.OCR_TIMEOUT > router.INFER_TIMEOUT
+
+    def test_timeouts_are_not_retried(self):
+        from src.analyzers import ocr
+        assert ocr.OCR_ATTEMPTS == 1, (
+            "a timeout means the page is too heavy, so a retry costs minutes "
+            "and changes nothing"
+        )
+
+    def test_ocr_page_passes_its_own_budget_to_the_agent(self, monkeypatch, tmp_path):
+        """The real _ocr_page, not a stub of it."""
+        fitz = pytest.importorskip("pymupdf")
+        from src.analyzers import ocr
+
+        pdf = tmp_path / "s.pdf"
+        d = fitz.open(); d.new_page(); pdf.write_bytes(d.tobytes()); d.close()
+
+        seen = {}
+
+        def fake_call(host, task, png, prompt=None, kind=None, model=None,
+                      timeout=None, attempts=None):
+            seen.update(timeout=timeout, attempts=attempts, task=task)
+            return "recovered"
+
+        monkeypatch.setattr(ocr, "call_infer", fake_call)
+        out = ocr.OCRAnalyzer()._ocr_page(str(pdf), 0, "http://a", "multimodel", None)
+
+        assert out == "recovered"
+        assert seen["timeout"] == ocr.OCR_TIMEOUT
+        assert seen["attempts"] == ocr.OCR_ATTEMPTS

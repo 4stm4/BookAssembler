@@ -38,12 +38,22 @@ from src.krm.models import (
 
 log = logging.getLogger(__name__)
 
-# Same reasoning as PageAgent: the cost is generation, not transfer.
 OCR_CONCURRENCY = int(os.environ.get("KAE_OCR_CONCURRENCY", "2"))
-# A scanned page is mostly text, so it needs more resolution than a page we
-# only classify — but the ceiling is still what the model answers on in time.
-OCR_DPI = int(os.environ.get("KAE_OCR_DPI", "110"))
-OCR_MAX_DIM = int(os.environ.get("KAE_OCR_MAX_DIM", "900"))
+# Measured on a scanned Intel-3212 page against Qwen2.5-VL:
+#   512px, 10KB -> 24.6s, 1094 characters, transcription correct
+#   700px       -> no answer in 150s
+#   900px       -> no answer in 180s
+# The limit is a cliff, not a slope, so the page is capped at the size that
+# demonstrably answers. Raising it only against a fresh timing measurement.
+OCR_DPI = int(os.environ.get("KAE_OCR_DPI", "72"))
+OCR_MAX_DIM = int(os.environ.get("KAE_OCR_MAX_DIM", "512"))
+# 24.6s observed for ~1100 characters. A denser page generates more tokens and
+# takes proportionally longer, so the classification timeout (45s) is too tight
+# here — it would abandon pages that were about to answer.
+OCR_TIMEOUT = int(os.environ.get("KAE_OCR_TIMEOUT", "150"))
+# A timeout here means the page is too heavy for the model, not that the
+# request was unlucky: repeating it costs minutes and changes nothing.
+OCR_ATTEMPTS = int(os.environ.get("KAE_OCR_ATTEMPTS", "1"))
 FAILURE_BUDGET_RATIO = 0.5
 MIN_FAILURE_BUDGET = 3
 
@@ -161,7 +171,8 @@ class OCRAnalyzer(BaseAnalyzer):
         finally:
             pdf.close()
         return call_infer(host, "vision", png, prompt=_PROMPT,
-                          kind=kind, model=model) or ""
+                          kind=kind, model=model,
+                          timeout=OCR_TIMEOUT, attempts=OCR_ATTEMPTS) or ""
 
     def _replace(
         self, node: Any, parent: ContainerUnit, text: str, source_uri: str,
