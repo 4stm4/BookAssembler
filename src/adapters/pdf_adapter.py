@@ -100,6 +100,15 @@ def _is_ocr_garbage(text: str) -> bool:
     return len(proper) == 0
 
 
+def _norm_rect(bbox: Any, pw: float, ph: float) -> NormalizedRect:
+    """Clamp a PyMuPDF bbox into the [0,1] page grid (RFC 0002 §inv3)."""
+    x0, y0, x1, y1 = (bbox or (0, 0, pw, ph))[:4]
+    c = lambda v, d: max(0.0, min(1.0, v / d))
+    nx0, nx1 = sorted((c(x0, pw), c(x1, pw)))
+    ny0, ny1 = sorted((c(y0, ph), c(y1, ph)))
+    return NormalizedRect(x0=nx0, y0=ny0, x1=nx1, y1=ny1)
+
+
 def _is_monospace(font_name: str) -> bool:
     lower = font_name.lower()
     return any(m in lower for m in MONOSPACE_FAMILIES)
@@ -253,6 +262,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
                 max_font_size = 0.0
                 is_bold_block = False
 
+                line_records: List[Dict[str, Any]] = []
                 for line in lines:
                     line_parts: List[str] = []
                     for span in line.get("spans", []):
@@ -282,7 +292,18 @@ class PdfSourceAdapter(BaseSourceAdapter):
                             "mono": is_mono,
                         })
                     if line_parts:
-                        line_texts.append("".join(line_parts))
+                        joined_line = "".join(line_parts)
+                        line_texts.append(joined_line)
+                        first = line.get("spans", [{}])[0] if line.get("spans") else {}
+                        line_records.append({
+                            "text": joined_line,
+                            "bbox": line.get("bbox"),
+                            "font": first.get("font", ""),
+                            "size": first.get("size", 12.0),
+                            "bold": bool(first.get("flags", 0) & (1 << 4)),
+                            "italic": bool(first.get("flags", 0) & (1 << 1)),
+                            "mono": _is_monospace(first.get("font", "")),
+                        })
 
                 full_text = " ".join(line_texts).strip()
                 if not full_text:
@@ -323,20 +344,44 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     )
                     current_container.children.append(code)
                 else:
-                    styled_span = StyledTextSpan(
-                        text=full_text,
-                        visual_layout=VisualLayout(
-                            bounding_box=norm_rect,
+                    # One inline per source line, each with the line's own bbox
+                    # and style. Collapsing a block's lines into a single span
+                    # discards the geometry the assembler needs to rebuild a
+                    # laid-out page — a two-column contents list comes back as
+                    # one run-on paragraph (RFC 0021 §3, §5.4).
+                    inlines: List[InlineUnit] = []
+                    for rec in line_records:
+                        line_layout = VisualLayout(
+                            bounding_box=_norm_rect(rec["bbox"], pw, ph),
                             page_or_screen_index=page_idx,
-                            style=style,
-                        ),
-                    )
+                            style=StyleDescriptor(
+                                font_family=rec["font"] or "sans-serif",
+                                font_size_pt=rec["size"],
+                                is_bold=rec["bold"],
+                                is_italic=rec["italic"],
+                                is_monospace=rec["mono"],
+                            ),
+                        )
+                        inline = TextLineInline(spans=[StyledTextSpan(
+                            text=rec["text"], visual_layout=line_layout,
+                        )])
+                        inline.visual_layout = line_layout
+                        inlines.append(inline)
+                    if not inlines:
+                        inlines = [TextLineInline(spans=[StyledTextSpan(
+                            text=full_text,
+                            visual_layout=VisualLayout(
+                                bounding_box=norm_rect,
+                                page_or_screen_index=page_idx,
+                                style=style,
+                            ),
+                        )])]
                     ext_conf = _extraction_confidence(full_text)
                     para = ParagraphBlock(
                         id=derive_source_id(
                             "paragraph", source_uri, page_idx, norm_rect, full_text
                         ),
-                        inlines=[TextLineInline(spans=[styled_span])],
+                        inlines=inlines,
                         parent_container_id=current_container.id,
                         provenance_info=provenance,
                         visual_layout=layout,
