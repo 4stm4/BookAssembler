@@ -42,11 +42,11 @@ export const DocumentDashboard: React.FC<DocumentDashboardProps> = ({
             title: d.title || 'Untitled',
             source_uri: d.source_uri || '',
             status: d.status || 'UNKNOWN',
-            progress: d.status === 'COMPLETED' ? 1.0 : 0,
+            progress: d.status === 'COMPLETED' ? 1.0 : (d.progress ?? 0),
             created_at: d.created_at || '',
             updated_at: d.updated_at || '',
             node_count: d.node_count || 0,
-            confidence_avg: 1.0,
+            confidence_avg: d.confidence_avg,
           })));
         }
       } catch (err) {
@@ -184,7 +184,11 @@ export const DocumentDashboard: React.FC<DocumentDashboardProps> = ({
                     <span>•</span>
                     <span>KRM Узлов: {doc.node_count}</span>
                     <span>•</span>
-                    <span>Avg Conf: {((doc.confidence_avg || 0.9) * 100).toFixed(0)}%</span>
+                    <span>
+                      {doc.confidence_avg == null
+                        ? 'Avg Conf: —'
+                        : `Avg Conf: ${(doc.confidence_avg * 100).toFixed(0)}%`}
+                    </span>
                     {doc.created_at && (
                       <>
                         <span>•</span>
@@ -238,7 +242,9 @@ export const DocumentDashboard: React.FC<DocumentDashboardProps> = ({
             {doc.status === 'RUNNING' && (
               <div className="pt-2 border-t border-slate-800/60">
                 <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1">
-                  <span className="font-mono text-cyan-400">pyjobkit сборка в процессе...</span>
+                  <span className="font-mono text-cyan-400">
+                    {doc.stage ? `pyjobkit: ${doc.stage}` : 'pyjobkit сборка в процессе...'}
+                  </span>
                   <span className="font-mono font-medium text-slate-200">{Math.round(doc.progress * 100)}%</span>
                 </div>
                 <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden border border-slate-800/80">

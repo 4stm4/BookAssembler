@@ -334,4 +334,5 @@ export interface KAEDocumentItem {
   updated_at: string;
   node_count?: number;
   confidence_avg?: number;
+  stage?: string;
 }

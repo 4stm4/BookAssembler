@@ -1462,12 +1462,38 @@ def create_app() -> FastAPI:
 
     # --- Document & Job Result Endpoints ---
 
+    def _avg_confidence(doc: KnowledgeDocument) -> float:
+        """Mean confidence over the leaves that carry one.
+
+        Containers have no meaningful score of their own, so averaging them in
+        would drag the number toward 1.0 and hide exactly what it is for.
+        """
+        scores: List[float] = []
+
+        def walk(node: Any) -> None:
+            kids = getattr(node, "children", None)
+            if kids:
+                for c in kids:
+                    walk(c)
+                return
+            if getattr(node, "is_tombstoned", False):
+                return
+            cs = getattr(node, "confidence_score", None)
+            if isinstance(cs, (int, float)):
+                scores.append(float(cs))
+
+        for c in doc.root_containers:
+            walk(c)
+        return round(sum(scores) / len(scores), 3) if scores else 0.0
+
     @app.get("/api/v1/documents")
     async def list_documents() -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
         for job_id, doc in docs_store.items():
             job = job_manager.get_job(job_id)
             node_count = _count_nodes(doc)
+            prog = progress_store.get(job_id) or {}
+            step, total = prog.get("step", 0), prog.get("total", 0)
             results.append({
                 "job_id": job_id,
                 "title": doc.title or "Untitled",
@@ -1477,6 +1503,12 @@ def create_app() -> FastAPI:
                 "updated_at": job.updated_at if job else "",
                 "node_count": node_count,
                 "page_count": doc.metadata.get("page_count", 0) if doc.metadata else 0,
+                # Real numbers: the dashboard used to hardcode 1.0 for both, so
+                # every document showed "Avg Conf: 100%" and a progress bar that
+                # sat at 0% until it jumped to 100%.
+                "confidence_avg": _avg_confidence(doc),
+                "progress": (step / total) if total else 0.0,
+                "stage": prog.get("stage", ""),
             })
         return results
 
