@@ -326,6 +326,14 @@ def create_app() -> FastAPI:
             # Uniformly attach real page/bbox/style from visual_layout (RFC 0002),
             # falling back to subtree's first page so every node keeps a page number.
             _layout_into(result, node)
+            # Per-line geometry, for any block whose inlines kept it. A block is
+            # one PDF text block, which can span several laid-out lines; without
+            # them the editor can only draw one box for a whole contents list
+            # (RFC 0021 §3, §5.4).
+            if "lines" not in result:
+                lines = _serialize_lines(node)
+                if lines:
+                    result["lines"] = lines
             if "page_index" not in result:
                 cp = _first_page(node)
                 if cp is not None:
