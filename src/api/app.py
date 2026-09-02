@@ -1725,7 +1725,7 @@ def create_app() -> FastAPI:
         doc = docs_store.get(job_id)
         if doc is None:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
-        from src.analyzers.llm_refinement import _call_ollama
+        from src.analyzers.llm_refinement.rules import _call_ollama
         prompt = (
             f"Translate the following text to {body.target_lang}. "
             f"Output ONLY the translation, nothing else.\n\n"
@@ -1823,7 +1823,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
 
         from src.assembler.translator import _collect_translatable, _get_block_text, _record_translation
-        from src.analyzers.llm_refinement import _call_ollama
+        from src.analyzers.llm_refinement.rules import _call_ollama
 
         blocks: list = []
         for container in doc.root_containers:
@@ -2134,7 +2134,8 @@ def create_app() -> FastAPI:
             return {"status": "updated", "node_id": body.node_id}
 
         if body.mode == 'agent':
-            from src.analyzers.llm_refinement import _call_ollama, VALID_TYPES, OLLAMA_MODEL
+            from src.analyzers.llm_refinement import VALID_TYPES, OLLAMA_MODEL
+from src.analyzers.llm_refinement.rules import _call_ollama
             import re as _re
             text_parts = []
             if hasattr(target, 'inlines'):
@@ -2198,7 +2199,8 @@ def create_app() -> FastAPI:
         doc = docs_store.get(job_id)
         if doc is None:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
-        from src.analyzers.llm_refinement import _call_ollama, VALID_TYPES
+        from src.analyzers.llm_refinement import VALID_TYPES
+from src.analyzers.llm_refinement.rules import _call_ollama
 
         def _text(n: Any) -> str:
             if hasattr(n, "inlines"):
@@ -2238,7 +2240,7 @@ def create_app() -> FastAPI:
 
         # Prefer a vision agent (sees the page image); fall back to text-only ollama.
         from src.agents.router import pick as _pick_role, call_infer as _call_agent
-        from src.analyzers.page_agent import _resolve_source_path
+        from src.analyzers.page_agent.rules import _resolve_source_path
         host_v, model_v, _ = _pick_role("vision")
         model = model_v
         resp: Optional[str] = None

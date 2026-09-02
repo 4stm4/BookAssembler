@@ -2,7 +2,8 @@
 
 from typing import List
 
-from src.analyzers.list import ListDetectorAnalyzer, _classify_marker
+from src.analyzers.list import ListDetectorAnalyzer
+from src.analyzers.list.rules import _classify_marker
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import (

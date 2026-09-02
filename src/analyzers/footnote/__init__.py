@@ -15,16 +15,8 @@ fall back to marker-only. Identity of the source ParagraphBlock is
 preserved (RFC 0001 §2.3).
 """
 
-from src.analyzers.footnote.signals import _MARKER_RE, _SUPERSCRIPT_DIGITS, _SUPER_MAP
-from src.analyzers.footnote.rules import _bbox_bottom_y, _full_text, _parse_marker
 from src.analyzers.footnote.analyzer import FootnoteDetectorAnalyzer
 
 __all__ = [
     "FootnoteDetectorAnalyzer",
-    "_MARKER_RE",
-    "_SUPERSCRIPT_DIGITS",
-    "_SUPER_MAP",
-    "_bbox_bottom_y",
-    "_full_text",
-    "_parse_marker",
 ]

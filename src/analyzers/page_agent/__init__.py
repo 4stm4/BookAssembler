@@ -17,7 +17,6 @@ old heuristics still gate which pages are worth a request.
 
 from src.analyzers.page_agent.config import JPEG_MAX_DIM, JPEG_QUALITY, RENDER_DPI, VISION_CONCURRENCY
 from src.analyzers.page_agent.signals import FAILURE_BUDGET_RATIO, MIN_BLOCKS, MIN_FAILURE_BUDGET, MIN_NUMERIC_RATIO, MIN_SHORT_RATIO, log
-from src.analyzers.page_agent.rules import _PageResult, _clean_tabular, _looks_numeric, _pixmap_to_jpeg, _resolve_source_path, _text
 from src.analyzers.page_agent.analyzer import PageAgentAnalyzer
 
 __all__ = [
@@ -31,11 +30,5 @@ __all__ = [
     "PageAgentAnalyzer",
     "RENDER_DPI",
     "VISION_CONCURRENCY",
-    "_PageResult",
-    "_clean_tabular",
-    "_looks_numeric",
-    "_pixmap_to_jpeg",
-    "_resolve_source_path",
-    "_text",
     "log",
 ]

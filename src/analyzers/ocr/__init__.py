@@ -20,9 +20,7 @@ the top in a default font.
 """
 
 from src.analyzers.ocr.config import OCR_ATTEMPTS, OCR_CONCURRENCY, OCR_DPI, OCR_MAX_DIM, OCR_TIMEOUT
-from src.analyzers.ocr.prompts import _PROMPT
-from src.analyzers.ocr.signals import FAILURE_BUDGET_RATIO, MIN_FAILURE_BUDGET, _FONT_FAMILIES, log
-from src.analyzers.ocr.rules import _clamp, _needs_ocr, _parse_ocr, _rect_from, _resolve_source_path, _style_from
+from src.analyzers.ocr.signals import FAILURE_BUDGET_RATIO, MIN_FAILURE_BUDGET, log
 from src.analyzers.ocr.analyzer import OCRAnalyzer
 
 __all__ = [
@@ -34,13 +32,5 @@ __all__ = [
     "OCR_DPI",
     "OCR_MAX_DIM",
     "OCR_TIMEOUT",
-    "_FONT_FAMILIES",
-    "_PROMPT",
-    "_clamp",
-    "_needs_ocr",
-    "_parse_ocr",
-    "_rect_from",
-    "_resolve_source_path",
-    "_style_from",
     "log",
 ]

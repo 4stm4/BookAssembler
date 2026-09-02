@@ -51,9 +51,6 @@ log = logging.getLogger(__name__)
 _ATOMIC = (CodeBlock, TableBlock, FormulaBlock)
 
 POSITIONAL_ROLES = {"title", "cover", "half_title", "series", "copyright", "toc", "diagram"}
-REFLOW_ROLES = {"text", "code", "formula", "table", "figure"}
-
-
 @dataclass
 class PageSlot:
     page_index: int

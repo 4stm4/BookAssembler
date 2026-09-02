@@ -179,6 +179,3 @@ class QwenVLLoader:
         return await asyncio.to_thread(_infer_sync)
 
 
-def infer_from_b64(image_b64: str) -> bytes:
-    """Convenience for callers that receive base64 (KAE `/infer` payload)."""
-    return base64.b64decode(image_b64)

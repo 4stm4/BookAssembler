@@ -16,18 +16,8 @@ Heuristics (any of these triggers a promotion):
   3. Trailing "(N.M)" formula number after either signal above.
 """
 
-from src.analyzers.formula.signals import _FORMULA_NUMBER_RE, _MATH_CHARS, _MATH_FONT_HINTS
-from src.analyzers.formula.rules import _extract_formula_number, _font_family, _looks_like_formula, _math_font, _symbol_density
 from src.analyzers.formula.analyzer import FormulaDetectorAnalyzer
 
 __all__ = [
     "FormulaDetectorAnalyzer",
-    "_FORMULA_NUMBER_RE",
-    "_MATH_CHARS",
-    "_MATH_FONT_HINTS",
-    "_extract_formula_number",
-    "_font_family",
-    "_looks_like_formula",
-    "_math_font",
-    "_symbol_density",
 ]

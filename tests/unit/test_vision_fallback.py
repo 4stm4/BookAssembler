@@ -5,11 +5,8 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from src.analyzers.vision_fallback import (
-    VisionFallbackAnalyzer,
-    _parse_classify_response,
-    VISION_CONFIDENCE_THRESHOLD,
-)
+from src.analyzers.vision_fallback import VisionFallbackAnalyzer, VISION_CONFIDENCE_THRESHOLD
+from src.analyzers.vision_fallback.rules import _parse_classify_response
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import (

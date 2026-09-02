@@ -2,11 +2,8 @@
 
 from typing import List
 
-from src.analyzers.formula import (
-    FormulaDetectorAnalyzer,
-    _extract_formula_number,
-    _looks_like_formula,
-)
+from src.analyzers.formula import FormulaDetectorAnalyzer
+from src.analyzers.formula.rules import _extract_formula_number, _looks_like_formula
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import (

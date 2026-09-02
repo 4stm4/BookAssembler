@@ -14,7 +14,6 @@ Env vars:
 from src.analyzers.llm_refinement.config import CONFIDENCE_THRESHOLD, MAX_TOTAL_TIME, OLLAMA_MODEL, OLLAMA_URL
 from src.analyzers.llm_refinement.prompts import CLASSIFICATION_PROMPT
 from src.analyzers.llm_refinement.signals import BATCH_SIZE, REQUEST_TIMEOUT, VALID_TYPES, logger
-from src.analyzers.llm_refinement.rules import _call_ollama, _get_text, _parse_llm_response
 from src.analyzers.llm_refinement.analyzer import LLMRefinementAnalyzer
 
 __all__ = [
@@ -27,8 +26,5 @@ __all__ = [
     "OLLAMA_URL",
     "REQUEST_TIMEOUT",
     "VALID_TYPES",
-    "_call_ollama",
-    "_get_text",
-    "_parse_llm_response",
     "logger",
 ]

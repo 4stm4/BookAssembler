@@ -22,10 +22,6 @@ def _count_columns(text: str) -> int:
     parts = _TAB_SPLIT_RE.split(text.strip())
     return len([p for p in parts if p.strip()])
 
-def _has_table_font_role(block: ParagraphBlock) -> bool:
-    md = getattr(block, "metadata", None) or {}
-    return md.get("font_role") in ("body", "caption", "code")
-
 def _get_text(block: ParagraphBlock) -> str:
     parts = []
     for inline in (block.inlines or []):
