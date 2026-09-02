@@ -403,8 +403,13 @@ class PdfSourceAdapter(BaseSourceAdapter):
                         bounding_box=NormalizedRect(0.0, 0.0, 1.0, 1.0),
                         page_or_screen_index=page_idx,
                     ),
-                    extraction_confidence=1.0,
-                    classification_confidence=1.0,
+                    # Nothing was extracted, so nothing is certain. A page we
+                    # could not read must not be reported as confidently empty:
+                    # downstream that reads as fact, and the UI showed 100% on
+                    # eight unreadable scan pages.
+                    extraction_confidence=0.1,
+                    classification_confidence=0.1,
+                    confidence_score=0.1,
                 )
                 current_container.children.append(placeholder)
                 if page.get_images():
