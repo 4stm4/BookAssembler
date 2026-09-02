@@ -92,11 +92,6 @@ from src.krm.models import (
 class DocumentUploadRequest(BaseModel):
     source_uri: Optional[str] = None
     content: Optional[str] = None
-    # Public URL a vision agent can fetch the document from. source_uri is a
-    # local handle (upload://, sep://) and means nothing on a remote runner;
-    # with this the agent renders pages on its own side instead of receiving
-    # them over the uplink.
-    source_url: Optional[str] = None
 
 
 class DocumentUploadResponse(BaseModel):
@@ -942,8 +937,6 @@ def create_app() -> FastAPI:
     docs_store: Dict[str, KnowledgeDocument] = {}
     graphs_store: Dict[str, Dict[str, Any]] = {}
     progress_store: Dict[str, Dict[str, Any]] = {}
-    # job_id -> public URL a remote agent can fetch the source from.
-    source_urls: Dict[str, str] = {}
     _docs_dir = os.path.join(os.environ.get("KAE_DATA_DIR", ".kae"), "docs")
     os.makedirs(_docs_dir, exist_ok=True)
 
@@ -1007,8 +1000,6 @@ def create_app() -> FastAPI:
             source_uri = payload.source_uri
 
         job = job_manager.create_job(source_uri=source_uri)
-        if payload is not None and payload.source_url:
-            source_urls[job.job_id] = payload.source_url
 
         ext = ""
         if "." in source_uri:
@@ -1328,9 +1319,6 @@ def create_app() -> FastAPI:
             doc = await loop.run_in_executor(
                 None, adapter.parse, file_stream, job.source_uri
             )
-            fetch_url = source_urls.get(job_id)
-            if fetch_url:
-                doc.metadata["source_url"] = fetch_url
             docs_store[job_id] = doc
             _persist_doc(job_id, doc)
 

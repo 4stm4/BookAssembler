@@ -45,3 +45,7 @@ scratchpad/
 .runner/
 .scratchpad/
 .claude/settings.local.json
+
+# рабочий клон и лог раннера — не часть репозитория
+repo/
+kae-gpu-runner.log
