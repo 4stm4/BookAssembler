@@ -175,6 +175,11 @@ class TitlePageAnalyzer(BaseAnalyzer):
         count = 0
         for i, child in enumerate(container.children):
             if isinstance(child, ParagraphBlock) and not isinstance(child, TitlePageBlock):
+                # A page that carries an image and no text layer is unread, not
+                # empty. Relabelling it BlankPageBlock discards the needs_ocr
+                # flag and states as fact that the page has no content.
+                if (child.metadata or {}).get("needs_ocr"):
+                    continue
                 text = _get_text(child).strip()
                 if len(text) <= 2:
                     page = _page_of(child)
