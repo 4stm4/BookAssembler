@@ -1,142 +1,101 @@
-> ⚠️ **Archived alternative.** Основной deploy теперь на edge-кластере
-> (rpi4/rpi5/orangepi) — см. [`docs/deploy/edge-cluster.md`](../docs/deploy/edge-cluster.md).
-> Эта директория оставлена для opt-in GPU-fallback: когда LLaVA/
-> Qwen2-VL на CPU-хостах не тянет, Manager может поднимать Kaggle-
-> Runner через `bin/push-kaggle-runner.sh` (полностью автоматически,
-> без клика в Kaggle UI).
+# Kaggle GPU Runner
 
-# GPU-агенты для KAE (Colab / Kaggle)
+Ноутбук, который поднимает RFC 0022 Runner на Kaggle с GPU. Нужен там, где
+vision-инференс не сделать локально: на ARM-хостах кластера (rpi5/orangepi)
+одна страница через CPU занимает минуты.
 
-Тяжёлые модели (vision-векторизация, OCR таблиц/формул) выносятся на бесплатный
-GPU и подключаются как обычный агент в KAE. Три ноутбука — три пути с разным
-компромиссом:
-
-| Ноутбук | Кому | Плюсы | Минусы |
-|---|---|---|---|
-| **`kaggle-runner/`** (RFC 0022, managed) | Прод-путь: KAE сам будит GPU по запросу, гасит по простою | Экономит GPU-квоту, стабильный URL для KAE, аудит, метрики | Нужен Manager (`python -m src.agents.manager`) + один раз залить kernel в Kaggle |
-| **`kae_multimodel_agent.ipynb`** | Быстро попробовать: один Qwen2.5-VL для table/formula/vision | Прямой путь без Manager, всё в одном ноутбуке | GPU-часы тикают всё время работы ноутбука; URL меняется на каждый рестарт |
-| **`kae_got_ocr.ipynb`** | Только для таблиц — GOT-OCR2.0 даёт ~99% LaTeX `tabular` | Лучшее качество на таблицах | Специализированный, несовместим с Qwen по версии transformers → отдельный ноутбук |
-
-**По умолчанию используй `kaggle-runner/` (managed путь).** Остальные — для точечных
-задач и разработки.
-
----
-
-## Запуск Kaggle Runner (RFC 0022 managed путь)
-
-### Полностью автоматический путь (из edge-cluster)
-
-Manager на rpi5 может сам заливать/обновлять kernel через:
-
-```bash
-KAE_MANAGER_URL='https://<стабильный-URL-manager>' \
-KAE_RUNNER_TOKEN='<Bearer>' \
-  bin/push-kaggle-runner.sh
+```
+colab/kaggle-runner/
+  runner.ipynb           обёртка: окружение, туннель, запуск
+  kernel-metadata.json   метаданные для `kaggle kernels push`
+  README.md              как запускать и как проверить
 ```
 
-Скрипт:
-- копирует `colab/kaggle-runner/` во временный каталог,
-- sed'ит placeholder'ы `__KAE_MANAGER_URL__` / `__KAE_RUNNER_TOKEN__`
-  на реальные значения из env (в git — только placeholder'ы),
-- ставит одноразовый venv в `.scratchpad/kag-venv/` и вызывает
-  `kaggle kernels push`,
-- **никакого клика в Kaggle UI не требуется** — kernel запустится
-  автоматически.
+## Логика живёт в репозитории, не в блокноте
 
-Опрос статуса и ожидание, пока Runner дойдёт до `RUNNING`:
-```bash
-bin/poll-kaggle-runner.sh
+Блокнот клонирует BookAssembler и запускает `python -m src.agents.runner`.
+Всё поведение — в `src/agents/runner/`. Значит правка раннера не требует
+трогать блокнот: следующий запуск подхватит её сам.
+
+| Что | Где |
+|---|---|
+| HTTP-эндпоинты | `src/agents/runner/app.py` |
+| Загрузка и рендер источника | `src/agents/runner/source_fetch.py` |
+| Пул моделей, выгрузка по простою | `src/agents/runner/pool.py`, `idle.py` |
+| Объявление Manager'у | `src/agents/runner/announce.py` |
+| Загрузчики моделей | `src/agents/runner/loaders/` |
+
+## Как KAE присылает страницу
+
+`POST /infer` принимает две формы:
+
+```json
+{"task": "vision", "image_b64": "…"}
+{"task": "vision", "source_url": "https://…/book.pdf", "page": 3}
 ```
 
-### 1. Один раз — залить kernel в свой Kaggle-аккаунт (ручной путь)
+Вторая нужна из-за асимметрии каналов. На rpi5 замерено **1.7 КБ/с вверх
+против 4.6 МБ/с вниз** — разница в 2700 раз, причём на публичный endpoint без
+всякого туннеля, то есть узкое место сам канал. Заливка отрендеренной страницы
+(~22 КБ) стоит там ~13 секунд при инференсе в 1–3 секунды: GPU простаивает,
+пока хост выталкивает байты.
 
-**Что нужно:**
-- Аккаунт [kaggle.com](https://kaggle.com) с активированным телефоном (`Settings → Phone verification`) — иначе GPU и Internet недоступны.
-- Локально: [Kaggle API](https://www.kaggle.com/docs/api) — `pip install kaggle` в **вашем** окружении (не в KAE-репозитории — см. правило проекта «не ставить локально»).
-- Kaggle-креды: `Account → Create New API Token`. Актуальный клиент
-  пишет токен в **`~/.kaggle/access_token`** (`chmod 600`); старые
-  версии клали `~/.kaggle/kaggle.json` — если у тебя такая, оба
-  варианта работают.
+По ссылке вверх уходит несколько сотен байт. Документ скачивает раннер по
+своему каналу и кэширует по URL — книга качается один раз на все страницы.
+Обратно едет только текст, то есть в быструю сторону.
 
-**Шаги:**
+Включается флагом `"source_fetch": true` у агента в `agents.json` плюс
+известный публичный URL документа. Если раннер ссылку не принял (422), KAE
+откатывается на заливку картинки и запоминает отказ, чтобы не пробовать снова
+на каждой странице. Таймаут отказом не считается — он про канал, а не про
+возможности раннера.
 
-```bash
-# 1.1. Пропиши свой owner в kernel-metadata.json (замени REPLACE_WITH на свой username):
-#      "id": "<yourname>/kae-runner"
-
-# 1.2. В Kaggle: Settings → Add-ons → Secrets → добавь два секрета:
-#      KAE_MANAGER_URL   = https://<адрес твоего Manager'а, например https://kae-mgr.example>
-#      KAE_RUNNER_TOKEN  = <длинный случайный Bearer — тот же, что укажешь в Manager>
-
-# 1.3. Первый пуш создаст приватный ноутбук с GPU + Internet:
-kaggle kernels push -p colab/kaggle-runner
-```
-
-После этого в аккаунте появится приватный ноутбук `kae-runner` — больше руками ничего не трогаем; всё дальше делает Manager.
-
-### 2. Поднять Manager (CPU, где угодно — rpi5, локальный Docker, VM)
+## Запуск
 
 ```bash
-export KAE_MANAGER_PORT=8080
-export KAE_MANAGER_BACKEND=kaggle
-export KAE_KAGGLE_KERNEL=<yourname>/kae-runner
-export KAE_KAGGLE_KERNEL_DIR=$PWD/colab/kaggle-runner
-export KAE_KAE_TOKEN=<токен KAE→Manager>
-export KAE_RUNNER_TOKEN=<тот же токен, что положил в Kaggle Secrets>
-export KAE_MANAGER_IDLE_TIMEOUT=900   # Runner сам погаснет через 15 мин простоя
-
-python -m src.agents.manager
-# → uvicorn на 0.0.0.0:8080; аудит в ./.manager/audit.log
+export KAE_MANAGER_URL=https://your-manager
+export KAE_RUNNER_TOKEN=...
+bin/push-kaggle-runner.sh      # подставит секреты и сделает push
+bin/poll-kaggle-runner.sh      # дождётся публичного URL из логов
 ```
 
-Manager нужен онлайн-24/7 — это лёгкий CPU-процесс, GPU-квоту он не тратит.
+Скрипт подставляет секреты вместо плейсхолдеров на push-time, поэтому в git
+они не попадают. При ручном запуске в UI значения читаются из Kaggle Secrets
+(`KAE_MANAGER_URL`, `KAE_RUNNER_TOKEN`).
 
-### 3. Подключить в KAE как обычного агента
+Из вывода ячейки 4 взять строку `Runner will announce as: https://…` и
+прописать этот host агенту в `agents.json`.
 
-В KAE → «Менеджер агентов» → **+** →
-- **host** = `https://<адрес твоего Manager'а>`
-- **kind** = `managed`
-- **roles** = отметь нужные (`table`, `formula`, `vision`)
+## Переменные окружения
 
-Сохрани. В карточке агента появится бейдж **MANAGED** и индикатор состояния Runner:
-- ⚪ **cold** — GPU выключен, стартует по первому запросу
-- 🔄 **starting** — Manager попросил Kaggle поднять kernel
-- 🟡 **warming** — kernel запущен, модели грузятся
-- ⚡ **up** — готов принимать `/infer`
-- ⏸ **stopping** / ❌ **error** — переходное/аварийное
+| Переменная | По умолчанию | Что делает |
+|---|---|---|
+| `KAE_RUNNER_LOADERS` | `qwen25vl` | какие загрузчики регистрировать |
+| `KAE_RUNNER_IDLE_TIMEOUT` | `900` | секунд простоя до выхода |
+| `KAE_RUNNER_SOURCE_CACHE` | `/kaggle/working/sources` | куда класть скачанные документы |
+| `KAE_RUNNER_RENDER_DPI` | `150` | качество рендера для запросов по ссылке |
+| `KAE_RUNNER_FETCH_TIMEOUT` | `120` | секунд на скачивание документа |
+| `KAE_RUNNER_MAX_SOURCE_BYTES` | `512 МБ` | предел размера документа |
 
-### 4. Проверить
-
-Просто нажми **«Агент стр.»** на любой странице документа в KAE. Первый запрос
-разбудит Runner (60-180с на старт Kaggle-kernel'а + прогрев модели), дальше
-работает быстро. Через 15 минут без запросов Runner **сам погаснет**
-(`os._exit(0)`) — Kaggle kernel завершится, GPU-часы перестанут тикать.
-
-### Метрики и аудит
+## Проверка
 
 ```bash
-curl https://<manager>/metrics
-#   kae_gpu_seconds_used <секунд GPU сожжено> ← основной KPI
-#   kae_infer_total / kae_infer_errors_total / kae_infer_task_total{task=...}
-#   kae_announce_total / kae_auth_fail_total
+curl -s $RUNNER_URL/health
+# {"status":"ok","kind":"runner","tasks":[...],"ready":true}
 
-tail -f .manager/audit.log   # hash-chained JSONL по RFC 0020
-#   MANAGER_STARTED, RUNNER_ANNOUNCED, INFER_COMPLETED, AUTH_FAILED, ...
+curl -s -X POST $RUNNER_URL/infer \
+  -H "Authorization: Bearer $KAE_RUNNER_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"task":"vision","source_url":"https://example.org/book.pdf","page":0,
+       "prompt":"Reply OK"}'
 ```
 
-## Альтернатива без Manager — прямые ноутбуки
+`422` в ответ означает, что документ не скачался или страница вне диапазона —
+текст ошибки в поле `detail`.
 
-### `kae_multimodel_agent.ipynb`
-Открой в Kaggle с **GPU T4×2**, Run all → в конце ячейка напечатает публичный
-cloudflared-URL → добавь в KAE как **`kind=multimodel`** с ролями. GPU работает
-пока открыт ноутбук.
+## Безопасность
 
-### `kae_got_ocr.ipynb`
-Аналогично, но модель GOT-OCR2.0 (лучше на таблицах). Добавляется в KAE как
-**`kind=got-ocr`**.
-
-## Ссылки
-
-- [RFC 0022: GPU Runner Orchestration](../docs/architecture/0022-gpu-runner-orchestration.md)
-- [kaggle-runner/README.md](kaggle-runner/README.md) — детали kernel-артефакта
-- Код Manager/Runner: `src/agents/manager/`, `src/agents/runner/`
+URL приходит по сети, поэтому раннер принимает только `http`/`https` и
+отказывается ходить на loopback, приватные и link-local адреса: иначе вызывающая
+сторона могла бы читать через раннер его собственную сеть. Размер документа
+ограничен, недокачанный файл в кэше не остаётся.

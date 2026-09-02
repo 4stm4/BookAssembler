@@ -4,7 +4,7 @@ Runner FastAPI app (RFC 0022 §4.2).
 Endpoints:
     GET  /health           # cheap, no model load
     GET  /ready            # 200 once the warmup set is loaded
-    POST /infer            # {image_b64, task, prompt?} → {text}
+    POST /infer            # {image_b64 | source_url+page, task, prompt?} → {text}
     POST /ocr              # legacy alias, task='table'
     POST /shutdown         # graceful stop
     GET  /models           # {task→model, loaded[], vram_used_mb}
@@ -30,13 +30,23 @@ from src.agents.runner.idle import run_watchdog
 from src.agents.runner.loaders.base import EchoLoader, ModelLoader
 from src.agents.runner.metrics import RunnerMetrics, render as render_metrics
 from src.agents.runner.pool import ModelPool
+from src.agents.runner.source_fetch import SourceFetchError, render_page
 
 log = logging.getLogger(__name__)
 
 
 class InferRequest(BaseModel):
-    image_b64: str
+    """Either an uploaded image, or a reference the Runner fetches itself.
+
+    The reference form exists because the caller's uplink can be far slower
+    than the Runner's: sending a page reference costs a few hundred bytes
+    instead of tens of kilobytes, and the document travels over the Runner's
+    own link (see source_fetch).
+    """
     task: str
+    image_b64: Optional[str] = None
+    source_url: Optional[str] = None
+    page: Optional[int] = None
     prompt: Optional[str] = None
 
 
@@ -158,7 +168,19 @@ def create_app(cfg: Optional[RunnerConfig] = None,
 
     @app.post("/infer", dependencies=[Depends(_require_token)])
     async def infer(body: InferRequest) -> dict:
-        png = _decode_png(body.image_b64)
+        if body.source_url is not None and body.page is not None:
+            try:
+                png = await asyncio.to_thread(
+                    render_page, body.source_url, body.page,
+                )
+            except SourceFetchError as exc:
+                # 422, not 500: the request was understood and is answerable in
+                # principle — the caller can fall back to uploading the image.
+                raise HTTPException(422, str(exc)) from exc
+        elif body.image_b64 is not None:
+            png = _decode_png(body.image_b64)
+        else:
+            raise HTTPException(422, "need image_b64, or source_url with page")
         text = await _do_infer(body.task, png, body.prompt)
         return {"text": text}
 
