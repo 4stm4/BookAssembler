@@ -8,10 +8,8 @@ Phase 2: scan BibEntryBlock.authors, find matching PERSON entities in KG,
          create AUTHORED_BY edge person_entity→bib_entity.
 """
 
-from src.analyzers.citation.signals import _CITE_RE
 from src.analyzers.citation.analyzer import CitationLinkerAnalyzer
 
 __all__ = [
     "CitationLinkerAnalyzer",
-    "_CITE_RE",
 ]

@@ -10,14 +10,10 @@ Heuristics:
   dropped from the exported document.
 """
 
-from src.analyzers.ephemera.signals import MIN_REPEAT_PAGES, _PAGENUM_RE
-from src.analyzers.ephemera.rules import _is_edge, _norm
+from src.analyzers.ephemera.signals import MIN_REPEAT_PAGES
 from src.analyzers.ephemera.analyzer import EphemeraDetectorAnalyzer
 
 __all__ = [
     "EphemeraDetectorAnalyzer",
     "MIN_REPEAT_PAGES",
-    "_PAGENUM_RE",
-    "_is_edge",
-    "_norm",
 ]

@@ -11,18 +11,11 @@ Algorithm:
 4. For remaining ParagraphBlocks, compute classification_confidence from features
 """
 
-from src.analyzers.block_classifier.signals import MAX_TOC_TEXT_LEN, MIN_TOC_RUN, _ENDS_WITH_PAGE_NUM, _LEADING_NUM_RE
-from src.analyzers.block_classifier.rules import _classify_paragraph_confidence, _get_text, _looks_like_toc_entry, _parse_toc_entry
+from src.analyzers.block_classifier.signals import MAX_TOC_TEXT_LEN, MIN_TOC_RUN
 from src.analyzers.block_classifier.analyzer import BlockClassifierAnalyzer
 
 __all__ = [
     "BlockClassifierAnalyzer",
     "MAX_TOC_TEXT_LEN",
     "MIN_TOC_RUN",
-    "_ENDS_WITH_PAGE_NUM",
-    "_LEADING_NUM_RE",
-    "_classify_paragraph_confidence",
-    "_get_text",
-    "_looks_like_toc_entry",
-    "_parse_toc_entry",
 ]

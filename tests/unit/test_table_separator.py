@@ -2,12 +2,8 @@
 
 import pytest
 
-from src.analyzers.table import (
-    TableDetectorAnalyzer,
-    _looks_like_separator,
-    _count_columns,
-    MIN_TABLE_ROWS,
-)
+from src.analyzers.table import TableDetectorAnalyzer, MIN_TABLE_ROWS
+from src.analyzers.table.rules import _count_columns, _looks_like_separator
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import (

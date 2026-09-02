@@ -262,12 +262,12 @@ class TestSingleRoundTrip:
 
 class TestCleanTabular:
     def test_strips_markdown_fence(self):
-        from src.analyzers.page_agent import _clean_tabular
+        from src.analyzers.page_agent.rules import _clean_tabular
         out = _clean_tabular("```latex\n\\begin{tabular}{l}x\\end{tabular}\n```")
         assert out.startswith("\\begin{tabular}")
         assert "```" not in out
 
     def test_rejects_non_table(self):
-        from src.analyzers.page_agent import _clean_tabular
+        from src.analyzers.page_agent.rules import _clean_tabular
         assert _clean_tabular("just prose") is None
         assert _clean_tabular(None) is None

@@ -2,10 +2,8 @@
 
 from typing import List
 
-from src.analyzers.bibliography import (
-    BibliographyDetectorAnalyzer,
-    _parse_entry,
-)
+from src.analyzers.bibliography import BibliographyDetectorAnalyzer
+from src.analyzers.bibliography.rules import _parse_entry
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import (

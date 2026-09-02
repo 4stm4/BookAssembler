@@ -8,15 +8,8 @@ and converts them to CaptionBlock, linking to the nearest target block via capti
 Also detects ContainerUnit titles matching "Example N" and sets semantic_type='example'.
 """
 
-from src.analyzers.caption.signals import _CAPTION_RE, _EXAMPLE_HEADING_RE, _TARGET_TYPE_MAP
-from src.analyzers.caption.rules import _find_nearest_target, _get_text
 from src.analyzers.caption.analyzer import CaptionAnalyzer
 
 __all__ = [
     "CaptionAnalyzer",
-    "_CAPTION_RE",
-    "_EXAMPLE_HEADING_RE",
-    "_TARGET_TYPE_MAP",
-    "_find_nearest_target",
-    "_get_text",
 ]

@@ -16,8 +16,8 @@ Font roles:
 - math: math-family font (CMMI, STIX, Symbol, etc.)
 """
 
-from src.analyzers.font_stats.signals import CAPTION_SIZE_RATIO, FOOTNOTE_SIZE_RATIO, HEADING_SIZE_RATIO, _MATH_HINTS, _MONO_HINTS, log
-from src.analyzers.font_stats.rules import FontFingerprint, _classify_role, _extract_font
+from src.analyzers.font_stats.signals import CAPTION_SIZE_RATIO, FOOTNOTE_SIZE_RATIO, HEADING_SIZE_RATIO, log
+from src.analyzers.font_stats.rules import FontFingerprint
 from src.analyzers.font_stats.analyzer import FontStatsAnalyzer
 
 __all__ = [
@@ -26,9 +26,5 @@ __all__ = [
     "FontFingerprint",
     "FontStatsAnalyzer",
     "HEADING_SIZE_RATIO",
-    "_MATH_HINTS",
-    "_MONO_HINTS",
-    "_classify_role",
-    "_extract_font",
     "log",
 ]

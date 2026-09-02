@@ -10,8 +10,7 @@ Blank page detection:
 - ParagraphBlocks with text ≤ 2 chars (e.g. "-", "") → BlankPageBlock
 """
 
-from src.analyzers.title_page.signals import MAX_SCAN_PAGES, MAX_TITLE_BLOCK_LEN, MIN_SCORE, TITLE_MAX_PAGES, _NodeLoc, _RE_COPYRIGHT, _RE_EDITION, _RE_ISBN, _RE_PUBLISHER, _RE_STRONG, _RE_YEAR, log
-from src.analyzers.title_page.rules import _extract_metadata, _get_text, _is_mostly_upper, _score_page_blocks
+from src.analyzers.title_page.signals import MAX_SCAN_PAGES, MAX_TITLE_BLOCK_LEN, MIN_SCORE, TITLE_MAX_PAGES, log
 from src.analyzers.title_page.analyzer import TitlePageAnalyzer
 
 __all__ = [
@@ -20,16 +19,5 @@ __all__ = [
     "MIN_SCORE",
     "TITLE_MAX_PAGES",
     "TitlePageAnalyzer",
-    "_NodeLoc",
-    "_RE_COPYRIGHT",
-    "_RE_EDITION",
-    "_RE_ISBN",
-    "_RE_PUBLISHER",
-    "_RE_STRONG",
-    "_RE_YEAR",
-    "_extract_metadata",
-    "_get_text",
-    "_is_mostly_upper",
-    "_score_page_blocks",
     "log",
 ]

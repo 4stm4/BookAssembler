@@ -2,12 +2,8 @@
 
 import pytest
 
-from src.analyzers.font_stats import (
-    FontFingerprint,
-    FontStatsAnalyzer,
-    _classify_role,
-    _extract_font,
-)
+from src.analyzers.font_stats import FontFingerprint, FontStatsAnalyzer
+from src.analyzers.font_stats.rules import _classify_role, _extract_font
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import (

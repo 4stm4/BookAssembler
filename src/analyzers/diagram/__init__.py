@@ -10,8 +10,7 @@ detection is analysis, not adapter work; RFC 0001 §2.4: absorbed labels are
 tombstoned, never deleted).
 """
 
-from src.analyzers.diagram.signals import LEFT_PAD, MAX_LABEL_WIDTH, MAX_LABEL_WORDS, MIN_LABELS, PAD, RIGHT_PAD, _RE_FIGURE_CAPTION, _RE_SUBLABEL, log
-from src.analyzers.diagram.rules import _bbox_of, _text_of
+from src.analyzers.diagram.signals import LEFT_PAD, MAX_LABEL_WIDTH, MAX_LABEL_WORDS, MIN_LABELS, PAD, RIGHT_PAD, log
 from src.analyzers.diagram.analyzer import DiagramDetectorAnalyzer
 
 __all__ = [
@@ -22,9 +21,5 @@ __all__ = [
     "MIN_LABELS",
     "PAD",
     "RIGHT_PAD",
-    "_RE_FIGURE_CAPTION",
-    "_RE_SUBLABEL",
-    "_bbox_of",
-    "_text_of",
     "log",
 ]

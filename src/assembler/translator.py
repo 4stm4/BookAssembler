@@ -11,7 +11,7 @@ import os
 import time
 from typing import Any, List, Optional
 
-from src.analyzers.llm_refinement import _call_ollama
+from src.analyzers.llm_refinement.rules import _call_ollama
 from src.krm.models import (
     BibEntryBlock,
     BlankPageBlock,

@@ -115,7 +115,7 @@ class OCRAnalyzer(BaseAnalyzer):
         if page_index is None:
             return ""
         import pymupdf as fitz
-        from src.analyzers.page_agent import _pixmap_to_jpeg
+        from src.analyzers.page_agent.rules import _pixmap_to_jpeg
 
         pdf = fitz.open(pdf_path)
         try:
