@@ -1,7 +1,7 @@
 """Tests for IndexDetectorAnalyzer."""
 import pytest
 
-from src.analyzers.index_detector import IndexDetectorAnalyzer
+from src.analyzers.index import IndexDetectorAnalyzer
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import (

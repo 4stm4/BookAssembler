@@ -13,34 +13,33 @@ from src.analyzers.base import (
     RGPermission,
     SecurityViolationError,
 )
-from src.analyzers.algorithm_detector import AlgorithmDetectorAnalyzer
-from src.analyzers.bibliography_detector import BibliographyDetectorAnalyzer
+from src.analyzers.algorithm import AlgorithmDetectorAnalyzer
+from src.analyzers.bibliography import BibliographyDetectorAnalyzer
 from src.analyzers.block_classifier import BlockClassifierAnalyzer
-from src.analyzers.callout_detector import CalloutDetectorAnalyzer
-from src.analyzers.caption_analyzer import CaptionAnalyzer
-from src.analyzers.citation_linker import CitationLinkerAnalyzer
-from src.analyzers.definition_detector import DefinitionDetectorAnalyzer
-from src.analyzers.diagram_detector import DiagramDetectorAnalyzer
-from src.analyzers.entity_extractor import EntityExtractorAnalyzer
-from src.analyzers.ephemera_detector import EphemeraDetectorAnalyzer
+from src.analyzers.callout import CalloutDetectorAnalyzer
+from src.analyzers.caption import CaptionAnalyzer
+from src.analyzers.citation import CitationLinkerAnalyzer
+from src.analyzers.definition import DefinitionDetectorAnalyzer
+from src.analyzers.diagram import DiagramDetectorAnalyzer
+from src.analyzers.entity import EntityExtractorAnalyzer
+from src.analyzers.ephemera import EphemeraDetectorAnalyzer
 from src.analyzers.font_stats import FontStatsAnalyzer
-from src.analyzers.footnote_detector import FootnoteDetectorAnalyzer
-from src.analyzers.formula_detector import FormulaDetectorAnalyzer
+from src.analyzers.footnote import FootnoteDetectorAnalyzer
+from src.analyzers.formula import FormulaDetectorAnalyzer
 from src.analyzers.llm_refinement import LLMRefinementAnalyzer
 from src.analyzers.heading import HeadingAnalyzer
-from src.analyzers.index_detector import IndexDetectorAnalyzer
-from src.analyzers.list_detector import ListDetectorAnalyzer
+from src.analyzers.index import IndexDetectorAnalyzer
+from src.analyzers.list import ListDetectorAnalyzer
 from src.analyzers.normalization import NormalizationAnalyzer
 from src.analyzers.ocr import OCRAnalyzer
 from src.analyzers.page_agent import PageAgentAnalyzer
 from src.analyzers.pipeline import PipelineRunner
-from src.analyzers.proper_noun_extractor import ProperNounExtractorAnalyzer
+from src.analyzers.proper_noun import ProperNounExtractorAnalyzer
 from src.analyzers.reading_order import ReadingOrderAnalyzer
-from src.analyzers.table_detector import TableDetectorAnalyzer
-from src.analyzers.theorem_detector import TheoremDetectorAnalyzer
+from src.analyzers.table import TableDetectorAnalyzer
+from src.analyzers.theorem import TheoremDetectorAnalyzer
 from src.analyzers.title_page import TitlePageAnalyzer
 from src.analyzers.vision_fallback import VisionFallbackAnalyzer
-
 
 def create_default_pipeline() -> List[BaseAnalyzer]:
     return [
@@ -75,7 +74,6 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         ProperNounExtractorAnalyzer(),
         CitationLinkerAnalyzer(),
     ]
-
 
 __all__ = [
     "AlgorithmDetectorAnalyzer",

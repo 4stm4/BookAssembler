@@ -48,7 +48,7 @@ def _text(node):
 
 @pytest.fixture
 def wired(monkeypatch, tmp_path):
-    from src.analyzers import ocr as mod
+    from src.analyzers.ocr import analyzer as mod
     pdf = tmp_path / "scan.pdf"
     pdf.write_bytes(b"%PDF-1.4\n")
     monkeypatch.setattr(mod, "pick", lambda role: ("http://agent", "m", "multimodel"))
@@ -172,13 +172,13 @@ class TestMeasuredParameters:
     """
 
     def test_page_size_stays_at_the_size_that_answers(self):
-        from src.analyzers import ocr
+        from src.analyzers.ocr import analyzer as ocr
         assert ocr.OCR_MAX_DIM <= 512, (
             "raised above the only size measured to answer; 700px timed out"
         )
 
     def test_timeout_leaves_room_over_the_observed_cost(self):
-        from src.analyzers import ocr
+        from src.analyzers.ocr import analyzer as ocr
         assert ocr.OCR_TIMEOUT >= 100, (
             "24.6s was one page of ~1100 characters; a denser page needs more"
         )
@@ -186,11 +186,11 @@ class TestMeasuredParameters:
     def test_ocr_timeout_exceeds_the_classification_one(self):
         """OCR generates a page of text; classification generates a word."""
         from src.agents import router
-        from src.analyzers import ocr
+        from src.analyzers.ocr import analyzer as ocr
         assert ocr.OCR_TIMEOUT > router.INFER_TIMEOUT
 
     def test_timeouts_are_not_retried(self):
-        from src.analyzers import ocr
+        from src.analyzers.ocr import analyzer as ocr
         assert ocr.OCR_ATTEMPTS == 1, (
             "a timeout means the page is too heavy, so a retry costs minutes "
             "and changes nothing"
@@ -199,7 +199,7 @@ class TestMeasuredParameters:
     def test_ocr_page_passes_its_own_budget_to_the_agent(self, monkeypatch, tmp_path):
         """The real _ocr_page, not a stub of it."""
         fitz = pytest.importorskip("pymupdf")
-        from src.analyzers import ocr
+        from src.analyzers.ocr import analyzer as ocr
 
         pdf = tmp_path / "s.pdf"
         d = fitz.open(); d.new_page(); pdf.write_bytes(d.tobytes()); d.close()
@@ -217,3 +217,63 @@ class TestMeasuredParameters:
         assert out == "recovered"
         assert seen["timeout"] == ocr.OCR_TIMEOUT
         assert seen["attempts"] == ocr.OCR_ATTEMPTS
+
+
+# --- per-line geometry and font (RFC 0021 §5.4) -----------------------------
+# Before this, every recovered line shared the page box and carried no style,
+# so a scanned page rendered as a stack of serif lines at the top left.
+
+from src.analyzers.ocr.rules import _parse_ocr, _rect_from, _style_from
+from src.krm.models import NormalizedRect
+
+PAGE = NormalizedRect(0.0, 0.0, 1.0, 1.0)
+
+
+def test_parse_ocr_reads_box_and_font_per_line():
+    answer = (
+        '{"text": "UNIVERSITY OF DUBLIN", "bbox": [300, 180, 700, 220], '
+        '"font": "mono", "bold": false}\n'
+        '{"text": "ANNUAL REPORT 1979/80", "bbox": [280, 730, 730, 770], '
+        '"font": "mono", "bold": true}'
+    )
+    lines = _parse_ocr(answer, PAGE)
+    assert [t for t, _, _ in lines] == [
+        "UNIVERSITY OF DUBLIN", "ANNUAL REPORT 1979/80",
+    ]
+    # The two lines must land far apart vertically, not stacked.
+    assert lines[0][1].y0 == pytest.approx(0.18)
+    assert lines[1][1].y0 == pytest.approx(0.73)
+    assert lines[1][2].is_monospace and lines[1][2].is_bold
+
+
+def test_parse_ocr_falls_back_to_plain_text():
+    """The model may ignore the format; the page must still transcribe."""
+    lines = _parse_ocr("first line\nsecond line", PAGE)
+    assert [t for t, _, _ in lines] == ["first line", "second line"]
+    assert all(rect is None for _, rect, _ in lines)
+
+
+def test_parse_ocr_accepts_a_json_array_in_a_fence():
+    answer = '```json\n[{"text": "A", "bbox": [0, 0, 100, 50]}]\n```'
+    assert [t for t, _, _ in _parse_ocr(answer, PAGE)] == ["A"]
+
+
+def test_rect_is_repaired_not_propagated():
+    """RFC 0002 §inv3: a model box may be inverted or past the edge."""
+    r = _rect_from([900, 400, 100, 200], PAGE)
+    assert (r.x0, r.x1) == (0.1, 0.9) and (r.y0, r.y1) == (0.2, 0.4)
+    assert _rect_from([0, 0, 1400, 1400], PAGE) == NormalizedRect(0.0, 0.0, 1.0, 1.0)
+    assert _rect_from("nonsense", PAGE) is None
+    assert _rect_from([1, 2, 3], PAGE) is None
+
+
+def test_rect_maps_into_the_placeholder_box():
+    half = NormalizedRect(0.0, 0.5, 1.0, 1.0)
+    r = _rect_from([0, 0, 1000, 1000], half)
+    assert (r.y0, r.y1) == (0.5, 1.0)
+
+
+def test_style_is_absent_when_nothing_was_observed():
+    assert _style_from({"text": "x"}) is None
+    assert _style_from({"font": "serif"}).font_family == "serif"
+    assert _style_from({"bold": True}).is_bold

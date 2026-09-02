@@ -2,7 +2,7 @@
 
 from typing import List
 
-from src.analyzers.bibliography_detector import (
+from src.analyzers.bibliography import (
     BibliographyDetectorAnalyzer,
     _parse_entry,
 )

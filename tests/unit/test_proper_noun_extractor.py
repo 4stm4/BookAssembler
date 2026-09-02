@@ -1,6 +1,6 @@
 """Unit tests for ProperNounExtractorAnalyzer."""
 
-from src.analyzers.proper_noun_extractor import ProperNounExtractorAnalyzer
+from src.analyzers.proper_noun import ProperNounExtractorAnalyzer
 from src.graph.knowledge_graph import EntityType, KnowledgeGraph, RelationType
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import (

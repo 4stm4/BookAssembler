@@ -6,7 +6,7 @@ caption. The rule is repetition across pages, not position alone.
 """
 import pytest
 
-from src.analyzers.ephemera_detector import EphemeraDetectorAnalyzer
+from src.analyzers.ephemera import EphemeraDetectorAnalyzer
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import (

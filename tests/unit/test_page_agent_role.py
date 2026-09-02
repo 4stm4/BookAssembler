@@ -145,7 +145,7 @@ def _paged_doc(pages):
 @pytest.fixture
 def wired(monkeypatch, tmp_path):
     """PageAgent with a reachable vision agent and a resolvable source."""
-    from src.analyzers import page_agent as pa
+    from src.analyzers.page_agent import analyzer as pa
 
     pdf = tmp_path / "x.pdf"
     pdf.write_bytes(b"%PDF-1.4\n")
