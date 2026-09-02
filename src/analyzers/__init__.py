@@ -31,6 +31,7 @@ from src.analyzers.heading import HeadingAnalyzer
 from src.analyzers.index_detector import IndexDetectorAnalyzer
 from src.analyzers.list_detector import ListDetectorAnalyzer
 from src.analyzers.normalization import NormalizationAnalyzer
+from src.analyzers.ocr import OCRAnalyzer
 from src.analyzers.page_agent import PageAgentAnalyzer
 from src.analyzers.pipeline import PipelineRunner
 from src.analyzers.proper_noun_extractor import ProperNounExtractorAnalyzer
@@ -44,6 +45,9 @@ from src.analyzers.vision_fallback import VisionFallbackAnalyzer
 def create_default_pipeline() -> List[BaseAnalyzer]:
     return [
         NormalizationAnalyzer(),
+        # Recovers text on pages with no text layer before anything tries to
+        # read it — every detector downstream works on text (RFC 0008 §75).
+        OCRAnalyzer(),
         ReadingOrderAnalyzer(),
         FontStatsAnalyzer(),
         EphemeraDetectorAnalyzer(),

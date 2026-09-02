@@ -18,11 +18,11 @@ old heuristics still gate which pages are worth a request.
 import logging
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.agents import call_infer, pick
+from src.analyzers._agent_batch import run_bounded
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
@@ -251,36 +251,19 @@ class PageAgentAnalyzer(BaseAnalyzer):
         run. Pages are independent, so the wait overlaps. This function performs
         no KRM mutation — the caller applies results in page order.
         """
-        results: Dict[int, _PageResult] = {}
-        failures = 0
         budget = max(MIN_FAILURE_BUDGET, int(len(candidates) * FAILURE_BUDGET_RATIO))
         started = time.time()
-
-        with ThreadPoolExecutor(max_workers=VISION_CONCURRENCY) as pool:
-            futures = {
-                pool.submit(
-                    self._analyze_page, pdf_path, pg, host, blocks,
-                    classify_mode, kind, model,
-                ): pg
-                for pg, blocks in candidates
-            }
-            for fut in as_completed(futures):
-                pg = futures[fut]
-                try:
-                    results[pg] = fut.result()
-                except Exception as exc:
-                    failures += 1
-                    results[pg] = _PageResult(failed=True)
-                    log.warning("PageAgent: page %d failed: %s", pg, exc)
-                if failures > budget:
-                    # A dead agent should stop the run; one bad page should not.
-                    log.warning(
-                        "PageAgent: %d failures over budget %d — cancelling rest",
-                        failures, budget,
-                    )
-                    for f in futures:
-                        f.cancel()
-                    break
+        by_index, failures = run_bounded(
+            candidates,
+            lambda pair: self._analyze_page(
+                pdf_path, pair[0], host, pair[1], classify_mode, kind, model,
+            ),
+            concurrency=VISION_CONCURRENCY, budget=budget, label="PageAgent",
+        )
+        results: Dict[int, _PageResult] = {
+            pg: by_index.get(i) or _PageResult(failed=True)
+            for i, (pg, _) in enumerate(candidates)
+        }
 
         ok = sum(1 for r in results.values() if not r.failed)
         log.info(
