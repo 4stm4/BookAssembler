@@ -1,7 +1,7 @@
 """Tests for AlgorithmDetectorAnalyzer."""
 import pytest
 
-from src.analyzers.algorithm_detector import AlgorithmDetectorAnalyzer
+from src.analyzers.algorithm import AlgorithmDetectorAnalyzer
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import (

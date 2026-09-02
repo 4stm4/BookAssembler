@@ -1,6 +1,6 @@
 """Unit tests for CitationLinkerAnalyzer."""
 
-from src.analyzers.citation_linker import CitationLinkerAnalyzer
+from src.analyzers.citation import CitationLinkerAnalyzer
 from src.graph.knowledge_graph import EntityType, KGEntityNode, KnowledgeGraph, RelationType
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import (

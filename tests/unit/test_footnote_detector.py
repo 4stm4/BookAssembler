@@ -2,7 +2,7 @@
 
 from typing import List
 
-from src.analyzers.footnote_detector import FootnoteDetectorAnalyzer, _parse_marker
+from src.analyzers.footnote import FootnoteDetectorAnalyzer, _parse_marker
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import (

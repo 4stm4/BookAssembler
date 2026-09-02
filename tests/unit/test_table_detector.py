@@ -25,7 +25,7 @@ class TestRejectedRunKeepsBlocks:
         return KnowledgeDocument(title="T", root_containers=[c]), c
 
     def _run(self, doc):
-        from src.analyzers.table_detector import TableDetectorAnalyzer
+        from src.analyzers.table import TableDetectorAnalyzer
         from src.graph.knowledge_graph import KnowledgeGraph
         from src.graph.reading_graph import ReadingGraph
         TableDetectorAnalyzer().run(doc, ReadingGraph(), KnowledgeGraph())

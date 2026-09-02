@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.analyzers.theorem_detector import TheoremDetectorAnalyzer
+from src.analyzers.theorem import TheoremDetectorAnalyzer
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import (

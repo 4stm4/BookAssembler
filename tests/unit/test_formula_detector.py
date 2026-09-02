@@ -2,7 +2,7 @@
 
 from typing import List
 
-from src.analyzers.formula_detector import (
+from src.analyzers.formula import (
     FormulaDetectorAnalyzer,
     _extract_formula_number,
     _looks_like_formula,

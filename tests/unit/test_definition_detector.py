@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.analyzers.definition_detector import DefinitionDetectorAnalyzer
+from src.analyzers.definition import DefinitionDetectorAnalyzer
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import (

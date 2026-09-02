@@ -50,7 +50,6 @@ from src.krm.models import (
     TableCell,
 )
 
-
 class GuardedReadingGraph(ReadingGraph):
     """
     Proxy wrapper around ReadingGraph that enforces RGPermission checks.
@@ -95,7 +94,6 @@ class GuardedReadingGraph(ReadingGraph):
         if RGPermission.READ not in self._permissions:
             raise SecurityViolationError("Analyzer lacks RGPermission.READ permission.")
         return self._target.get_sequence(root_id, track)
-
 
 class GuardedKnowledgeGraph(KnowledgeGraph):
     """
@@ -154,7 +152,6 @@ class GuardedKnowledgeGraph(KnowledgeGraph):
         if KGPermission.READ not in self._permissions:
             raise SecurityViolationError("Analyzer lacks KGPermission.READ permission.")
         return self._target.to_json_dict()
-
 
 class GuardedKnowledgeDocument(KnowledgeDocument):
     """
@@ -230,7 +227,6 @@ class GuardedKnowledgeDocument(KnowledgeDocument):
 
         setattr(target, name, value)
         object.__setattr__(self, name, value)
-
 
 class PipelineRunner:
     """

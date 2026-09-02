@@ -18,7 +18,6 @@ from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import KnowledgeDocument
 
-
 class KRMPermission(Enum):
     """
     Permissions required to access or mutate Knowledge Representation Model (KRM) nodes.
@@ -29,14 +28,12 @@ class KRMPermission(Enum):
     INSERT = auto()             # Creating and inserting new nodes into hierarchy
     TOMBSTONE = auto()          # Marking node as tombstoned (is_tombstoned = True)
 
-
 class RGPermission(Enum):
     """
     Permissions required to access or mutate Reading Graph (RG) trajectories.
     """
     READ = auto()               # Reading trajectories and step sequences
     MUTATE_EDGES = auto()       # Adding, modifying, or removing reading step edges
-
 
 class KGPermission(Enum):
     """
@@ -46,13 +43,11 @@ class KGPermission(Enum):
     MUTATE_ENTITIES = auto()    # Adding and updating external domain entities
     MUTATE_EDGES = auto()       # Adding and updating semantic relation edges
 
-
 class SecurityViolationError(Exception):
     """
     Raised when an analyzer attempts an operation not authorized by its manifest permissions.
     """
     pass
-
 
 @dataclass(frozen=True)
 class AnalyzerManifest:
@@ -66,7 +61,6 @@ class AnalyzerManifest:
     rg_permissions: Set[RGPermission] = field(default_factory=set)
     kg_permissions: Set[KGPermission] = field(default_factory=set)
     depends_on: List[str] = field(default_factory=list)
-
 
 class BaseAnalyzer(ABC):
     """

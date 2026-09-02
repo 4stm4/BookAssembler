@@ -144,8 +144,8 @@ class TestVisionFallbackAnalyzer:
         analyzer._collect_targets(doc.root_containers, formulas, low_conf)
         assert len(low_conf) == 0
 
-    @patch("src.analyzers.vision_fallback.vision_generate")
-    @patch("src.analyzers.vision_fallback._page_crop_b64")
+    @patch("src.analyzers.vision_fallback.analyzer.vision_generate")
+    @patch("src.analyzers.vision_fallback.analyzer._page_crop_b64")
     def test_formula_ocr_updates_latex(self, mock_crop, mock_vision):
         mock_crop.return_value = "base64data"
         mock_vision.return_value = "\\frac{a}{b} + c^2"
@@ -166,8 +166,8 @@ class TestVisionFallbackAnalyzer:
         assert f.metadata.get("vision_ocr") is True
         assert "needs_vision_ocr" not in f.metadata
 
-    @patch("src.analyzers.vision_fallback.vision_generate")
-    @patch("src.analyzers.vision_fallback._page_crop_b64")
+    @patch("src.analyzers.vision_fallback.analyzer.vision_generate")
+    @patch("src.analyzers.vision_fallback.analyzer._page_crop_b64")
     def test_classify_updates_metadata(self, mock_crop, mock_vision):
         mock_crop.return_value = "base64data"
         mock_vision.return_value = "table\n0.85"
@@ -188,8 +188,8 @@ class TestVisionFallbackAnalyzer:
         assert p.metadata["vision_confidence"] == 0.85
         assert p.classification_confidence > 0.3
 
-    @patch("src.analyzers.vision_fallback.vision_generate")
-    @patch("src.analyzers.vision_fallback._page_crop_b64")
+    @patch("src.analyzers.vision_fallback.analyzer.vision_generate")
+    @patch("src.analyzers.vision_fallback.analyzer._page_crop_b64")
     def test_strips_latex_delimiters(self, mock_crop, mock_vision):
         mock_crop.return_value = "base64data"
         mock_vision.return_value = "$\\alpha + \\beta$"

@@ -2,7 +2,7 @@
 
 from typing import List
 
-from src.analyzers.callout_detector import CalloutDetectorAnalyzer, _classify
+from src.analyzers.callout import CalloutDetectorAnalyzer, _classify
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import (

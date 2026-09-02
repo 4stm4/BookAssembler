@@ -15,7 +15,6 @@ from typing import Any, Callable, Dict, Iterable, List, Tuple
 
 log = logging.getLogger(__name__)
 
-
 def run_bounded(
     items: List[Any],
     work: Callable[[Any], Any],

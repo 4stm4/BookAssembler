@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.analyzers.table_detector import (
+from src.analyzers.table import (
     TableDetectorAnalyzer,
     _looks_like_separator,
     _count_columns,
