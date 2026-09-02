@@ -112,6 +112,9 @@ def _token_for_host(host: str) -> Optional[str]:
 
 
 INFER_TIMEOUT = 45      # rpi5 uploads ~15KB through the tunnel at ~1.3 KB/s
+# Hosts that answered "I don't understand a source reference". Probing once per
+# host keeps a runner without the feature from paying a failed request per page.
+_NO_SOURCE_FETCH: set = set()
 INFER_ATTEMPTS = 3
 INFER_BACKOFF = 2.0     # seconds, linear — an instant retry hits the same jam
 
@@ -145,12 +148,79 @@ def _post_infer(
     return None, last
 
 
+def supports_source_fetch(host: str) -> bool:
+    """True if this agent is configured to fetch the source itself, and has not
+    already refused a reference request.
+
+    Measured on this deployment: rpi5 uploads at ~1.7 KB/s but downloads at
+    ~4.6 MB/s, so pushing a rendered page costs ~13s while the inference costs
+    1-3s. An agent that fetches the document itself turns a 22KB upload into a
+    ~200 byte one and moves the bytes over the runner's own link instead.
+    """
+    if host in _NO_SOURCE_FETCH:
+        return False
+    for a in load_agents():
+        if a.get("host", "").rstrip("/") == host.rstrip("/"):
+            return bool(a.get("source_fetch"))
+    return False
+
+
+def _call_by_reference(
+    host: str, task: str, source_url: str, page: int, prompt: Optional[str],
+) -> Optional[str]:
+    """Ask the agent to fetch and render the page itself.
+
+    A few hundred bytes leave rpi5 instead of a rendered image, and the document
+    travels over the runner's link. Returns None when the agent cannot do this,
+    and remembers that so the rest of the book skips straight to the image path.
+    """
+    body = {"source_url": source_url, "page": page, "task": task}
+    if prompt:
+        body["prompt"] = prompt
+    headers: dict = {"Content-Type": "application/json"}
+    token = _token_for_host(host)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    text, exc = _post_infer(
+        f"{host}/infer", json.dumps(body).encode(), headers,
+    )
+    if text is not None:
+        return text
+    if exc is not None and not _is_timeout(exc):
+        # A 4xx/5xx here means the runner does not understand a reference
+        # request; a timeout means the link, and that would say nothing about
+        # the feature.
+        log.info("agent %s does not accept source references (%s) — "
+                 "falling back to uploading images", host, exc)
+        _NO_SOURCE_FETCH.add(host)
+    return None
+
+
 def call_infer(
-    host: str, task: str, image_png: bytes,
+    host: str, task: str, image_png: Optional[bytes] = None,
     prompt: Optional[str] = None, kind: str = "multimodel",
     model: Optional[str] = None,
+    source_url: Optional[str] = None, page: Optional[int] = None,
 ) -> Optional[str]:
-    """Send an image to an agent for inference. Supports multimodel, got-ocr, and ollama."""
+    """Run inference on one page.
+
+    Prefers sending a reference (source_url + page) so the agent fetches and
+    renders the page on its own side; falls back to uploading the rendered image
+    when the agent has no such support. Supports multimodel, got-ocr and ollama.
+    """
+    if (source_url and page is not None and kind != "ollama"
+            and supports_source_fetch(host)):
+        text = _call_by_reference(host, task, source_url, page, prompt)
+        if text is not None:
+            return text
+        # The agent could not use the reference; fall through to the image so a
+        # page is still analysed rather than lost.
+        if image_png is None:
+            return None
+
+    if image_png is None:
+        return None
     b64 = base64.b64encode(image_png).decode()
 
     if kind == "ollama":

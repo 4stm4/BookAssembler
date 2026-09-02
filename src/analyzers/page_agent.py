@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.agents import call_infer, pick
+from src.agents.router import supports_source_fetch
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
@@ -47,21 +48,24 @@ MIN_NUMERIC_RATIO = 0.35  # numeric density hint (real tables have ≥35% numeri
 MIN_BLOCKS = 5            # need enough blocks to look like a grid
 MIN_SHORT_RATIO = 0.7     # most blocks are short (labels/cells, not paragraphs)
 
-# Requests in flight. The agent answers in seconds; a single upload through the
-# tunnel takes far longer, so the GPU is idle unless the waits overlap.
-VISION_CONCURRENCY = int(os.environ.get("KAE_VISION_CONCURRENCY", "6"))
+# Requests in flight. Measured on this link the limit is bandwidth, not latency:
+# raising this pushed 18 of 30 requests into "write operation timed out" — the
+# body could not be pushed out at all. Overlap hides per-request latency but
+# divides the same pipe, so keep it low and raise only against a measurement.
+VISION_CONCURRENCY = int(os.environ.get("KAE_VISION_CONCURRENCY", "2"))
 # One systematically bad page must not abort the book, but a dead agent should
 # stop the run rather than time out once per page.
 FAILURE_BUDGET_RATIO = 0.35
 MIN_FAILURE_BUDGET = 3
 
-# Image fidelity. These were cut to q=30/512px purely to shrink upload time on a
-# serial pipeline; that cost recognition accuracy to work around a bottleneck
-# that overlapping requests address directly. Tunable because the right value
-# depends on the link — raise once throughput has been measured end to end.
-RENDER_DPI = int(os.environ.get("KAE_VISION_DPI", "110"))
-JPEG_QUALITY = int(os.environ.get("KAE_VISION_JPEG_QUALITY", "55"))
-JPEG_MAX_DIM = int(os.environ.get("KAE_VISION_MAX_DIM", "900"))
+# Image fidelity. Raising these (110dpi/q55/900px) made every request ~10x
+# heavier and the uplink could not push the body out before the timeout, so the
+# GPU received almost nothing. These are the values that demonstrably get
+# through; treat them as the floor to beat and change them only with a measured
+# throughput number, never as a default "improvement".
+RENDER_DPI = int(os.environ.get("KAE_VISION_DPI", "72"))
+JPEG_QUALITY = int(os.environ.get("KAE_VISION_JPEG_QUALITY", "30"))
+JPEG_MAX_DIM = int(os.environ.get("KAE_VISION_MAX_DIM", "512"))
 
 
 @dataclass
@@ -113,6 +117,17 @@ def _text(node: Any) -> str:
             for s in getattr(i, "spans", []) if hasattr(s, "text")
         ).strip()
     return (getattr(node, "title", "") or "").strip()
+
+
+def _source_url(doc: KnowledgeDocument) -> Optional[str]:
+    """A URL the agent can fetch the document from, if one is known.
+
+    doc.source_uri is a local handle (upload://, sep://) and means nothing on
+    the runner. A public URL is recorded separately when the document has one.
+    """
+    md = getattr(doc, "metadata", None) or {}
+    url = md.get("source_url") or ""
+    return url if url.startswith(("http://", "https://")) else None
 
 
 def _looks_numeric(text: str) -> bool:
@@ -192,6 +207,7 @@ class PageAgentAnalyzer(BaseAnalyzer):
 
         results = self._fetch_pages(
             candidates, pdf_path, host, classify_mode, _kind, _model,
+            _source_url(doc),
         )
 
         # Mutations run sequentially in page order, never in completion order:
@@ -240,7 +256,7 @@ class PageAgentAnalyzer(BaseAnalyzer):
     def _fetch_pages(
         self, candidates: List[Tuple[int, List[Tuple[Any, ContainerUnit]]]],
         pdf_path: str, host: str, classify_mode: bool,
-        kind: str, model: Optional[str],
+        kind: str, model: Optional[str], source_url: Optional[str] = None,
     ) -> Dict[int, "_PageResult"]:
         """Query the agent for every candidate page, several requests in flight.
 
@@ -258,7 +274,7 @@ class PageAgentAnalyzer(BaseAnalyzer):
             futures = {
                 pool.submit(
                     self._analyze_page, pdf_path, pg, host, blocks,
-                    classify_mode, kind, model,
+                    classify_mode, kind, model, source_url,
                 ): pg
                 for pg, blocks in candidates
             }
@@ -291,6 +307,7 @@ class PageAgentAnalyzer(BaseAnalyzer):
         self, pdf_path: str, page_index: int, host: str,
         blocks: List[Tuple[Any, ContainerUnit]],
         classify_mode: bool, kind: str, model: Optional[str],
+        source_url: Optional[str] = None,
     ) -> "_PageResult":
         """One page's network work. Runs on a worker thread; touches no KRM."""
         if not classify_mode:
@@ -301,6 +318,7 @@ class PageAgentAnalyzer(BaseAnalyzer):
 
         role, types, latex = self._classify_page(
             pdf_path, page_index, host, blocks, kind=kind, model=model,
+            source_url=source_url,
         )
         log.info("PageAgent: page %d role=%s, %d block types",
                  page_index, role, len(types))
@@ -316,6 +334,7 @@ class PageAgentAnalyzer(BaseAnalyzer):
         self, pdf_path: str, page_index: int, host: str,
         blocks: List[Tuple[Any, ContainerUnit]],
         kind: str = "multimodel", model: Optional[str] = None,
+        source_url: Optional[str] = None,
     ) -> Tuple[str, Dict[int, str], Optional[str]]:
         """Ask a vision agent to classify a page and every block on it.
 
@@ -329,12 +348,17 @@ class PageAgentAnalyzer(BaseAnalyzer):
         import re as _re
         import pymupdf as fitz
 
-        pdf = fitz.open(pdf_path)
-        try:
-            page = pdf[page_index]
-            png = _pixmap_to_jpeg(page.get_pixmap(dpi=RENDER_DPI))
-        finally:
-            pdf.close()
+        # Rendering is skipped entirely when the agent fetches the page itself:
+        # on this link the upload, not the render, is what costs (~13s for 22KB
+        # against 1-3s of inference).
+        png = None
+        if not (source_url and supports_source_fetch(host)):
+            pdf = fitz.open(pdf_path)
+            try:
+                page = pdf[page_index]
+                png = _pixmap_to_jpeg(page.get_pixmap(dpi=RENDER_DPI))
+            finally:
+                pdf.close()
 
         sample = blocks[:15]
         listing = "\n".join(
@@ -352,7 +376,10 @@ class PageAgentAnalyzer(BaseAnalyzer):
             'Reply JSON only: {"role":"...","blocks":[{"n":1,"type":"..."},...],'
             '"table":"\\\\begin{tabular}...\\\\end{tabular}"}.'
         )
-        text = call_infer(host, "vision", png, prompt=prompt, kind=kind, model=model) or ""
+        text = call_infer(
+            host, "vision", png, prompt=prompt, kind=kind, model=model,
+            source_url=source_url, page=page_index,
+        ) or ""
         role = "text"
         types: Dict[int, str] = {}
         latex: Optional[str] = None

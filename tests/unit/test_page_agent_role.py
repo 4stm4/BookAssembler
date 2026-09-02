@@ -115,7 +115,8 @@ class _FakeAgent:
         self._in_flight = 0
         self._lock = __import__("threading").Lock()
 
-    def __call__(self, pdf_path, page_index, host, blocks, kind=None, model=None):
+    def __call__(self, pdf_path, page_index, host, blocks,
+                 kind=None, model=None, source_url=None):
         import time as _t
         with self._lock:
             self._in_flight += 1
