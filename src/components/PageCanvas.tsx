@@ -15,6 +15,25 @@ import type { KRMNode, KRMStyle } from '../types';
 // A4 in mm; bbox is normalized to the page, so only the ratio matters here.
 const PAGE_W_MM = 210;
 const PAGE_H_MM = 297;
+// A style's typeface, resolved to a real stack. Falling through to
+// `undefined` would inherit the page container's serif, so a block the source
+// set in a sans or typewriter face would still render as Georgia.
+function familyOf(st?: KRMStyle): string | undefined {
+  if (st?.is_monospace) return 'ui-monospace, "SFMono-Regular", Menlo, monospace';
+  const fam = (st?.font_family ?? '').toLowerCase();
+  if (!fam) return undefined;
+  if (fam.includes('mono') || fam.includes('courier')) {
+    return 'ui-monospace, "SFMono-Regular", Menlo, monospace';
+  }
+  if (fam.includes('sans') || fam.includes('helvetica') || fam.includes('arial')) {
+    return '"Helvetica Neue", Arial, sans-serif';
+  }
+  if (fam.includes('serif') || fam.includes('times') || fam.includes('georgia')) {
+    return 'Georgia, "Times New Roman", serif';
+  }
+  return undefined;
+}
+
 // 297mm at 72dpi ≈ 842pt — converts font_size_pt into a fraction of page height.
 const PAGE_H_PT = 842;
 
@@ -139,7 +158,7 @@ const PageCanvas: React.FC<{
                 fontSize: height ? `${(pt / PAGE_H_PT) * height}px` : undefined,
                 fontWeight: st?.is_bold ? 700 : 400,
                 fontStyle: st?.is_italic ? 'italic' : 'normal',
-                fontFamily: st?.is_monospace ? 'ui-monospace, monospace' : undefined,
+                fontFamily: familyOf(st),
                 color: rgb(st?.text_color_rgb) ?? '#111',
               }}
             >
