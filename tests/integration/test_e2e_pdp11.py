@@ -10,6 +10,7 @@ including the pdp11 skill pack. Verifies:
 - Chunker produces valid chunks
 """
 import json
+import os
 import hashlib
 from pathlib import Path
 from typing import Dict, List
@@ -294,29 +295,45 @@ class TestE2EPDP11:
 
 
 class TestRegressionBaseline:
-    def test_save_baseline(self):
-        """Save a metrics snapshot for future regression comparison."""
-        doc = _build_pdp11_doc()
-        rg = ReadingGraph()
-        kg = KnowledgeGraph()
+    """Guards the fixture's shape against silent drift.
 
+    This used to be `test_save_baseline`: it overwrote
+    benchmark/baselines/pdp11-2026-08-31.json on every run and asserted only
+    that the file existed. That destroyed the snapshot instead of comparing
+    against it — and the snapshot was of the real handbook (202 paragraphs),
+    while this test builds a synthetic fixture (a dozen), so the two never
+    described the same document. Nothing else reads that path, so the write
+    only ever lost data.
+
+    The baseline now lives beside the test, describes this fixture, and is
+    read, not written. Regenerate deliberately after an intended change:
+
+        KAE_UPDATE_BASELINE=1 pytest tests/integration/test_e2e_pdp11.py
+    """
+
+    BASELINE = Path("tests/integration/baselines/pdp11-fixture.json")
+
+    @staticmethod
+    def _measure() -> Dict[str, object]:
+        doc = _build_pdp11_doc()
+        rg, kg = ReadingGraph(), KnowledgeGraph()
         pack = SkillPack.from_file(Path("skills/pdp11.yaml"))
-        runner = SkillsRunner()
-        pipeline = runner.build_pipeline(pack)
-        pr = PipelineRunner(pipeline)
+        pr = PipelineRunner(SkillsRunner().build_pipeline(pack))
         pr.execute(doc, rg, kg)
 
         counts: Dict[str, int] = {}
+
         def _count(node):
             name = type(node).__name__
             counts[name] = counts.get(name, 0) + 1
             for child in getattr(node, "children", []):
                 _count(child)
+
         for c in doc.root_containers:
             _count(c)
 
         tex = build_latex(doc)
-        baseline = {
+        return {
             "block_counts": counts,
             "kg_entity_count": len(kg._entities),
             "kg_edge_count": len(kg._edges),
@@ -324,6 +341,34 @@ class TestRegressionBaseline:
             "latex_hash": hashlib.sha256(tex.encode()).hexdigest(),
         }
 
-        out = Path("benchmark/baselines/pdp11-2026-08-31.json")
-        out.write_text(json.dumps(baseline, indent=2, sort_keys=True))
-        assert out.exists()
+    def test_fixture_matches_baseline(self):
+        current = self._measure()
+
+        if os.environ.get("KAE_UPDATE_BASELINE"):
+            self.BASELINE.parent.mkdir(parents=True, exist_ok=True)
+            self.BASELINE.write_text(
+                json.dumps(current, indent=2, sort_keys=True) + "\n")
+            pytest.skip("baseline regenerated on request")
+
+        assert self.BASELINE.exists(), (
+            f"{self.BASELINE} is missing; regenerate with "
+            "KAE_UPDATE_BASELINE=1 and commit it"
+        )
+        expected = json.loads(self.BASELINE.read_text())
+
+        # Counts first: they name what drifted, while the hash only says
+        # that something did.
+        assert current["block_counts"] == expected["block_counts"]
+        assert current["kg_entity_count"] == expected["kg_entity_count"]
+        assert current["kg_edge_count"] == expected["kg_edge_count"]
+        assert current["latex_hash"] == expected["latex_hash"], (
+            "LaTeX changed while the block counts did not — a rendering "
+            "change, not a detection one"
+        )
+
+    def test_the_real_handbook_snapshot_is_not_touched(self):
+        """The benchmark snapshot is data, not an output of this test."""
+        snapshot = Path("benchmark/baselines/pdp11-2026-08-31.json")
+        before = snapshot.read_bytes()
+        self._measure()
+        assert snapshot.read_bytes() == before
