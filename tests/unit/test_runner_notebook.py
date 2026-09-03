@@ -55,3 +55,26 @@ def test_placeholders_are_still_there_for_the_push_script():
     s = _source()
     assert "__KAE_MANAGER_URL__" in s
     assert "__KAE_RUNNER_TOKEN__" in s
+
+
+def test_qwen_loader_serves_every_registry_task():
+    """RFC 0022 §9 inv.11: one model, all tasks.
+
+    A task missing here is invisible until a GPU session is already burning:
+    the Runner answers "unknown task" and the analyzer silently degrades.
+    """
+    from src.agents.runner.loaders.qwen_vl import QwenVLLoader
+    from src.agents.tasks import ALL_TASKS
+
+    loader = QwenVLLoader.__new__(QwenVLLoader)
+    QwenVLLoader.__init__(loader)
+    assert set(loader.tasks) == set(ALL_TASKS)
+
+
+def test_image_tasks_have_a_default_prompt():
+    """Text tasks carry their own; image tasks must not be sent an empty one."""
+    from src.agents.runner.loaders.qwen_vl import TASK_PROMPTS
+    from src.agents.tasks import IMAGE_TASKS
+
+    missing = [t for t in IMAGE_TASKS if t not in TASK_PROMPTS]
+    assert not missing, f"image tasks with no default prompt: {missing}"
