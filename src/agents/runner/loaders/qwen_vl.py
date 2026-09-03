@@ -130,7 +130,7 @@ class QwenVLLoader:
 
     async def infer(
         self,
-        image_png: bytes,
+        image_png: Optional[bytes],
         task: str,
         prompt: Optional[str] = None,
     ) -> str:
@@ -138,19 +138,26 @@ class QwenVLLoader:
             raise RuntimeError("QwenVLLoader.infer() called before load()")
 
         real_prompt = prompt or TASK_PROMPTS.get(task, TASK_PROMPTS["table"])
+        if image_png is None and not prompt:
+            # A text task is nothing but its prompt; a task default would ask
+            # the model to describe an image that was never sent.
+            raise ValueError(f"task '{task}' has no image and no prompt")
 
         def _infer_sync() -> str:
-            fd, tmp_path = tempfile.mkstemp(suffix=".png")
-            try:
+            # Text tasks (RFC 0022 §4.4) run on this same model with no image:
+            # Qwen2.5-VL is multimodal, so dropping the image turns it into an
+            # ordinary text model rather than requiring a second one.
+            tmp_path = None
+            if image_png is not None:
+                fd, tmp_path = tempfile.mkstemp(suffix=".png")
                 with os.fdopen(fd, "wb") as fh:
                     fh.write(image_png)
-                messages = [{
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": tmp_path},
-                        {"type": "text", "text": real_prompt},
-                    ],
-                }]
+            try:
+                content = []
+                if tmp_path is not None:
+                    content.append({"type": "image", "image": tmp_path})
+                content.append({"type": "text", "text": real_prompt})
+                messages = [{"role": "user", "content": content}]
                 text = self._processor.apply_chat_template(
                     messages, tokenize=False, add_generation_prompt=True
                 )
@@ -172,7 +179,8 @@ class QwenVLLoader:
                 return str(decoded)
             finally:
                 try:
-                    os.remove(tmp_path)
+                    if tmp_path is not None:
+                        os.remove(tmp_path)
                 except OSError:
                     pass
 

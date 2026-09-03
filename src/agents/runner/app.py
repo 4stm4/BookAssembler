@@ -4,7 +4,7 @@ Runner FastAPI app (RFC 0022 §4.2).
 Endpoints:
     GET  /health           # cheap, no model load
     GET  /ready            # 200 once the warmup set is loaded
-    POST /infer            # {image_b64, task, prompt?} → {text}
+    POST /infer            # {task, image_b64?, prompt?} → {text}
     POST /ocr              # legacy alias, task='table'
     POST /shutdown         # graceful stop
     GET  /models           # {task→model, loaded[], vram_used_mb}
@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from src.agents.audit import AgentAudit
+from src.agents.tasks import validate_payload
 from src.agents.runner.announce import announce_to_manager
 from src.agents.runner.config import RunnerConfig
 from src.agents.runner.idle import run_watchdog
@@ -35,8 +36,14 @@ log = logging.getLogger(__name__)
 
 
 class InferRequest(BaseModel):
-    image_b64: str
+    """RFC 0022 §4.4: image_b64 is required only by image tasks.
+
+    Text tasks (refine, translate) carry a prompt instead and are served by the
+    model already loaded for vision, so they cost no extra VRAM.
+    """
+
     task: str
+    image_b64: Optional[str] = None
     prompt: Optional[str] = None
 
 
@@ -139,7 +146,8 @@ def create_app(cfg: Optional[RunnerConfig] = None,
     async def metrics_endpoint() -> str:
         return render_metrics(metrics, pool.loaded_names(), pool.vram_used_mb())
 
-    async def _do_infer(task: str, png: bytes, prompt: Optional[str]) -> str:
+    async def _do_infer(task: str, png: Optional[bytes],
+                        prompt: Optional[str]) -> str:
         state["in_flight"] += 1
         t0 = time.time()
         ok = False
@@ -158,7 +166,16 @@ def create_app(cfg: Optional[RunnerConfig] = None,
 
     @app.post("/infer", dependencies=[Depends(_require_token)])
     async def infer(body: InferRequest) -> dict:
-        png = _decode_png(body.image_b64)
+        problem = validate_payload(
+            body.task,
+            has_image=bool(body.image_b64),
+            has_prompt=bool(body.prompt),
+        )
+        if problem:
+            # 400, not a best-effort run: half a request produces a plausible
+            # answer to the wrong question and burns a GPU slot doing it.
+            raise HTTPException(400, problem)
+        png = _decode_png(body.image_b64) if body.image_b64 else None
         text = await _do_infer(body.task, png, body.prompt)
         return {"text": text}
 
