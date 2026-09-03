@@ -11,7 +11,7 @@ import os
 import time
 from typing import Any, List, Optional
 
-from src.analyzers.llm_refinement.rules import _call_ollama
+from src.agents.text import generate_text
 from src.krm.models import (
     BibEntryBlock,
     BlankPageBlock,
@@ -98,7 +98,9 @@ def _translate_text(text: str, target_lang: str) -> str:
         f"Translate to {target_lang}. Output ONLY the translation.\n\n"
         f"{text}"
     )
-    result = _call_ollama(prompt)
+    # Task "translate" (RFC 0022 §4.4): the GPU takes it when the bulk
+    # budget allows, the edge cluster when it does not.
+    result = generate_text(prompt, task="translate")
     return result.strip() if result else text
 
 
