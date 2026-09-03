@@ -47,12 +47,14 @@ class RunnerClient:
         except Exception:
             return False
 
-    async def infer(self, image_png: bytes, task: str,
+    async def infer(self, image_png: Optional[bytes], task: str,
                     prompt: Optional[str] = None, timeout: float = 300.0) -> str:
-        body: Dict[str, Any] = {
-            "image_b64": base64.b64encode(image_png).decode(),
-            "task": task,
-        }
+        body: Dict[str, Any] = {"task": task}
+        # RFC 0022 §4.4: image_b64 only for image tasks. refine/translate
+        # carry no image, and base64-encoding None crashed every text task
+        # that reached this client — this is that seam.
+        if image_png is not None:
+            body["image_b64"] = base64.b64encode(image_png).decode()
         if prompt is not None:
             body["prompt"] = prompt
         resp = await self._request("POST", "/infer", body=body, timeout=timeout)
