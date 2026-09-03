@@ -49,6 +49,17 @@ class ManagerConfig:
     # Queue / back-pressure
     max_queue: int = _env_int("KAE_MANAGER_MAX_QUEUE", 8)
 
+    # Priority scheduling (RFC 0022 §5.6). `concurrency` is how many requests
+    # may be in flight to the Runner at once; the reserved slot that keeps
+    # bulk from occupying everything only exists when it is 2 or more.
+    concurrency: int = _env_int("KAE_MANAGER_CONCURRENCY", 2)
+    # How long a request waits before it is promoted one class. Bounds
+    # starvation of bulk work without letting it reach `interactive`.
+    aging_seconds: int = _env_int("KAE_MANAGER_AGING_SECONDS", 300)
+    # Share of the weekly GPU quota that bulk tasks may burn (RFC 0022 §7.2).
+    # Exhausting it stops translation, never OCR.
+    bulk_budget_minutes: int = _env_int("KAE_MANAGER_BULK_BUDGET_MINUTES", 1080)
+
     # Announce endpoint hardening (RFC 0022 §5.2)
     # `announce_allow_local`: accept loopback/private URLs (dev/tests only).
     announce_allow_local: bool = os.environ.get(
