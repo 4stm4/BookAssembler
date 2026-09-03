@@ -1,6 +1,8 @@
 """
 Qwen2.5-VL loader (RFC 0022 §6): single multimodal model serving
-`table` / `formula` / `vision` tasks by swapping only the prompt.
+every task of RFC 0022 §4.4 by swapping only the prompt: the image
+ones (`ocr`, `vision`, `table`, `formula`) and the text ones
+(`refine`, `translate`), which send no image at all.
 
 Heavy dependencies (`torch`, `transformers`, `qwen_vl_utils`) are imported
 lazily inside `load()` so unit tests and CPU-only environments can import
@@ -11,6 +13,7 @@ Ported from `colab/kae_multimodel_agent.ipynb` (fp16 + device_map='auto',
 so 2×T4 on Kaggle shard the 7B automatically).
 """
 
+from src.agents.tasks import ALL_TASKS
 import asyncio
 import base64
 import logging
@@ -33,6 +36,10 @@ TASK_PROMPTS: Dict[str, str] = {
     "formula": (
         "Extract every mathematical formula from this image as LaTeX. "
         "Output ONLY the LaTeX."
+    ),
+    "ocr": (
+        "This is a scanned page with no text layer. Transcribe every line of "
+        "readable text in reading order. Output the text only."
     ),
     "vision": (
         "Reconstruct this block diagram as a LaTeX tikzpicture: boxes with "
@@ -63,7 +70,9 @@ class QwenVLLoader:
         max_new_tokens: int = 2048,
     ) -> None:
         self.name = model_id.split("/")[-1]
-        self.tasks = ["table", "formula", "vision"]
+        # Every task in the registry: this model serves them all, and a
+        # second one would not fit beside it (RFC 0022 §9 inv.11).
+        self.tasks = list(ALL_TASKS)
         self.vram_mb = vram_mb
         self.loaded = False
         self._model_id = model_id
