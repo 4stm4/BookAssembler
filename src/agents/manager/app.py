@@ -21,6 +21,12 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 
+from src.agents.manager.scheduler import Scheduler
+from src.agents.tasks import (
+    Priority,
+    clamp_priority,
+    validate_payload,
+)
 from src.agents.audit import AgentAudit
 from src.agents.manager.announce_validation import AnnounceUrlError, validate_runner_url
 from src.agents.manager.backends.base import ManualBackend, RunnerBackend
@@ -33,9 +39,12 @@ log = logging.getLogger(__name__)
 
 
 class InferRequest(BaseModel):
-    image_b64: str
+    """RFC 0022 §4.4: image_b64 only for image tasks; §4.5 adds priority."""
+
     task: str
+    image_b64: Optional[str] = None
     prompt: Optional[str] = None
+    priority: Optional[int] = None
 
 
 class OcrRequest(BaseModel):
@@ -114,6 +123,9 @@ def create_app(cfg: Optional[ManagerConfig] = None,
     import asyncio as _asyncio
     inflight_lock = _asyncio.Lock()
     inflight_state = {"n": 0}
+    # Order within the queue is decided here, not by arrival (RFC 0022 §5.6).
+    scheduler = Scheduler(concurrency=cfg.concurrency,
+                          aging_seconds=cfg.aging_seconds)
 
     async def _queue_depth() -> int:
         return inflight_state["n"]
@@ -191,8 +203,25 @@ def create_app(cfg: Optional[ManagerConfig] = None,
         log.info("Runner announced at %s (status=%s)", url, state.status.value)
         return {"status": "accepted", "url": url}
 
-    async def _run_infer(task: str, image_png: bytes, prompt: Optional[str]) -> str:
-        # Back-pressure: bail early if we're already at capacity.
+    async def _run_infer(task: str, image_png: Optional[bytes],
+                         prompt: Optional[str],
+                         priority: Optional[int] = None) -> str:
+        klass = clamp_priority(task, priority)
+
+        # Bulk has its own slice of the weekly quota (RFC 0022 §7.2). Running
+        # out stops translation and never OCR: a page with no text at all is
+        # worse than a page left untranslated.
+        if klass >= Priority.BULK and cfg.bulk_budget_minutes > 0:
+            if metrics.bulk_seconds_used >= cfg.bulk_budget_minutes * 60:
+                metrics.bulk_rejected_total += 1
+                raise HTTPException(
+                    429,
+                    "bulk GPU budget exhausted; run this on the edge cluster",
+                    headers={"Retry-After": "3600"},
+                )
+
+        # Back-pressure: bail early if we're already at capacity. This bounds
+        # the queue itself; the scheduler below decides the order within it.
         async with inflight_lock:
             if inflight_state["n"] >= cfg.max_queue:
                 raise HTTPException(429, "Manager queue is full; retry later",
@@ -200,6 +229,9 @@ def create_app(cfg: Optional[ManagerConfig] = None,
             inflight_state["n"] += 1
             metrics.observe_queue(inflight_state["n"])
 
+        queued_at = time.time()
+        await scheduler.acquire(klass)
+        metrics.observe_queue_wait(int(klass), time.time() - queued_at)
         t0 = time.time()
         ok = False
         try:
@@ -223,17 +255,25 @@ def create_app(cfg: Optional[ManagerConfig] = None,
         finally:
             duration = time.time() - t0
             metrics.record_infer(task, duration, ok)
+            if klass >= Priority.BULK:
+                metrics.bulk_seconds_used += duration
             if ok:
                 audit.infer_completed(task,
                                       duration_ms=int(duration * 1000),
-                                      bytes_in=len(image_png))
+                                      bytes_in=len(image_png or b""))
+            await scheduler.release(klass)
             async with inflight_lock:
                 inflight_state["n"] -= 1
 
     @app.post("/infer", dependencies=[Depends(_require_kae_token)])
     async def infer(body: InferRequest) -> dict:
-        png = _decode_png(body.image_b64)
-        text = await _run_infer(body.task, png, body.prompt)
+        problem = validate_payload(body.task,
+                                   has_image=bool(body.image_b64),
+                                   has_prompt=bool(body.prompt))
+        if problem:
+            raise HTTPException(400, problem)
+        png = _decode_png(body.image_b64) if body.image_b64 else None
+        text = await _run_infer(body.task, png, body.prompt, body.priority)
         return {"text": text}
 
     @app.post("/ocr", dependencies=[Depends(_require_kae_token)])

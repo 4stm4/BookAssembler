@@ -21,6 +21,13 @@ class Metrics:
     infer_duration_sum: float = 0.0     # seconds
     infer_duration_count: int = 0
     per_task: Dict[str, int] = field(default_factory=dict)
+    # Per-class queue waits (RFC 0022 §7.1). The label lives here and not on
+    # the Runner: the Runner does not know about classes, and a metric
+    # labelled with something it cannot observe would be an invention.
+    queue_wait_sum: Dict[int, float] = field(default_factory=dict)
+    queue_wait_count: Dict[int, int] = field(default_factory=dict)
+    bulk_seconds_used: float = 0.0
+    bulk_rejected_total: int = 0
 
     def record_infer(self, task: str, duration: float, ok: bool) -> None:
         self.infer_total += 1
@@ -29,6 +36,14 @@ class Metrics:
         self.per_task[task] = self.per_task.get(task, 0) + 1
         if not ok:
             self.infer_errors_total += 1
+
+    def observe_queue_wait(self, priority: int, seconds: float) -> None:
+        """How long this class waited. A class that starves shows up here
+        before anyone notices it in the product."""
+        self.queue_wait_sum[priority] = (
+            self.queue_wait_sum.get(priority, 0.0) + seconds)
+        self.queue_wait_count[priority] = (
+            self.queue_wait_count.get(priority, 0) + 1)
 
     def observe_queue(self, depth: int) -> None:
         if depth > self.queue_high_water:
@@ -77,4 +92,25 @@ def render(metrics: Metrics, gpu_seconds_used: float, queue_depth: int) -> str:
     ]
     for task, n in sorted(metrics.per_task.items()):
         lines.append(f'kae_infer_task_total{{task="{task}"}} {n}')
+
+    # Per-class queue wait — the metric that shows starvation (RFC 0022 §7.1).
+    lines += [
+        "# HELP kae_queue_wait_seconds_avg Average queue wait, by priority class.",
+        "# TYPE kae_queue_wait_seconds_avg gauge",
+    ]
+    for prio in sorted(metrics.queue_wait_count):
+        n = metrics.queue_wait_count[prio]
+        avg_wait = metrics.queue_wait_sum.get(prio, 0.0) / n if n else 0.0
+        lines.append(
+            f'kae_queue_wait_seconds_avg{{priority="{prio}"}} {avg_wait:.3f}')
+        lines.append(f'kae_infer_priority_total{{priority="{prio}"}} {n}')
+
+    lines += [
+        "# HELP kae_bulk_minutes_used GPU minutes spent on bulk tasks this period.",
+        "# TYPE kae_bulk_minutes_used gauge",
+        f"kae_bulk_minutes_used {metrics.bulk_seconds_used / 60.0:.2f}",
+        "# HELP kae_bulk_rejected_total Bulk requests refused because the budget ran out.",
+        "# TYPE kae_bulk_rejected_total counter",
+        f"kae_bulk_rejected_total {metrics.bulk_rejected_total}",
+    ]
     return "\n".join(lines) + "\n"

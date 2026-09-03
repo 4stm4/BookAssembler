@@ -28,7 +28,8 @@ class FakeClient:
         return True
 
     async def infer(self, image_png, task, prompt=None, timeout=300.0) -> str:
-        return f"echo:{task}:{len(image_png)}"
+        # A text task carries no image (RFC 0022 §4.4), so len() would raise.
+        return f"echo:{task}:{len(image_png or b'')}"
 
     async def shutdown(self) -> None:
         return None
@@ -127,3 +128,62 @@ def test_state_machine_transitions_up_to_error_on_repeated_failures(monkeypatch)
     h = tc.get("/health").json()
     assert h["runner"] in {RunnerStatus.ERROR.value, RunnerStatus.COLD.value,
                            RunnerStatus.STOPPING.value}
+
+
+# --- text tasks, priority and the bulk budget (RFC 0022 v1.2.0) ------------
+
+
+def test_text_task_reaches_the_runner_without_an_image(client):
+    r = client.post("/infer", json={"task": "translate", "prompt": "текст"})
+    assert r.status_code == 200, r.text
+    assert r.json()["text"] == "echo:translate:0"
+
+
+def test_image_task_without_an_image_is_400(client):
+    r = client.post("/infer", json={"task": "ocr"})
+    assert r.status_code == 400
+    assert "needs image_b64" in r.json()["detail"]
+
+
+def test_text_task_without_a_prompt_is_400(client):
+    r = client.post("/infer", json={"task": "refine"})
+    assert r.status_code == 400
+    assert "needs a prompt" in r.json()["detail"]
+
+
+def test_client_priority_is_clamped_not_trusted(client, monkeypatch):
+    """§9 inv.8: a caller cannot label its bulk work interactive."""
+    from src.agents.manager import app as app_mod
+    seen = {}
+    real = app_mod.clamp_priority
+    monkeypatch.setattr(app_mod, "clamp_priority",
+                        lambda t, p: seen.setdefault("out", real(t, p)))
+    client.post("/infer", json={"task": "translate", "prompt": "x",
+                                "priority": 0})
+    from src.agents.tasks import Priority
+    assert seen["out"] == Priority.BULK
+
+
+def test_queue_wait_is_reported_per_priority(client):
+    client.post("/infer", json={"task": "translate", "prompt": "x"})
+    text = client.get("/metrics").text
+    assert "kae_queue_wait_seconds_avg" in text
+    assert 'kae_infer_priority_total{priority="3"}' in text
+
+
+def test_exhausted_bulk_budget_refuses_bulk_but_not_ocr(client):
+    """§7.2: running out of the bulk budget must never refuse OCR.
+
+    A page with no text at all is worse than a page left untranslated.
+    """
+    app = client.app
+    app.state.metrics.bulk_seconds_used = 10 ** 9
+
+    bulk = client.post("/infer", json={"task": "translate", "prompt": "x"})
+    assert bulk.status_code == 429
+    assert "edge cluster" in bulk.json()["detail"]
+    assert bulk.headers["Retry-After"] == "3600"
+
+    ocr = client.post("/infer", json={"task": "ocr", "image_b64": _PNG})
+    assert ocr.status_code == 200, ocr.text
+    assert ocr.json()["text"].startswith("echo:ocr:")
