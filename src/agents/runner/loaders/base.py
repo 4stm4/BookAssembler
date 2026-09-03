@@ -14,7 +14,7 @@ class ModelLoader(Protocol):
 
     async def load(self) -> None: ...
     async def unload(self) -> None: ...
-    async def infer(self, image_png: bytes, task: str,
+    async def infer(self, image_png: Optional[bytes], task: str,
                     prompt: Optional[str] = None) -> str: ...
 
 
@@ -34,7 +34,8 @@ class EchoLoader:
     async def unload(self) -> None:
         self.loaded = False
 
-    async def infer(self, image_png: bytes, task: str,
+    async def infer(self, image_png: Optional[bytes], task: str,
                     prompt: Optional[str] = None) -> str:
-        # Deterministic echo — used by tests to assert routing.
-        return f"echo({self.name}):{task}:{len(image_png)}"
+        # Deterministic echo — used by tests to assert routing. A text task
+        # carries no image, so its size is reported as 0 rather than crashing.
+        return f"echo({self.name}):{task}:{len(image_png or b'')}"

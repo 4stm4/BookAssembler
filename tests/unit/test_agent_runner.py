@@ -172,3 +172,60 @@ async def test_idle_watchdog_skips_when_busy():
     await run_briefly()
     assert called == []
 
+
+
+# ---------- payload contract (RFC 0022 v1.2.0 §4.4) ----------
+# image_b64 used to be a required field, so `refine` and `translate` could not
+# reach the GPU at all and ran on the rpi5 CPU while the card sat idle.
+
+@pytest.fixture
+def any_task_client():
+    from src.agents.tasks import ALL_TASKS
+    cfg = RunnerConfig(token="", warmup_tasks=[], idle_timeout=0)
+    app = create_app(cfg, loaders=[EchoLoader(name="echo",
+                                              tasks=list(ALL_TASKS))])
+    with TestClient(app) as tc:
+        yield tc
+
+
+def test_text_task_runs_without_an_image(any_task_client):
+    r = any_task_client.post("/infer",
+                             json={"task": "translate", "prompt": "текст"})
+    assert r.status_code == 200, r.text
+    assert "translate" in r.json()["text"]
+
+
+def test_image_task_without_an_image_is_400(any_task_client):
+    r = any_task_client.post("/infer", json={"task": "ocr"})
+    assert r.status_code == 400
+    assert "needs image_b64" in r.json()["detail"]
+
+
+def test_text_task_without_a_prompt_is_400(any_task_client):
+    r = any_task_client.post("/infer", json={"task": "refine"})
+    assert r.status_code == 400
+    assert "needs a prompt" in r.json()["detail"]
+
+
+def test_text_task_carrying_an_image_is_400(any_task_client):
+    """A page image sent to translate would burn a GPU slot silently."""
+    png = base64.b64encode(b"page").decode()
+    r = any_task_client.post("/infer", json={
+        "task": "refine", "prompt": "x", "image_b64": png})
+    assert r.status_code == 400
+    assert "text-only" in r.json()["detail"]
+
+
+def test_unknown_task_is_named_in_the_error(any_task_client):
+    r = any_task_client.post("/infer", json={"task": "summarise",
+                                            "prompt": "x"})
+    assert r.status_code == 400
+    assert "unknown task" in r.json()["detail"]
+    assert "summarise" in r.json()["detail"]
+
+
+def test_image_task_is_unaffected(any_task_client):
+    png = base64.b64encode(b"not-really-a-png").decode()
+    r = any_task_client.post("/infer", json={"task": "vision",
+                                            "image_b64": png})
+    assert r.status_code == 200, r.text

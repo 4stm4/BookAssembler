@@ -88,7 +88,7 @@ class ModelPool:
         candidates.sort()  # oldest first
         return self._loaders[candidates[0][1]]
 
-    async def infer(self, task: str, image_png: bytes,
+    async def infer(self, task: str, image_png: Optional[bytes] = None,
                     prompt: Optional[str] = None) -> str:
         loader = await self.ensure_loaded(task)
         # ensure_loaded already grabbed the lock briefly; keep inference outside
