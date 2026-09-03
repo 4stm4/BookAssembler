@@ -277,3 +277,25 @@ def test_style_is_absent_when_nothing_was_observed():
     assert _style_from({"text": "x"}) is None
     assert _style_from({"font": "serif"}).font_family == "serif"
     assert _style_from({"bold": True}).is_bold
+
+
+def test_ocr_sends_the_blocking_task_not_vision(monkeypatch, tmp_path):
+    """RFC 0022 §4.5: OCR outranks page analysis, so it needs its own task.
+
+    Both are served by the same model; only the class differs. Sending
+    "vision" would put a page with no text at all behind page classification.
+    """
+    fitz = pytest.importorskip("pymupdf")
+    from src.analyzers.ocr import analyzer as ocr
+    from src.agents.tasks import MAX_PRIORITY, Priority
+
+    pdf = tmp_path / "s.pdf"
+    d = fitz.open(); d.new_page(); pdf.write_bytes(d.tobytes()); d.close()
+
+    seen = {}
+    monkeypatch.setattr(ocr, "call_infer",
+                        lambda host, task, png, **kw: seen.update(task=task) or "x")
+    ocr.OCRAnalyzer()._ocr_page(str(pdf), 0, "http://a", "multimodel", None)
+
+    assert seen["task"] == "ocr"
+    assert MAX_PRIORITY["ocr"] == Priority.BLOCKING

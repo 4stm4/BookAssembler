@@ -15,6 +15,8 @@ import time
 import urllib.request
 from typing import Any, List, Optional, Tuple
 
+from src.agents.tasks import clamp_priority, validate_payload
+
 log = logging.getLogger(__name__)
 
 # Must match src/api/app.py — same file the agent-manager REST layer writes.
@@ -152,25 +154,40 @@ def _post_infer(
 
 
 def call_infer(
-    host: str, task: str, image_png: bytes,
+    host: str, task: str, image_png: Optional[bytes] = None,
     prompt: Optional[str] = None, kind: str = "multimodel",
     model: Optional[str] = None,
     timeout: Optional[int] = None, attempts: Optional[int] = None,
+    priority: Optional[int] = None,
 ) -> Optional[str]:
-    """Send an image to an agent for inference (RFC 0022 §4.2).
+    """Send a task to an agent for inference (RFC 0022 §4.2, §4.4).
+
+    `image_png` is required only by image tasks; `refine` and `translate`
+    carry a prompt instead. `priority` is a proposal — the server caps it per
+    task (§9 inv.8), and it is clamped here too so an obviously wrong class
+    never leaves the process.
 
     Supports multimodel, got-ocr and ollama.
     """
-    b64 = base64.b64encode(image_png).decode()
+    problem = validate_payload(task, has_image=image_png is not None,
+                               has_prompt=bool(prompt))
+    if problem:
+        # Fail before the round trip: the Runner would answer 400 anyway, and
+        # a queued bad request still occupies a slot while it waits.
+        log.warning("refusing to send %s: %s", task, problem)
+        return None
+
+    b64 = base64.b64encode(image_png).decode() if image_png is not None else None
 
     if kind == "ollama":
         body = {
             "model": model or "llava:7b",
             "prompt": prompt or f"Describe this image for {task}.",
-            "images": [b64],
             "stream": False,
             "options": {"temperature": 0.0, "seed": 42},
         }
+        if b64 is not None:
+            body["images"] = [b64]
         payload = json.dumps(body).encode()
         try:
             req = urllib.request.Request(
@@ -183,7 +200,9 @@ def call_infer(
             log.warning("ollama vision %s failed: %s", host, exc)
             return None
 
-    body = {"image_b64": b64, "task": task}
+    body: dict = {"task": task, "priority": int(clamp_priority(task, priority))}
+    if b64 is not None:
+        body["image_b64"] = b64
     if prompt:
         body["prompt"] = prompt
     payload = json.dumps(body).encode()
@@ -191,7 +210,10 @@ def call_infer(
     token = _token_for_host(host)
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    for path in ("/infer", "/ocr"):
+    # /ocr is a legacy alias that only ever spoke image payloads (RFC 0022
+    # §4.1), so a text task has nothing to fall back to.
+    paths = ("/infer",) if b64 is None else ("/infer", "/ocr")
+    for path in paths:
         text, exc = _post_infer(f"{host}{path}", payload, headers,
                                 timeout=timeout, attempts=attempts)
         if text is not None:
