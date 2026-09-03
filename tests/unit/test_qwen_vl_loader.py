@@ -8,6 +8,7 @@ These tests do NOT touch a real GPU or download the model — they verify:
   * `infer()` before `load()` raises a clear error.
 """
 
+from src.agents.tasks import ALL_TASKS
 import asyncio
 
 import pytest
@@ -19,7 +20,9 @@ from src.agents.runner.loaders.base import ModelLoader
 def test_construction_is_cheap() -> None:
     ldr = QwenVLLoader()
     assert ldr.name == "Qwen2.5-VL-7B-Instruct"
-    assert ldr.tasks == ["table", "formula", "vision"]
+    # RFC 0022 §9 inv.11 — one model serves every task in the registry;
+    # a second one would not fit beside it on a 16 GB card.
+    assert set(ldr.tasks) == set(ALL_TASKS)
     assert ldr.vram_mb > 0
     assert ldr.loaded is False
 
