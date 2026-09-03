@@ -1,13 +1,11 @@
 """llm_refinement: Pure decision logic — no KRM writes, no I/O."""
 
+from src.agents.text import generate_text
 from src.analyzers.llm_refinement.signals import BATCH_SIZE, REQUEST_TIMEOUT, VALID_TYPES, logger
 import json
-import logging
 import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
-import urllib.request
-import urllib.error
 from src.krm.models import (
     ContainerUnit,
     KnowledgeDocument,
@@ -24,32 +22,21 @@ def _get_text(block: ParagraphBlock) -> str:
                 parts.append(span.text)
     return " ".join(parts)
 
-def _call_ollama(prompt: str, host: Optional[str] = None, model: Optional[str] = None) -> Optional[str]:
-    url = f"{host or OLLAMA_URL}/api/generate"
-    payload = json.dumps({
-        "model": model or OLLAMA_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        # RFC 0012 §3.1: deterministic LLM calls (temperature=0, fixed seed).
-        "options": {"temperature": 0.0, "seed": 42, "num_predict": 256},
-        "keep_alive": "10m",
-    }).encode()
+def _call_ollama(prompt: str, host: Optional[str] = None,
+                 model: Optional[str] = None) -> Optional[str]:
+    """Refine a batch of blocks, on the GPU when one will take it.
 
-    req = urllib.request.Request(
-        url, data=payload,
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        t0 = time.time()
-        logger.info("Sending LLM request (%d chars prompt)...", len(prompt))
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-            elapsed = time.time() - t0
-            logger.info("LLM responded in %.1fs", elapsed)
-            return data.get("response", "")
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
-        logger.warning("LLM agent call failed: %s", e)
-        return None
+    Kept under this name because it is the seam the tests patch, but it is no
+    longer ollama-only: RFC 0022 v1.2.0 lets task `refine` run on the Runner,
+    and the edge cluster is now the fallback rather than the only path.
+    """
+    t0 = time.time()
+    logger.info("Sending LLM request (%d chars prompt)...", len(prompt))
+    out = generate_text(prompt, task="refine", host=host, model=model,
+                        timeout=REQUEST_TIMEOUT)
+    logger.info("LLM responded in %.1fs", time.time() - t0)
+    return out
+
 
 def _parse_llm_response(text: str) -> List[Dict[str, Any]]:
     if not text:
