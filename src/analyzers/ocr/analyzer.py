@@ -125,7 +125,10 @@ class OCRAnalyzer(BaseAnalyzer):
             )
         finally:
             pdf.close()
-        return call_infer(host, "vision", png, prompt=_PROMPT,
+        # Task "ocr", not "vision": both run the same model, but only
+        # this one is class `blocking` — without it the page has no
+        # text at all (RFC 0022 §4.4, §4.5).
+        return call_infer(host, "ocr", png, prompt=_PROMPT,
                           kind=kind, model=model,
                           timeout=OCR_TIMEOUT, attempts=OCR_ATTEMPTS) or ""
 
