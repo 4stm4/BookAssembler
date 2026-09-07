@@ -13,6 +13,7 @@ Auth (Bearer): two independent tokens, KAE→Manager and Manager→Runner. See R
 
 import base64
 import binascii
+import hmac
 import logging
 import time
 from typing import Optional
@@ -103,7 +104,8 @@ def create_app(cfg: Optional[ManagerConfig] = None,
             metrics.auth_fail_total += 1
             audit.auth_failed(request.url.path, "missing")
             raise HTTPException(401, "Missing Bearer token")
-        if authorization.removeprefix("Bearer ").strip() != cfg.kae_token:
+        presented = authorization.removeprefix("Bearer ").strip()
+        if not hmac.compare_digest(presented.encode(), cfg.kae_token.encode()):
             metrics.auth_fail_total += 1
             audit.auth_failed(request.url.path, "bad_token")
             raise HTTPException(401, "Bad Bearer token")
@@ -113,7 +115,7 @@ def create_app(cfg: Optional[ManagerConfig] = None,
         # can prove it's ours (RFC 0022 §5.2 push-announce).
         if not cfg.runner_token:
             return
-        if secret != cfg.runner_token:
+        if not hmac.compare_digest(secret.encode(), cfg.runner_token.encode()):
             metrics.auth_fail_total += 1
             audit.auth_failed("/runner/announce", "bad_secret")
             raise HTTPException(401, "Bad announce secret")
