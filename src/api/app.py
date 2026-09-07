@@ -1737,14 +1737,19 @@ def create_app() -> FastAPI:
         )
         # Route to the first reachable agent configured in the agent manager,
         # using its active model. Lets the user pick a fast host/model in the UI.
-        host, model = None, None
-        for a in _load_agents_config():
-            available, models = _probe_ollama(a["host"])
-            if available:
-                host = a["host"]
-                model = a.get("active_model") or (models[0] if models else None)
-                break
-        translated = _call_ollama(prompt, host=host, model=model)
+        # The probe loop and the LLM call are blocking (seconds to minutes), so
+        # run the whole thing off the event loop.
+        def _translate_sync() -> Optional[str]:
+            host, model = None, None
+            for a in _load_agents_config():
+                available, models = _probe_ollama(a["host"])
+                if available:
+                    host = a["host"]
+                    model = a.get("active_model") or (models[0] if models else None)
+                    break
+            return _call_ollama(prompt, host=host, model=model)
+
+        translated = await asyncio.to_thread(_translate_sync)
         if not translated:
             raise HTTPException(status_code=503, detail="LLM unavailable or timed out")
         audit_logger.log("TRANSLATION_REQUESTED", "api", {
