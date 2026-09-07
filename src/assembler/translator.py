@@ -272,15 +272,22 @@ def _generate_pdf(
     members = [(output_path, os.path.basename(output_path)),
                (tex_path, os.path.basename(tex_path)),
                (lock_path, "kae.lock"), (book_path, "book.json")]
-    manifest = {"artifacts": [], "created_at": lock["created_at"], "job_id": job_id}
-    for path, arcname in members:
-        if os.path.exists(path):
-            manifest["artifacts"].append({"name": arcname, "sha256": _sha256_file(path)})
+    digests = {arc: _sha256_file(p) for p, arc in members if os.path.exists(p)}
+    manifest = {
+        "artifacts": [{"name": arc, "sha256": digests[arc]}
+                      for _, arc in members if arc in digests],
+        "created_at": lock["created_at"],
+        "job_id": job_id,
+    }
     manifest_path = os.path.join(out_dir, "manifest.json")
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, indent=2)
 
-    bundle_sha = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    # RFC 0013: the bundle address is content-only. Build metadata — created_at,
+    # job_id, and kae.lock (which carries its own timestamp) — must not move it,
+    # or the same inputs would produce a different .kap every run and never dedup.
+    content = sorted((arc, h) for arc, h in digests.items() if arc != "kae.lock")
+    bundle_sha = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
     kap_path = os.path.join(out_dir, f"{bundle_sha[:16]}.kap")
     with tarfile.open(kap_path, "w:gz") as tar:
         tar.add(manifest_path, arcname="manifest.json")
