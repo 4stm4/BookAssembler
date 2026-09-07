@@ -1970,7 +1970,7 @@ def create_app() -> FastAPI:
             skills_dir = Path("skills")
             if skills_dir.exists():
                 runner.load_directory(skills_dir)
-        _skills_runner_instance = runner
+            _skills_runner_instance = runner
         return _skills_runner_instance
 
     @app.get("/api/v1/skills")
@@ -1994,13 +1994,13 @@ def create_app() -> FastAPI:
         pack = runner.packs.get(skill_name)
         if pack is None:
             return {"error": f"Skill pack '{skill_name}' not found"}
-        if job_id not in jobs:
-            return {"error": f"Job '{job_id}' not found"}
-        job = jobs[job_id]
-        doc = job.get("document")
+        doc = docs_store.get(job_id)
         if doc is None:
-            return {"error": "Job has no document"}
-        job.setdefault("active_skills", []).append(skill_name)
+            return {"error": f"Job '{job_id}' not found"}
+        active = doc.metadata.setdefault("active_skills", [])
+        if skill_name not in active:
+            active.append(skill_name)
+        _persist_doc(job_id, doc)
         return {
             "status": "activated",
             "skill": skill_name,
