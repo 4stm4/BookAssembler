@@ -49,6 +49,7 @@ from src.krm.models import (
     TableBlock,
     TableCell,
 )
+from src.krm.traversal import walk as walk_krm
 
 class GuardedReadingGraph(ReadingGraph):
     """
@@ -361,37 +362,13 @@ class PipelineRunner:
             on_progress(total, total, "done")
 
     def _collect_krm_ids(self, doc: KnowledgeDocument) -> Set[str]:
-        ids: Set[str] = set()
-
-        def walk(node: BaseKRMNode) -> None:
-            ids.add(node.id)
-            if isinstance(node, ContainerUnit):
-                for child in node.children:
-                    walk(child)
-            elif isinstance(node, ParagraphBlock):
-                for inline in node.inlines:
-                    ids.add(inline.id)
-                    for span in inline.spans:
-                        ids.add(span.id)
-            elif isinstance(node, TableBlock):
-                for row in node.grid:
-                    for cell in row:
-                        ids.add(cell.id)
-                        for block in cell.content:
-                            walk(block)
-            elif isinstance(node, ListBlock):
-                for item in node.items:
-                    walk(item)
-            elif isinstance(node, ListItemBlock):
-                for block in node.content:
-                    walk(block)
-            elif isinstance(node, CalloutBlock):
-                for block in node.content:
-                    walk(block)
-
-        for container in doc.root_containers:
-            walk(container)
-        return ids
+        # One shared walk (src/krm/traversal): the hand-rolled version here
+        # skipped SidebarBlock bodies, so edges into a sidebar read as dangling
+        # (RFC 0003 §5.1) even when the target existed.
+        return {
+            n.id for n in walk_krm(doc)
+            if isinstance(n, BaseKRMNode)
+        }
 
     @staticmethod
     def _restore_state(target: Any, snapshot: Any) -> None:

@@ -14,15 +14,8 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from src.krm.models import (
-    BaseKRMNode,
-    ContainerUnit,
-    InlineUnit,
-    KnowledgeDocument,
-    ParagraphBlock,
-    SpanUnit,
-    TableBlock,
-)
+from src.krm.models import BaseKRMNode, KnowledgeDocument
+from src.krm.traversal import walk
 from src.provenance.models import ProvenanceTracker, SourceLocation, TransformationStep
 
 
@@ -211,42 +204,16 @@ class HITLManager:
 
     @staticmethod
     def _get_all_nodes(doc: KnowledgeDocument) -> List[BaseKRMNode]:
-        """
-        Recursively collects all KRM nodes from document root containers.
-        """
-        nodes: List[BaseKRMNode] = []
-
-        def _traverse(n: BaseKRMNode) -> None:
-            nodes.append(n)
-            if isinstance(n, ContainerUnit):
-                for child in n.children:
-                    _traverse(child)
-            elif isinstance(n, ParagraphBlock):
-                for inline in n.inlines:
-                    _traverse(inline)
-            elif isinstance(n, InlineUnit):
-                for span in n.spans:
-                    _traverse(span)
-            elif isinstance(n, TableBlock):
-                for row in n.grid:
-                    for cell in row:
-                        _traverse(cell)
-                        for content_node in cell.content:
-                            _traverse(content_node)
-
-        for root in doc.root_containers:
-            _traverse(root)
-
-        return nodes
+        """Every KRM node in the document (RFC 0002 §3), lists/callouts/sidebars
+        included — the hand-rolled walk here skipped those, so a low-confidence
+        block inside a list was never flagged for review."""
+        return [n for n in walk(doc) if isinstance(n, BaseKRMNode)]
 
     def _find_node_by_id(
         self, doc: KnowledgeDocument, target_id: str
     ) -> Optional[BaseKRMNode]:
-        """
-        Finds a node by ID in document.
-        """
-        all_nodes = self._get_all_nodes(doc)
-        for n in all_nodes:
-            if n.id == target_id:
+        """Finds a node by ID anywhere in the document tree."""
+        for n in walk(doc):
+            if isinstance(n, BaseKRMNode) and n.id == target_id:
                 return n
         return None
