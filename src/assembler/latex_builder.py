@@ -9,6 +9,7 @@ via fontspec + polyglossia). Tombstoned nodes are skipped (RFC 0001 §2.4).
 
 import logging
 import os
+import re
 import subprocess
 from typing import Any, List
 
@@ -81,6 +82,30 @@ def _esc(text: str) -> str:
     for ch in text or "":
         out.append(_SPECIAL.get(ch, ch))
     return "".join(out)
+
+
+# Primitives a model- or OCR-authored fragment (formula LaTeX, table LaTeX,
+# reconstructed TikZ) never legitimately needs, and which would let it read
+# host files into the PDF or wedge the compiler. The whole document is built
+# from an untrusted upload, so these fragments — the only places raw,
+# unescaped LaTeX from a model reaches the output — are filtered before
+# xelatex (which already runs without -shell-escape). A stripped primitive
+# becomes \relax (a no-op); its braced argument stays as literal text.
+_LATEX_FORBIDDEN = re.compile(
+    r"\\(?:input|include|includegraphics|write|openin|openout|read|catcode|"
+    r"def|edef|xdef|gdef|let|futurelet|csname|expandafter|immediate|special|"
+    r"usepackage|RequirePackage|directlua|shipout|newread|newwrite|"
+    r"InputIfFileExists|IfFileExists|lstinputlisting|batchmode|scrollmode)"
+    r"(?![A-Za-z@])",
+)
+
+
+def _sanitize_latex_fragment(text: str) -> str:
+    """Neutralise file/IO/programming primitives in a model-authored LaTeX
+    fragment. Math, tabular and TikZ drawing markup pass through untouched."""
+    if not text:
+        return text
+    return _LATEX_FORBIDDEN.sub(r"\\relax ", text)
 
 
 def _para_text(block: ParagraphBlock) -> str:
@@ -239,8 +264,9 @@ def render_node(
             render(child, depth + 1)
         body.append("\\end{mdframed}\n")
     elif isinstance(node, FormulaBlock):
-        # Prefer real LaTeX if a vision agent replaced the fallback.
-        latex = (node.latex_expression or "").strip()
+        # Prefer real LaTeX if a vision agent replaced the fallback. Model
+        # output goes in unescaped, so filter file/IO primitives first.
+        latex = _sanitize_latex_fragment((node.latex_expression or "").strip())
         md = getattr(node, "metadata", None) or {}
         has_real_latex = not md.get("needs_vision_ocr", False)
         if has_real_latex and latex:
@@ -347,7 +373,8 @@ def _render_table(table: TableBlock) -> str:
     md = getattr(table, "metadata", None) or {}
     recognized = md.get("latex")
     if recognized:
-        return "\\begin{center}\n" + recognized + "\n\\end{center}\n"
+        safe = _sanitize_latex_fragment(recognized)
+        return "\\begin{center}\n" + safe + "\n\\end{center}\n"
     grid = getattr(table, "grid", None)
     if not grid:
         return ""
