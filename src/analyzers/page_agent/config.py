@@ -14,6 +14,3 @@ VISION_CONCURRENCY = int(os.environ.get("KAE_VISION_CONCURRENCY", "2"))
 # measurement on the target GPU, never as a default "improvement".
 RENDER_DPI = int(os.environ.get("KAE_VISION_DPI", "72"))
 
-JPEG_QUALITY = int(os.environ.get("KAE_VISION_JPEG_QUALITY", "30"))
-
-JPEG_MAX_DIM = int(os.environ.get("KAE_VISION_MAX_DIM", "512"))

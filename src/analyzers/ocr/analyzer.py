@@ -22,7 +22,8 @@ from src.krm.models import (
 from src.analyzers.ocr.config import OCR_ATTEMPTS, OCR_CONCURRENCY, OCR_DPI, OCR_MAX_DIM, OCR_TIMEOUT
 from src.analyzers.ocr.prompts import _PROMPT
 from src.analyzers.ocr.signals import FAILURE_BUDGET_RATIO, MIN_FAILURE_BUDGET, log
-from src.analyzers.ocr.rules import _needs_ocr, _parse_ocr, _resolve_source_path
+from src.analyzers.ocr.rules import _needs_ocr, _parse_ocr
+from src.analyzers.source_io import pixmap_to_jpeg as _pixmap_to_jpeg, resolve_source_path as _resolve_source_path
 
 class OCRAnalyzer(BaseAnalyzer):
     def __init__(self) -> None:
@@ -115,7 +116,6 @@ class OCRAnalyzer(BaseAnalyzer):
         if page_index is None:
             return ""
         import pymupdf as fitz
-        from src.analyzers.page_agent.rules import _pixmap_to_jpeg
 
         pdf = fitz.open(pdf_path)
         try:

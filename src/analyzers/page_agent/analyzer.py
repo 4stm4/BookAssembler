@@ -24,7 +24,8 @@ from src.krm.models import (
 
 from src.analyzers.page_agent.config import RENDER_DPI, VISION_CONCURRENCY
 from src.analyzers.page_agent.signals import FAILURE_BUDGET_RATIO, MIN_BLOCKS, MIN_FAILURE_BUDGET, MIN_NUMERIC_RATIO, MIN_SHORT_RATIO, log
-from src.analyzers.page_agent.rules import _PageResult, _clean_tabular, _looks_numeric, _pixmap_to_jpeg, _resolve_source_path, _text
+from src.analyzers.page_agent.rules import _PageResult, _clean_tabular, _looks_numeric, _text
+from src.analyzers.source_io import pixmap_to_jpeg as _pixmap_to_jpeg, resolve_source_path as _resolve_source_path
 
 class PageAgentAnalyzer(BaseAnalyzer):
     def __init__(self) -> None:
