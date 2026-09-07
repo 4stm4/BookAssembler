@@ -1177,7 +1177,7 @@ def create_app() -> FastAPI:
                     rg = ReadingGraph()
                     kg = KnowledgeGraph()
                     pipeline = PipelineRunner(create_default_pipeline())
-                    await asyncio.get_event_loop().run_in_executor(
+                    await asyncio.get_running_loop().run_in_executor(
                         None, lambda: pipeline.execute(doc, rg, kg)
                     )
                     graphs = {"rg": rg, "kg": kg}
@@ -1315,7 +1315,7 @@ def create_app() -> FastAPI:
             })
 
             progress_store[job_id] = {"step": 1, "total": 10, "stage": "Парсинг PDF..."}
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             doc = await loop.run_in_executor(
                 None, adapter.parse, file_stream, job.source_uri
             )
@@ -1791,7 +1791,7 @@ def create_app() -> FastAPI:
         if doc is None:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
         from src.assembler.translator import translate_and_assemble
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         output_path = os.path.join(kae_ssd_path, job_id, f"translated_{body.target_lang.lower()}.pdf")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -1843,7 +1843,7 @@ def create_app() -> FastAPI:
         total_pages = len(ordered_pages)
 
         host, model, _ = _pick_agent_for_role("translate")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         async def _emit(stage: str, step: int) -> None:
             progress_store[job_id] = {"step": step, "total": total_pages, "stage": stage}
