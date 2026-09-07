@@ -27,6 +27,9 @@ log = logging.getLogger(__name__)
 EDGE_URL = os.environ.get("LLM_AGENT_URL", "http://192.168.88.199:11434")
 EDGE_MODEL = os.environ.get("LLM_AGENT_MODEL", "qwen2.5:7b")
 EDGE_TIMEOUT = int(os.environ.get("LLM_AGENT_TIMEOUT", "120"))
+# A translated paragraph routinely runs past 256 tokens (Russian output is
+# longer than the English source), and the reply was silently cut mid-sentence.
+EDGE_NUM_PREDICT = int(os.environ.get("LLM_AGENT_NUM_PREDICT", "1024"))
 
 
 def _edge_generate(prompt: str, host: Optional[str] = None,
@@ -37,7 +40,7 @@ def _edge_generate(prompt: str, host: Optional[str] = None,
         "prompt": prompt,
         "stream": False,
         # RFC 0012 §3.1: deterministic LLM calls.
-        "options": {"temperature": 0.0, "seed": 42, "num_predict": 256},
+        "options": {"temperature": 0.0, "seed": 42, "num_predict": EDGE_NUM_PREDICT},
         "keep_alive": "10m",
     }).encode()
     req = urllib.request.Request(
