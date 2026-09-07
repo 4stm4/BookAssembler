@@ -37,17 +37,8 @@ from src.graph.reading_graph import (
 )
 from src.krm.models import (
     BaseKRMNode,
-    CalloutBlock,
-    ContainerUnit,
-    InlineUnit,
     KnowledgeDocument,
-    ListBlock,
-    ListItemBlock,
-    ParagraphBlock,
     ProvenanceInfo,
-    SpanUnit,
-    TableBlock,
-    TableCell,
 )
 from src.krm.traversal import walk as walk_krm
 
@@ -256,50 +247,23 @@ class PipelineRunner:
                     )
             registered_names.add(name)
 
-    def _record_provenance_recursive(self, node: BaseKRMNode, analyzer_name: str) -> None:
-        """
-        Recursively visits all KRM nodes in the document tree to record the analyzer_name
-        in provenance_info.applied_analyzers.
+    def _record_provenance(self, doc: KnowledgeDocument, analyzer_name: str) -> None:
+        """Record `analyzer_name` on every KRM node's applied_analyzers
+        (RFC 0011). One shared walk — the hand-rolled recursion here skipped
+        SidebarBlock and IndexEntryBlock subtrees.
         """
         utc_now = datetime.now(timezone.utc).isoformat()
-
-        if node.provenance_info is None:
-            node.provenance_info = ProvenanceInfo(
-                adapter_name="PipelineRunner",
-                extraction_timestamp_utc=utc_now,
-                applied_analyzers=[analyzer_name],
-            )
-        elif analyzer_name not in node.provenance_info.applied_analyzers:
-            node.provenance_info.applied_analyzers.append(analyzer_name)
-
-        # Recurse down container and block hierarchies
-        if isinstance(node, KnowledgeDocument):
-            for container in node.root_containers:
-                self._record_provenance_recursive(container, analyzer_name)
-        elif isinstance(node, ContainerUnit):
-            for child in node.children:
-                self._record_provenance_recursive(child, analyzer_name)
-        elif isinstance(node, ParagraphBlock):
-            for inline in node.inlines:
-                self._record_provenance_recursive(inline, analyzer_name)
-        elif isinstance(node, TableBlock):
-            for row in node.grid:
-                for cell in row:
-                    self._record_provenance_recursive(cell, analyzer_name)
-                    for block in cell.content:
-                        self._record_provenance_recursive(block, analyzer_name)
-        elif isinstance(node, ListBlock):
-            for item in node.items:
-                self._record_provenance_recursive(item, analyzer_name)
-        elif isinstance(node, ListItemBlock):
-            for block in node.content:
-                self._record_provenance_recursive(block, analyzer_name)
-        elif isinstance(node, CalloutBlock):
-            for block in node.content:
-                self._record_provenance_recursive(block, analyzer_name)
-        elif isinstance(node, InlineUnit):
-            for span in node.spans:
-                self._record_provenance_recursive(span, analyzer_name)
+        for node in walk_krm(doc):
+            if not isinstance(node, BaseKRMNode):
+                continue
+            if node.provenance_info is None:
+                node.provenance_info = ProvenanceInfo(
+                    adapter_name="PipelineRunner",
+                    extraction_timestamp_utc=utc_now,
+                    applied_analyzers=[analyzer_name],
+                )
+            elif analyzer_name not in node.provenance_info.applied_analyzers:
+                node.provenance_info.applied_analyzers.append(analyzer_name)
 
     def execute(
         self,
@@ -347,7 +311,7 @@ class PipelineRunner:
 
             # Upon successful run, log analyzer in provenance info across KRM nodes
             if KRMPermission.READ in manifest.krm_permissions:
-                self._record_provenance_recursive(doc, manifest.name)
+                self._record_provenance(doc, manifest.name)
 
         # RFC 0003 §5.1: verify no dangling KG edges after the pipeline completes.
         krm_ids = self._collect_krm_ids(doc)
