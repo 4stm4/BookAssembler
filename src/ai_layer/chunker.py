@@ -434,8 +434,10 @@ class SemanticChunker:
 
         chunks: List[AIContextChunk] = []
         narrative_buffer: List[Tuple[BaseKRMNode, str, List[str]]] = []
+        buffer_tokens = 0
 
         def flush_narrative_buffer() -> None:
+            nonlocal buffer_tokens
             if not narrative_buffer:
                 return
             b_nodes = [item[0] for item in narrative_buffer]
@@ -455,6 +457,7 @@ class SemanticChunker:
             if chunk is not None:
                 chunks.append(chunk)
             narrative_buffer.clear()
+            buffer_tokens = 0
 
         for node, parent_container_id, container_path in ordered_nodes:
             if _is_atomic_block(node):
@@ -473,18 +476,16 @@ class SemanticChunker:
                 if chunk is not None:
                     chunks.append(chunk)
             else:
+                new_tokens = _estimate_tokens(_extract_text_from_node(node))
                 if narrative_buffer:
                     prev_path = narrative_buffer[0][2]
-                    curr_tokens = sum(
-                        _estimate_tokens(_extract_text_from_node(it[0]))
-                        for it in narrative_buffer
-                    )
-                    new_tokens = _estimate_tokens(_extract_text_from_node(node))
-
-                    if prev_path != container_path or (curr_tokens + new_tokens > self.max_narrative_tokens):
+                    if prev_path != container_path or (
+                        buffer_tokens + new_tokens > self.max_narrative_tokens
+                    ):
                         flush_narrative_buffer()
 
                 narrative_buffer.append((node, parent_container_id, container_path))
+                buffer_tokens += new_tokens
 
         flush_narrative_buffer()
 
