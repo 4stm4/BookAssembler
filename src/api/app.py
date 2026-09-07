@@ -1533,15 +1533,21 @@ def create_app() -> FastAPI:
         from src.assembler.page_assembler import page_layout_map
         return {"job_id": job_id, "pages": page_layout_map(doc)}
 
-    def _open_source_pdf(job_id: str, doc: KnowledgeDocument) -> Any:
+    async def _open_source_pdf(job_id: str, doc: KnowledgeDocument) -> Any:
         """Open the source PDF for a job, supporting both upload:// and sep:// URIs."""
         import pymupdf as fitz
         source_uri = doc.source_uri or ""
 
         if source_uri.startswith("upload://"):
-            filename = source_uri.replace("upload://", "")
-            pdf_path = os.path.join(kae_ssd_path, job_id, filename)
-            if not os.path.isfile(pdf_path):
+            # The stored uri keeps the raw client filename. basename() it and
+            # confirm the resolved path stays under the SSD root — otherwise a
+            # file uploaded as "../../etc/whatever" would let this endpoint
+            # open any PDF on the host.
+            filename = os.path.basename(source_uri[len("upload://"):])
+            ssd_root = os.path.realpath(kae_ssd_path)
+            pdf_path = os.path.realpath(os.path.join(kae_ssd_path, job_id, filename))
+            if (os.path.commonpath([ssd_root, pdf_path]) != ssd_root
+                    or not os.path.isfile(pdf_path)):
                 raise HTTPException(status_code=404, detail="Uploaded PDF not found on disk")
             return fitz.open(pdf_path)
 
@@ -1551,10 +1557,8 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=400, detail="Invalid source_uri")
             provider_id, file_id = parts
             try:
-                import asyncio
                 sep_provider = _resolve_sep_provider(provider_id)
-                loop = asyncio.get_event_loop()
-                file_stream = loop.run_until_complete(sep_provider.get_file_stream(file_id))
+                file_stream = await sep_provider.get_file_stream(file_id)
             except Exception:
                 raise HTTPException(status_code=404, detail="Cannot access source file")
             pdf_bytes = file_stream.read()
@@ -1567,7 +1571,7 @@ def create_app() -> FastAPI:
         doc = docs_store.get(job_id)
         if doc is None:
             raise HTTPException(status_code=404, detail="Document not found")
-        pdf_doc = _open_source_pdf(job_id, doc)
+        pdf_doc = await _open_source_pdf(job_id, doc)
         if page_num < 0 or page_num >= len(pdf_doc):
             pdf_doc.close()
             raise HTTPException(status_code=400, detail=f"Page {page_num} out of range")
@@ -1608,7 +1612,7 @@ def create_app() -> FastAPI:
         if vl is None or vl.bounding_box is None:
             raise HTTPException(status_code=400, detail="Diagram has no region")
         import pymupdf as fitz
-        pdf_doc = _open_source_pdf(job_id, doc)
+        pdf_doc = await _open_source_pdf(job_id, doc)
         pg = vl.page_or_screen_index
         if pg < 0 or pg >= len(pdf_doc):
             pdf_doc.close()
@@ -1628,7 +1632,7 @@ def create_app() -> FastAPI:
         if vl is None or vl.bounding_box is None:
             raise HTTPException(400, "Block has no region")
         import pymupdf as fitz
-        pdf_doc = _open_source_pdf(job_id, doc)
+        pdf_doc = await _open_source_pdf(job_id, doc)
         pg = vl.page_or_screen_index
         page = pdf_doc[pg]
         pw, ph = page.rect.width, page.rect.height
