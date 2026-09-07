@@ -1575,10 +1575,14 @@ def create_app() -> FastAPI:
         if page_num < 0 or page_num >= len(pdf_doc):
             pdf_doc.close()
             raise HTTPException(status_code=400, detail=f"Page {page_num} out of range")
-        page = pdf_doc[page_num]
-        pix = page.get_pixmap(dpi=100)
-        img_bytes = pix.tobytes("jpeg")
-        pdf_doc.close()
+
+        def _render() -> bytes:
+            try:
+                return pdf_doc[page_num].get_pixmap(dpi=100).tobytes("jpeg")
+            finally:
+                pdf_doc.close()
+
+        img_bytes = await asyncio.to_thread(_render)
         return Response(content=img_bytes, media_type="image/jpeg")
 
     def _resolve_sep_provider(provider_id: str) -> Any:
@@ -1617,13 +1621,17 @@ def create_app() -> FastAPI:
         if pg < 0 or pg >= len(pdf_doc):
             pdf_doc.close()
             raise HTTPException(status_code=400, detail="Page out of range")
-        page = pdf_doc[pg]
-        pw, ph = page.rect.width, page.rect.height
-        bb = vl.bounding_box
-        clip = fitz.Rect(bb.x0 * pw, bb.y0 * ph, bb.x1 * pw, bb.y1 * ph)
-        pix = page.get_pixmap(clip=clip, dpi=72)
-        img_bytes = pix.tobytes("jpeg", jpg_quality=85)
-        pdf_doc.close()
+        def _render() -> bytes:
+            try:
+                page = pdf_doc[pg]
+                pw, ph = page.rect.width, page.rect.height
+                bb = vl.bounding_box
+                clip = fitz.Rect(bb.x0 * pw, bb.y0 * ph, bb.x1 * pw, bb.y1 * ph)
+                return page.get_pixmap(clip=clip, dpi=72).tobytes("jpeg", jpg_quality=85)
+            finally:
+                pdf_doc.close()
+
+        img_bytes = await asyncio.to_thread(_render)
         return Response(content=img_bytes, media_type="image/jpeg")
 
     async def _render_block_png(job_id: str, doc: KnowledgeDocument, node: Any) -> bytes:
@@ -1634,13 +1642,18 @@ def create_app() -> FastAPI:
         import pymupdf as fitz
         pdf_doc = await _open_source_pdf(job_id, doc)
         pg = vl.page_or_screen_index
-        page = pdf_doc[pg]
-        pw, ph = page.rect.width, page.rect.height
-        bb = vl.bounding_box
-        clip = fitz.Rect(bb.x0 * pw, bb.y0 * ph, bb.x1 * pw, bb.y1 * ph)
-        data = page.get_pixmap(clip=clip, dpi=100).tobytes("png")
-        pdf_doc.close()
-        return data
+
+        def _render() -> bytes:
+            try:
+                page = pdf_doc[pg]
+                pw, ph = page.rect.width, page.rect.height
+                bb = vl.bounding_box
+                clip = fitz.Rect(bb.x0 * pw, bb.y0 * ph, bb.x1 * pw, bb.y1 * ph)
+                return page.get_pixmap(clip=clip, dpi=100).tobytes("png")
+            finally:
+                pdf_doc.close()
+
+        return await asyncio.to_thread(_render)
 
     def _call_infer(host: str, task: str, image_b64: str) -> Optional[str]:
         """POST an image region to a multimodel/got-ocr agent → recognized text."""
