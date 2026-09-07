@@ -7,7 +7,6 @@ Tests:
 3. Audit Log Engine & Immutable Event History (RFC 0020)
 """
 
-import hashlib
 from src.security.manager import (
     AuditEntry,
     AuditLogger,
@@ -70,21 +69,33 @@ def test_capability_negotiation_pass_and_fail() -> None:
         assert "allow_filesystem=True" in str(exc)
 
 
-def test_plugin_signature_verification() -> None:
-    """
-    Test plugin digital signature verification using public_key digest matching.
-    """
+def test_plugin_signature_verification(tmp_path) -> None:
+    """Ed25519 signature verification against a trusted key (RFC 0020 §3)."""
+    import base64
+
+    from src.plugins.signing import generate_keypair, sign_plugin
+
     sec_mgr = SecurityManager(trust_level=TrustLevel.VERIFIED_ONLY)
 
-    plugin_id = "plugin_layout_analyzer"
-    public_key = "pubkey_kae_core_2026_x86"
-    valid_signature = hashlib.sha256(f"{plugin_id}:{public_key}".encode("utf-8")).hexdigest()
+    priv, pub = generate_keypair()
+    (tmp_path / "core.pub").write_bytes(base64.b64encode(pub))
+    plugin_bytes = b"fake plugin payload"
+    sig_b64 = base64.b64encode(sign_plugin(plugin_bytes, priv)).decode()
 
-    # Valid signature check
-    assert sec_mgr.verify_plugin_signature(plugin_id, valid_signature, public_key) is True
+    # Valid signature
+    assert sec_mgr.verify_plugin_signature(
+        plugin_bytes, sig_b64, "core", keys_dir=tmp_path
+    ) is True
 
-    # Invalid signature check
-    assert sec_mgr.verify_plugin_signature(plugin_id, "invalid_signature_hex", public_key) is False
+    # Tampered payload
+    assert sec_mgr.verify_plugin_signature(
+        b"tampered", sig_b64, "core", keys_dir=tmp_path
+    ) is False
+
+    # Unknown key id
+    assert sec_mgr.verify_plugin_signature(
+        plugin_bytes, sig_b64, "nope", keys_dir=tmp_path
+    ) is False
 
 
 def test_audit_logger_event_recording_and_target_filtering() -> None:

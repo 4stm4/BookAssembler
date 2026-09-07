@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from enum import Enum
 import hashlib
 import json
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -136,13 +137,19 @@ class SecurityManager:
         return True
 
     def verify_plugin_signature(
-        self, plugin_id: str, signature: str, public_key: str
+        self, plugin_bytes: bytes, signature_b64: str, pubkey_id: str,
+        keys_dir: Optional[Path] = None,
     ) -> bool:
-        """
-        Verifies plugin signature using public_key digest matching.
-        """
-        if not plugin_id or not signature or not public_key:
-            return False
+        """Verify a plugin's Ed25519 signature against a trusted key (RFC 0020 §3).
 
-        expected_sig = hashlib.sha256(f"{plugin_id}:{public_key}".encode("utf-8")).hexdigest()
-        return signature == expected_sig
+        Delegates to src.plugins.signing — the previous implementation compared
+        sha256("{plugin_id}:{public_key}"), which anyone knowing the (public)
+        id and key could forge.
+        """
+        from src.plugins.signing import verify_plugin_with_trusted_key
+
+        if not plugin_bytes or not signature_b64 or not pubkey_id:
+            return False
+        return verify_plugin_with_trusted_key(
+            plugin_bytes, signature_b64, pubkey_id, keys_dir
+        )
