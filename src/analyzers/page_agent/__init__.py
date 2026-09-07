@@ -15,14 +15,12 @@ Without a vision agent only `table`-role recognition is available, and then the
 old heuristics still gate which pages are worth a request.
 """
 
-from src.analyzers.page_agent.config import JPEG_MAX_DIM, JPEG_QUALITY, RENDER_DPI, VISION_CONCURRENCY
+from src.analyzers.page_agent.config import RENDER_DPI, VISION_CONCURRENCY
 from src.analyzers.page_agent.signals import FAILURE_BUDGET_RATIO, MIN_BLOCKS, MIN_FAILURE_BUDGET, MIN_NUMERIC_RATIO, MIN_SHORT_RATIO, log
 from src.analyzers.page_agent.analyzer import PageAgentAnalyzer
 
 __all__ = [
     "FAILURE_BUDGET_RATIO",
-    "JPEG_MAX_DIM",
-    "JPEG_QUALITY",
     "MIN_BLOCKS",
     "MIN_FAILURE_BUDGET",
     "MIN_NUMERIC_RATIO",

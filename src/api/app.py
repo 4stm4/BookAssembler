@@ -2135,7 +2135,7 @@ def create_app() -> FastAPI:
 
         if body.mode == 'agent':
             from src.analyzers.llm_refinement import VALID_TYPES, OLLAMA_MODEL
-from src.analyzers.llm_refinement.rules import _call_ollama
+            from src.analyzers.llm_refinement.rules import _call_ollama
             import re as _re
             text_parts = []
             if hasattr(target, 'inlines'):
@@ -2200,7 +2200,7 @@ from src.analyzers.llm_refinement.rules import _call_ollama
         if doc is None:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
         from src.analyzers.llm_refinement import VALID_TYPES
-from src.analyzers.llm_refinement.rules import _call_ollama
+        from src.analyzers.llm_refinement.rules import _call_ollama
 
         def _text(n: Any) -> str:
             if hasattr(n, "inlines"):
@@ -2240,7 +2240,7 @@ from src.analyzers.llm_refinement.rules import _call_ollama
 
         # Prefer a vision agent (sees the page image); fall back to text-only ollama.
         from src.agents.router import pick as _pick_role, call_infer as _call_agent
-        from src.analyzers.page_agent.rules import _resolve_source_path
+        from src.analyzers.source_io import resolve_source_path as _resolve_source_path
         host_v, model_v, _ = _pick_role("vision")
         model = model_v
         resp: Optional[str] = None

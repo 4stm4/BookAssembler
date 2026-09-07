@@ -102,7 +102,3 @@ def _parse_ocr(text: str, page_box: NormalizedRect) -> List[Tuple[
 
 def _needs_ocr(node: Any) -> bool:
     return bool((getattr(node, "metadata", None) or {}).get("needs_ocr"))
-
-def _resolve_source_path(doc: KnowledgeDocument) -> Optional[str]:
-    from src.analyzers.page_agent.rules import _resolve_source_path as resolve
-    return resolve(doc)
