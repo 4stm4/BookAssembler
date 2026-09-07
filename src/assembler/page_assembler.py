@@ -73,10 +73,12 @@ def group_by_page(doc: KnowledgeDocument) -> Dict[int, PageSlot]:
     """
     pages: Dict[int, PageSlot] = {}
     state = {"last_page": 0}
+    placed_ids: set = set()
 
     def place(pg: int, node: Any) -> None:
         slot = pages.setdefault(pg, PageSlot(page_index=pg))
         slot.blocks.append(node)
+        placed_ids.add(id(node))
         _update_role(slot, node)
         state["last_page"] = pg
 
@@ -114,7 +116,7 @@ def group_by_page(doc: KnowledgeDocument) -> Dict[int, PageSlot]:
         if pg is None:
             pg = state["last_page"]
         for container in pending:
-            if not any(container is b for slot in pages.values() for b in slot.blocks):
+            if id(container) not in placed_ids:
                 place(pg, container)
         place(pg, node)
 
