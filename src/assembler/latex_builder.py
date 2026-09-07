@@ -313,7 +313,18 @@ def render_node(
     elif isinstance(node, TableBlock):
         body.append(_render_table(node))
     elif isinstance(node, FigureBlock):
-        body.append("\\begin{center}[figure]\\end{center}\n")
+        # The linear builder has no image pipeline — page-aware assembly renders
+        # the source region. Emit a valid framed placeholder with whatever
+        # caption/alt text exists, not the broken "\begin{center}[figure]".
+        cap = _esc(_translated(
+            node,
+            getattr(node, "caption_text", "") or node.alt_text or "",
+            target_lang,
+        ))
+        body.append(
+            f"\\begin{{center}}\n\\fbox{{\\textit{{[{cap or 'figure'}]}}}}\n"
+            f"\\end{{center}}\n"
+        )
     elif isinstance(node, EphemeraBlock):
         pass  # ephemera (headers/footers/pagenums) are intentionally omitted
     elif isinstance(node, AlgorithmBlock):
