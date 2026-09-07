@@ -219,12 +219,10 @@ class PdfSourceAdapter(BaseSourceAdapter):
                 btype = block.get("type", 0)
                 bbox = block.get("bbox", (0, 0, pw, ph))
 
-                norm_rect = NormalizedRect(
-                    x0=max(0.0, min(1.0, bbox[0] / pw)),
-                    y0=max(0.0, min(1.0, bbox[1] / ph)),
-                    x1=max(0.0, min(1.0, bbox[2] / pw)),
-                    y1=max(0.0, min(1.0, bbox[3] / ph)),
-                )
+                # _norm_rect sorts the corners; a rotated/negative PyMuPDF bbox
+                # with x0 > x1 would otherwise trip NormalizedRect.__post_init__
+                # and abort the whole parse (the inline version here did).
+                norm_rect = _norm_rect(bbox, pw, ph)
                 if norm_rect.x0 >= norm_rect.x1:
                     continue
                 if norm_rect.y0 >= norm_rect.y1:
