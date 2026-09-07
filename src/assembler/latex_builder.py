@@ -27,7 +27,6 @@ from src.krm.models import (
     KnowledgeDocument,
     FormulaBlock,
     ListBlock,
-    ListItemBlock,
     ParagraphBlock,
     SidebarBlock,
     TableBlock,
@@ -297,21 +296,15 @@ def render_node(
         pseudo = _esc(node.pseudocode)
         body.append(f"\\begin{{framed}}\n\\textbf{{{num}. {name}}}\\\\\n{pseudo}\n\\end{{framed}}\n")
     elif isinstance(node, SidebarBlock):
-        parts: List[str] = []
-        for c in (node.content or []):
-            if getattr(c, "is_tombstoned", False):
-                continue
-            if isinstance(c, ParagraphBlock):
-                parts.append(_esc(_translated(c, _para_text(c), target_lang)))
-            elif isinstance(c, ListBlock):
-                env = "enumerate" if getattr(c, "ordered", False) else "itemize"
-                items = "".join(f"\\item {_esc(_para_text(it))}\n" for it in (c.items or []) if isinstance(it, ListItemBlock))
-                parts.append(f"\\begin{{{env}}}\n{items}\\end{{{env}}}\n")
-            elif isinstance(c, CodeBlock):
-                parts.append(f"\\begin{{verbatim}}\n{getattr(c, 'code', '')}\n\\end{{verbatim}}\n")
-            elif hasattr(c, "inlines"):
-                parts.append(_esc(_para_text(c)))
-        body.append(f"\\begin{{minipage}}{{0.35\\textwidth}}\n{''.join(parts)}\n\\end{{minipage}}\n")
+        # Delegate nested blocks to the shared dispatcher instead of a second,
+        # drifting renderer: the inline copy used ListBlock.ordered (no such
+        # field — always itemize) and CodeBlock.code (it is code_text — the
+        # verbatim came out empty), and ran ListItemBlock through _para_text
+        # (it has .content, not .inlines — every item came out empty).
+        body.append("\\begin{minipage}{0.35\\textwidth}\n")
+        for child in node.content:
+            render(child, depth + 1)
+        body.append("\\end{minipage}\n")
     elif isinstance(node, IndexEntryBlock):
         refs = ", ".join(_esc(r) for r in node.page_refs) if node.page_refs else ""
         body.append(f"\\noindent {_esc(node.term)}\\dotfill {refs}\\\\\n")
