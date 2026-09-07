@@ -132,6 +132,30 @@ class ReadingGraph:
             return list(edges)
         return [e for e in edges if e.track == track]
 
+    def heads(self, track: ReadingTrack = ReadingTrack.MAIN_FLOW) -> List[str]:
+        """Node ids that begin a chain on `track` — an outgoing edge on the
+        track but no incoming one.
+
+        The Reading Graph chains real KRM node ids, not a synthetic "root", so a
+        consumer that wants the reading order has to know where each chain
+        starts. Order follows edge-insertion order, which a reproducible
+        pipeline keeps stable.
+        """
+        ordered: List[str] = []
+        seen: Set[str] = set()
+        for edge in self._edges:
+            if edge.track != track or edge.source_id in seen:
+                continue
+            has_incoming = any(
+                e.track == track
+                for e in self._adjacency_in.get(edge.source_id, [])
+            )
+            if has_incoming:
+                continue
+            seen.add(edge.source_id)
+            ordered.append(edge.source_id)
+        return ordered
+
     def get_sequence(
         self, root_id: str, track: ReadingTrack = ReadingTrack.MAIN_FLOW
     ) -> List[str]:

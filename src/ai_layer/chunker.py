@@ -411,15 +411,18 @@ class SemanticChunker:
                 self._collect_nodes_recursive(root_container, current_path=[])
             )
 
-        # Check ReadingGraph sequence
-        rg_sequence = rg.get_sequence("root", track=ReadingTrack.MAIN_FLOW)
+        # Order nodes by the reading graph (RFC 0007 §5). The RG chains real leaf
+        # ids, never a synthetic "root", so walk from each MAIN_FLOW head. Ids
+        # the RG names that no longer map to a collected node — a block later
+        # analyzers moved into a list/callout/table or tombstoned — are skipped,
+        # and anything the RG does not cover falls through to document order.
         node_map = {node_item[0].id: node_item for node_item in collected_nodes}
 
         ordered_nodes: List[Tuple[BaseKRMNode, str, List[str]]] = []
         visited_ids: Set[str] = set()
 
-        if len(rg_sequence) > 1:
-            for n_id in rg_sequence:
+        for head_id in rg.heads(ReadingTrack.MAIN_FLOW):
+            for n_id in rg.get_sequence(head_id, track=ReadingTrack.MAIN_FLOW):
                 if n_id in node_map and n_id not in visited_ids:
                     ordered_nodes.append(node_map[n_id])
                     visited_ids.add(n_id)
