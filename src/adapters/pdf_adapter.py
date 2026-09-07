@@ -16,6 +16,7 @@ Guarantees:
 """
 
 import hashlib
+import os
 from datetime import datetime, timezone
 from typing import Any, BinaryIO, Dict, List, Optional
 
@@ -186,7 +187,13 @@ class PdfSourceAdapter(BaseSourceAdapter):
         )
 
         opts = options or {}
-        max_pages = opts.get("max_pages", min(50, len(pdf_doc)))
+        # Whole document by default. A silent min(50, …) default truncated every
+        # book longer than 50 pages — for a book pipeline that is data loss, not
+        # a safety limit. A memory-constrained deploy sets KAE_MAX_PAGES; a
+        # per-call options["max_pages"] still overrides both.
+        _env_cap = os.environ.get("KAE_MAX_PAGES")
+        default_max = int(_env_cap) if _env_cap else len(pdf_doc)
+        max_pages = opts.get("max_pages", default_max)
 
         # RFC 0008 §5.2: the adapter performs no semantic analysis (no heading
         # detection). It emits a flat block list under a single root container;
