@@ -11,6 +11,8 @@ a TikZ picture that XeLaTeX compiles into a crisp vector diagram — not a raste
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.assembler.latex_builder import _sanitize_latex_fragment
+
 log = logging.getLogger(__name__)
 
 Rect = Tuple[int, int, int, int]  # x, y, w, h (pixels within the region image)
@@ -314,7 +316,7 @@ def _llm_tikz(
         return ""
     start = resp.index("\\begin{tikzpicture}")
     end = resp.rindex("\\end{tikzpicture}") + len("\\end{tikzpicture}")
-    return resp[start:end]
+    return _sanitize_latex_fragment(resp[start:end])
 
 
 _VISION_PROMPT = (
@@ -333,7 +335,7 @@ def _extract_tikz(text: str) -> str:
         return ""
     s = text.index("\\begin{tikzpicture}")
     e = text.rindex("\\end{tikzpicture}") + len("\\end{tikzpicture}")
-    return text[s:e]
+    return _sanitize_latex_fragment(text[s:e])
 
 
 def _encode_png_b64(img, max_side: int = 1288) -> str:
