@@ -1586,12 +1586,19 @@ def create_app() -> FastAPI:
         return Response(content=img_bytes, media_type="image/jpeg")
 
     def _resolve_sep_provider(provider_id: str) -> Any:
-        """Provider by id, falling back to any local provider (ids change on restart)."""
+        """Provider by id. Ids are regenerated on restart, so if the exact id is
+        gone but exactly one provider is registered, use it — with more than one
+        there is no safe guess, so fail rather than pick the wrong source."""
         try:
             return sep_manager.get_provider(provider_id)
         except KeyError:
-            for pid, prov in getattr(sep_manager, "_providers", {}).items():
-                return prov
+            providers = list(getattr(sep_manager, "_providers", {}).values())
+            if len(providers) == 1:
+                logging.getLogger(__name__).info(
+                    "SEP provider '%s' not found; using the only registered provider",
+                    provider_id,
+                )
+                return providers[0]
             raise
 
     def _find_node(doc_obj: KnowledgeDocument, node_id: str) -> Optional[Any]:
