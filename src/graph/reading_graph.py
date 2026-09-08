@@ -11,6 +11,7 @@ Guarantees:
 - Standard library dependencies only (dataclasses, enum, typing)
 """
 
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
@@ -65,10 +66,10 @@ class ReadingGraph:
             return True
 
         visited: Set[str] = {start_id}
-        queue: List[str] = [start_id]
+        queue: deque[str] = deque([start_id])
 
         while queue:
-            curr = queue.pop(0)
+            curr = queue.popleft()
             for edge in self._adjacency_out.get(curr, []):
                 if edge.track == track:
                     nxt = edge.target_id
