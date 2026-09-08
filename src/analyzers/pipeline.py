@@ -37,8 +37,10 @@ from src.graph.reading_graph import (
 )
 from src.krm.models import (
     BaseKRMNode,
+    ContainerUnit,
     KnowledgeDocument,
     ProvenanceInfo,
+    StructuralUnit,
 )
 from src.krm.traversal import walk as walk_krm
 
@@ -249,11 +251,14 @@ class PipelineRunner:
 
     @staticmethod
     def _krm_signatures(doc: KnowledgeDocument) -> Dict[str, tuple]:
-        """id -> (class name, is_tombstoned) for every KRM node in the tree."""
+        """id -> (class name, is_tombstoned) for every structural KRM node —
+        containers and blocks. Inlines / spans / table cells are sub-parts of a
+        block and legitimately change shape when their block is transformed, so
+        they are not tracked here (RFC 0002 §inv4 already protects span text)."""
         return {
             n.id: (type(n).__name__, bool(n.is_tombstoned))
             for n in walk_krm(doc)
-            if isinstance(n, BaseKRMNode)
+            if isinstance(n, (ContainerUnit, StructuralUnit))
         }
 
     def _verify_krm_permissions(
@@ -268,16 +273,19 @@ class PipelineRunner:
         against the deepcopy snapshot the pipeline already takes for rollback.
         """
         perms = manifest.krm_permissions
+        # A block vanishing is a silent deletion (RFC 0001 §2.4) unless the
+        # analyzer may TRANSFORM_NODE — a transform legitimately consumes a
+        # block into another structure (a paragraph merged into a table cell).
         removed = before.keys() - after.keys()
-        if removed:
+        if removed and KRMPermission.TRANSFORM_NODE not in perms:
             raise SecurityViolationError(
-                f"Analyzer '{manifest.name}' removed {len(removed)} node(s) from "
-                f"the KRM tree; nodes may only be tombstoned (RFC 0001 §2.4)."
+                f"Analyzer '{manifest.name}' removed {len(removed)} block(s) from "
+                f"the KRM tree; blocks may only be tombstoned (RFC 0001 §2.4)."
             )
         added = after.keys() - before.keys()
         if added and KRMPermission.INSERT not in perms:
             raise SecurityViolationError(
-                f"Analyzer '{manifest.name}' inserted {len(added)} node(s) "
+                f"Analyzer '{manifest.name}' inserted {len(added)} block(s) "
                 f"without KRMPermission.INSERT."
             )
         for nid in after.keys() & before.keys():
