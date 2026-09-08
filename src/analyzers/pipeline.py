@@ -247,6 +247,57 @@ class PipelineRunner:
                     )
             registered_names.add(name)
 
+    @staticmethod
+    def _krm_signatures(doc: KnowledgeDocument) -> Dict[str, tuple]:
+        """id -> (class name, is_tombstoned) for every KRM node in the tree."""
+        return {
+            n.id: (type(n).__name__, bool(n.is_tombstoned))
+            for n in walk_krm(doc)
+            if isinstance(n, BaseKRMNode)
+        }
+
+    def _verify_krm_permissions(
+        self, before: Dict[str, tuple], after: Dict[str, tuple], manifest: Any
+    ) -> None:
+        """Compare the KRM tree before/after an analyzer and reject structural
+        changes the manifest did not declare.
+
+        The Guarded* proxies only intercept attribute writes on the document
+        root — analyzers mutate child nodes directly, so the permission matrix
+        (RFC 0005 §2, §5) was effectively unenforced. This post-hoc check runs
+        against the deepcopy snapshot the pipeline already takes for rollback.
+        """
+        perms = manifest.krm_permissions
+        removed = before.keys() - after.keys()
+        if removed:
+            raise SecurityViolationError(
+                f"Analyzer '{manifest.name}' removed {len(removed)} node(s) from "
+                f"the KRM tree; nodes may only be tombstoned (RFC 0001 §2.4)."
+            )
+        added = after.keys() - before.keys()
+        if added and KRMPermission.INSERT not in perms:
+            raise SecurityViolationError(
+                f"Analyzer '{manifest.name}' inserted {len(added)} node(s) "
+                f"without KRMPermission.INSERT."
+            )
+        for nid in after.keys() & before.keys():
+            (b_type, b_tomb), (a_type, a_tomb) = before[nid], after[nid]
+            if a_type != b_type and KRMPermission.TRANSFORM_NODE not in perms:
+                raise SecurityViolationError(
+                    f"Analyzer '{manifest.name}' changed node {nid} "
+                    f"{b_type} -> {a_type} without KRMPermission.TRANSFORM_NODE."
+                )
+            if a_tomb and not b_tomb and KRMPermission.TOMBSTONE not in perms:
+                raise SecurityViolationError(
+                    f"Analyzer '{manifest.name}' tombstoned node {nid} "
+                    f"without KRMPermission.TOMBSTONE."
+                )
+            if b_tomb and not a_tomb:
+                raise SecurityViolationError(
+                    f"Analyzer '{manifest.name}' un-tombstoned node {nid} "
+                    f"(RFC 0001 §2.4)."
+                )
+
     def _record_provenance(self, doc: KnowledgeDocument, analyzer_name: str) -> None:
         """Record `analyzer_name` on every KRM node's applied_analyzers
         (RFC 0011). One shared walk — the hand-rolled recursion here skipped
@@ -290,6 +341,7 @@ class PipelineRunner:
             doc_snap = copy.deepcopy(doc)
             rg_snap = copy.deepcopy(rg)
             kg_snap = copy.deepcopy(kg)
+            krm_before = self._krm_signatures(doc)
 
             guarded_doc = GuardedKnowledgeDocument(doc, manifest.krm_permissions)
             guarded_rg = GuardedReadingGraph(rg, manifest.rg_permissions)
@@ -297,6 +349,9 @@ class PipelineRunner:
 
             try:
                 analyzer.run(guarded_doc, guarded_rg, guarded_kg, context)
+                self._verify_krm_permissions(
+                    krm_before, self._krm_signatures(doc), manifest
+                )
             except SecurityViolationError:
                 raise
             except Exception:
