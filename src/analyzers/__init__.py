@@ -47,7 +47,6 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         # Recovers text on pages with no text layer before anything tries to
         # read it — every detector downstream works on text (RFC 0008 §75).
         OCRAnalyzer(),
-        ReadingOrderAnalyzer(),
         FontStatsAnalyzer(),
         EphemeraDetectorAnalyzer(),
         DiagramDetectorAnalyzer(),
@@ -73,6 +72,13 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         EntityExtractorAnalyzer(),
         ProperNounExtractorAnalyzer(),
         CitationLinkerAnalyzer(),
+        # Last: reading order is built over the final tree. Running it early
+        # (it used to be step 3) linked the pre-restructure leaves, and every
+        # detector that then wrapped a paragraph into a list / callout / table
+        # or promoted it to a container left the MAIN_FLOW edges pointing at
+        # nodes the chunker no longer sees (RFC 0007 §5). No analyzer consumes
+        # the reading graph mid-pipeline, so this is safe to defer.
+        ReadingOrderAnalyzer(),
     ]
 
 __all__ = [

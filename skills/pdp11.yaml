@@ -7,7 +7,6 @@ requires:
 
 steps:
   - NormalizationAnalyzer
-  - ReadingOrderAnalyzer
   - EphemeraDetectorAnalyzer
   - DiagramDetectorAnalyzer
   - HeadingAnalyzer
@@ -27,6 +26,7 @@ steps:
   - EntityExtractorAnalyzer
   - ProperNounExtractorAnalyzer
   - CitationLinkerAnalyzer
+  - ReadingOrderAnalyzer
 
 disabled:
   - TheoremDetectorAnalyzer
