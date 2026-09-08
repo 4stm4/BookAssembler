@@ -226,3 +226,56 @@ if __name__ == "__main__":
     test_integrity_check_corruption_detection()
     test_multilevel_cache_computation_keys()
     print("ALL RFC 0013 STORAGE ENGINE TESTS PASSED PERFECTLY!")
+
+
+def test_kap_bundle_roundtrip_and_content_addressing(tmp_path) -> None:
+    """write_kap_bundle / read_kap_bundle: the deliverable `.kap` the translator
+    emits now has one writer and a reader, and its name is content-only."""
+    from src.artifacts.store import read_kap_bundle, write_kap_bundle
+
+    (tmp_path / "book.pdf").write_bytes(b"%PDF-1.4 body")
+    (tmp_path / "book.tex").write_bytes(b"\\documentclass{book}")
+    (tmp_path / "kae.lock").write_text('{"created_at": "2026-01-01T00:00:00Z"}')
+
+    members = [
+        (str(tmp_path / "book.pdf"), "book.pdf"),
+        (str(tmp_path / "book.tex"), "book.tex"),
+        (str(tmp_path / "kae.lock"), "kae.lock"),
+    ]
+    kap1 = write_kap_bundle(
+        tmp_path, members,
+        extra_manifest={"created_at": "T1", "job_id": "j1"},
+        content_exclude=("kae.lock",),
+    )
+
+    # Same content, different build metadata + lock timestamp → same bundle name.
+    (tmp_path / "kae.lock").write_text('{"created_at": "2026-09-09T12:00:00Z"}')
+    kap2 = write_kap_bundle(
+        tmp_path, members,
+        extra_manifest={"created_at": "T2", "job_id": "j2"},
+        content_exclude=("kae.lock",),
+    )
+    # Content-only address → same file name; the second write overwrites the
+    # first (build metadata differs but is not part of the address).
+    assert kap1.split("/")[-1] == kap2.split("/")[-1]
+
+    manifest, files = read_kap_bundle(kap2)
+    assert files["book.pdf"] == b"%PDF-1.4 body"
+    assert {a["name"] for a in manifest["artifacts"]} == {"book.pdf", "book.tex", "kae.lock"}
+    assert manifest["job_id"] == "j2"
+    assert manifest["kap_version"] == "1.0"
+
+
+def test_kap_bundle_archive_bytes_are_reproducible(tmp_path) -> None:
+    from src.artifacts.store import write_kap_bundle
+
+    (tmp_path / "a.txt").write_bytes(b"alpha")
+    (tmp_path / "b.txt").write_bytes(b"beta")
+    members = [(str(tmp_path / "a.txt"), "a.txt"), (str(tmp_path / "b.txt"), "b.txt")]
+
+    k1 = write_kap_bundle(tmp_path, members)
+    b1 = (tmp_path / k1.split("/")[-1]).read_bytes()
+    (tmp_path / k1.split("/")[-1]).unlink()
+    k2 = write_kap_bundle(tmp_path, members)
+    b2 = (tmp_path / k2.split("/")[-1]).read_bytes()
+    assert b1 == b2
