@@ -298,11 +298,13 @@ class SemanticChunker:
         return sorted(list(pages))
 
     def _extract_graph_links(
-        self, krm_ids: List[str], kg: KnowledgeGraph
+        self, krm_ids: List[str], kg: KnowledgeGraph,
+        node_kinds: Dict[str, str],
     ) -> Tuple[List[str], List[str], List[str]]:
-        """
-        Queries Knowledge Graph edges for figure links, table links, and mentioned entities.
-        """
+        """KG edges from/to this chunk's nodes → referenced figure ids, table
+        ids, and mentioned entity names. `node_kinds` maps a KRM id to
+        "figure"/"table" so a CAPTION_FOR/REFERENCES edge can be classified
+        (node ids are opaque UUIDs — the old `"fig" in id` test never matched)."""
         figures: Set[str] = set()
         tables: Set[str] = set()
         entities: Set[str] = set()
@@ -313,9 +315,10 @@ class SemanticChunker:
                 if entity is not None and entity.name:
                     entities.add(entity.name)
                 elif edge.relation_type in (RelationType.CAPTION_FOR, RelationType.REFERENCES):
-                    if "fig" in edge.target_id.lower():
+                    kind = node_kinds.get(edge.target_id)
+                    if kind == "figure":
                         figures.add(edge.target_id)
-                    elif "tbl" in edge.target_id.lower():
+                    elif kind == "table":
                         tables.add(edge.target_id)
 
             for edge in kg.get_incoming_edges(krm_id):
@@ -335,6 +338,7 @@ class SemanticChunker:
         chunk_type: str,
         language_or_arch: Optional[str],
         kg: KnowledgeGraph,
+        node_kinds: Dict[str, str],
     ) -> Optional[AIContextChunk]:
         """
         Constructs an AIContextChunk from a set of nodes.
@@ -365,7 +369,7 @@ class SemanticChunker:
         contextual_text = f"{breadcrumbs.to_header_string()}\n{raw_text}"
 
         related_figures, related_tables, mentioned_entities = self._extract_graph_links(
-            source_ids, kg
+            source_ids, kg, node_kinds
         )
 
         for node in nodes:
@@ -411,6 +415,13 @@ class SemanticChunker:
                 self._collect_nodes_recursive(root_container, current_path=[])
             )
 
+        node_kinds: Dict[str, str] = {}
+        for n, _pid, _path in collected_nodes:
+            if isinstance(n, FigureBlock):
+                node_kinds[n.id] = "figure"
+            elif isinstance(n, TableBlock):
+                node_kinds[n.id] = "table"
+
         # Order nodes by the reading graph (RFC 0007 §5). The RG chains real leaf
         # ids, never a synthetic "root", so walk from each MAIN_FLOW head. Ids
         # the RG names that no longer map to a collected node — a block later
@@ -453,6 +464,7 @@ class SemanticChunker:
                 chunk_type="narrative",
                 language_or_arch=None,
                 kg=kg,
+                node_kinds=node_kinds,
             )
             if chunk is not None:
                 chunks.append(chunk)
@@ -472,6 +484,7 @@ class SemanticChunker:
                     chunk_type=chunk_type,
                     language_or_arch=lang,
                     kg=kg,
+                    node_kinds=node_kinds,
                 )
                 if chunk is not None:
                     chunks.append(chunk)
