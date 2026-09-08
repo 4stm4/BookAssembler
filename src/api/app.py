@@ -41,6 +41,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.adapters import create_default_registry
+from src.api.stores import BoundedLRU, DocStore
 from src.ai_layer.chunker import SemanticChunker
 from src.ai_layer.exporter import AIKnowledgeExporter
 from src.analyzers import PipelineRunner, create_default_pipeline
@@ -933,12 +934,17 @@ def create_app() -> FastAPI:
 
         return doc
 
-    # Persistent document store (L1 Local Disk per RFC 0013)
-    docs_store: Dict[str, KnowledgeDocument] = {}
-    graphs_store: Dict[str, Dict[str, Any]] = {}
-    progress_store: Dict[str, Dict[str, Any]] = {}
     _docs_dir = os.path.join(os.environ.get("KAE_DATA_DIR", ".kae"), "docs")
     os.makedirs(_docs_dir, exist_ok=True)
+
+    # RFC 0013 §2: L0 is an in-memory LRU, not "every document ever processed".
+    docs_store = DocStore(
+        _docs_dir,
+        _rebuild_document,
+        int(os.environ.get("KAE_DOCS_CACHE_SIZE", "48")),
+    )
+    graphs_store: Any = BoundedLRU(int(os.environ.get("KAE_GRAPHS_CACHE_SIZE", "24")))
+    progress_store: Any = BoundedLRU(int(os.environ.get("KAE_PROGRESS_CACHE_SIZE", "512")))
 
     def _persist_doc(job_id: str, doc: KnowledgeDocument) -> None:
         path = os.path.join(_docs_dir, f"{job_id}.json")
@@ -952,26 +958,26 @@ def create_app() -> FastAPI:
             json.dump(data, f)
 
     def _load_persisted_docs() -> None:
+        """Restore job *records* for every persisted document so /jobs listings
+        work after a restart. The KRM trees themselves are loaded lazily by
+        DocStore on first access — bulk-loading every document a server has ever
+        seen is exactly the unbounded growth the L0 LRU is meant to avoid."""
         for fname in os.listdir(_docs_dir):
             if not fname.endswith(".json"):
                 continue
             job_id = fname[:-5]
-            if job_id in docs_store:
+            if job_manager.get_job(job_id):
                 continue
             try:
                 with open(os.path.join(_docs_dir, fname)) as f:
                     data = json.load(f)
-                doc = _rebuild_document(data)
-                docs_store[job_id] = doc
-                job = job_manager.get_job(job_id)
-                if not job:
-                    job_manager.restore_job(
-                        job_id, data.get("_source_uri", ""), "COMPLETED",
-                        created_at=data.get("_created_at", ""),
-                    )
+                job_manager.restore_job(
+                    job_id, data.get("_source_uri", ""), "COMPLETED",
+                    created_at=data.get("_created_at", ""),
+                )
             except Exception:
                 logging.getLogger(__name__).exception(
-                    "Failed to restore persisted document '%s'; skipping", job_id
+                    "Failed to restore job record for '%s'; skipping", job_id
                 )
 
     @app.post(
