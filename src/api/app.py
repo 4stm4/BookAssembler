@@ -42,6 +42,7 @@ from pydantic import BaseModel, Field
 
 from src.adapters import create_default_registry
 from src.api.stores import BoundedLRU, DocStore
+from src.jobs.resource_guard import ResourceGuard
 from src.ai_layer.chunker import SemanticChunker
 from src.ai_layer.exporter import AIKnowledgeExporter
 from src.analyzers import PipelineRunner, create_default_pipeline
@@ -1313,6 +1314,15 @@ def create_app() -> FastAPI:
             return
 
         try:
+            # RFC 0019 §3: hold new heavy work when the host is over 85% RAM
+            # (parsing + pipeline + LLM can OOM a 3 GB box). Bounded wait, then
+            # proceed rather than fail the job.
+            if not ResourceGuard.check_memory_available():
+                progress_store[job_id] = {
+                    "step": 0, "total": 10, "stage": "Ожидание памяти...",
+                }
+                await ResourceGuard.wait_for_memory()
+
             progress_store[job_id] = {"step": 0, "total": 10, "stage": "Чтение файла..."}
             await pyjobkit_bridge.publish_event({
                 "event": "job_started", "job_id": job_id,
