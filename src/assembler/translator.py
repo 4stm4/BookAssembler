@@ -209,7 +209,6 @@ def _generate_pdf(
     RFC 0012 / 0021: build a XeLaTeX document from the KRM tree and compile it to
     PDF, then emit book.json + kae.lock with output hashes alongside the PDF.
     """
-    import hashlib
     import json
     import shutil
     from datetime import datetime, timezone
@@ -230,14 +229,8 @@ def _generate_pdf(
         shutil.move(pdf_path, output_path)
 
     # RFC 0012: reproducibility manifest (book.json) + lock with output hashes.
-    def _sha256_file(path: str) -> str:
-        h = hashlib.sha256()
-        with open(path, "rb") as fh:
-            for chunk in iter(lambda: fh.read(65536), b""):
-                h.update(chunk)
-        return h.hexdigest()
-
     from src.analyzers.llm_refinement import OLLAMA_MODEL
+    from src.artifacts.store import sha256_file as _sha256_file, write_kap_bundle
     from src.assembler.latex_builder import SOURCE_DATE_EPOCH
 
     lock = {
@@ -265,33 +258,19 @@ def _generate_pdf(
     with open(book_path, "w") as f:
         json.dump({"title": doc.title, "target_lang": target_lang, "source_uri": doc.source_uri}, f, indent=2)
 
-    # RFC 0013: content-addressed .kap bundle (SHA-256-indexed archive) of the
-    # assembled artifacts, for offline deployment / dedup.
-    import tarfile
-
-    members = [(output_path, os.path.basename(output_path)),
-               (tex_path, os.path.basename(tex_path)),
-               (lock_path, "kae.lock"), (book_path, "book.json")]
-    digests = {arc: _sha256_file(p) for p, arc in members if os.path.exists(p)}
-    manifest = {
-        "artifacts": [{"name": arc, "sha256": digests[arc]}
-                      for _, arc in members if arc in digests],
-        "created_at": lock["created_at"],
-        "job_id": job_id,
-    }
-    manifest_path = os.path.join(out_dir, "manifest.json")
-    with open(manifest_path, "w") as f:
-        json.dump(manifest, f, indent=2)
-
-    # RFC 0013: the bundle address is content-only. Build metadata — created_at,
-    # job_id, and kae.lock (which carries its own timestamp) — must not move it,
-    # or the same inputs would produce a different .kap every run and never dedup.
-    content = sorted((arc, h) for arc, h in digests.items() if arc != "kae.lock")
-    bundle_sha = hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
-    kap_path = os.path.join(out_dir, f"{bundle_sha[:16]}.kap")
-    with tarfile.open(kap_path, "w:gz") as tar:
-        tar.add(manifest_path, arcname="manifest.json")
-        for path, arcname in members:
-            if os.path.exists(path):
-                tar.add(path, arcname=arcname)
+    # RFC 0013: content-addressed .kap bundle of the assembled artifacts, for
+    # offline deployment / dedup. One writer (src/artifacts/store) — the bundle
+    # was hand-rolled here and had no reader; kae.lock and build metadata stay
+    # out of the content address so identical inputs dedup.
+    kap_path = write_kap_bundle(
+        out_dir,
+        members=[
+            (output_path, os.path.basename(output_path)),
+            (tex_path, os.path.basename(tex_path)),
+            (lock_path, "kae.lock"),
+            (book_path, "book.json"),
+        ],
+        extra_manifest={"created_at": lock["created_at"], "job_id": job_id},
+        content_exclude=("kae.lock",),
+    )
     log.info("Assembled .kap bundle: %s", kap_path)
