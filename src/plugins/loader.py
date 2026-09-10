@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from src.plugins.manifest import PluginManifest
+from src.plugins.semver import satisfies
 from src.plugins.signing import verify_plugin_with_trusted_key
+from src.version import KAE_CORE_VERSION
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +45,20 @@ class PluginRegistry:
         return manifests
 
     def verify_and_register(self, manifest: PluginManifest, plugin_bytes: bytes) -> bool:
+        try:
+            compatible = satisfies(KAE_CORE_VERSION, manifest.kae_core_version)
+        except ValueError as e:
+            log.warning("Plugin %s has malformed kae_core_version: %s", manifest.id, e)
+            return False
+        if not compatible:
+            log.warning(
+                "Plugin %s requires kae_core_version %s, core is %s, rejecting",
+                manifest.id,
+                manifest.kae_core_version,
+                KAE_CORE_VERSION,
+            )
+            return False
+
         if not manifest.signature or not manifest.pubkey_id:
             log.warning("Plugin %s has no signature, rejecting", manifest.id)
             return False
