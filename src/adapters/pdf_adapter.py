@@ -27,6 +27,7 @@ from src.adapters.base import (
     BaseSourceAdapter,
     SourceAdapterParseError,
 )
+from src.artifacts.store import sha256_file
 from src.krm.identity import derive_source_id
 from src.krm.models import (
     CodeBlock,
@@ -154,6 +155,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     pdf_doc = fitz.open(file_path)
                 except Exception as e:
                     raise SourceAdapterParseError(f"PyMuPDF failed to open PDF: {e}") from e
+                source_sha256 = sha256_file(file_path)
             else:
                 raw_bytes = stream.read()
                 if not isinstance(raw_bytes, bytes):
@@ -162,6 +164,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     pdf_doc = fitz.open(stream=raw_bytes, filetype="pdf")
                 except Exception as e:
                     raise SourceAdapterParseError(f"PyMuPDF failed to open PDF: {e}") from e
+                source_sha256 = hashlib.sha256(raw_bytes).hexdigest()
         except SourceAdapterParseError:
             raise
         except Exception as e:
@@ -171,6 +174,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
         provenance = ProvenanceInfo(
             adapter_name=self.capabilities.adapter_name,
             extraction_timestamp_utc=timestamp,
+            source_sha256=source_sha256,
         )
 
         title = _get_fallback_title(source_uri)
