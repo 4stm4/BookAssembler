@@ -246,7 +246,7 @@ def _generate_pdf(
     # RFC 0012: reproducibility manifest (book.json) + lock with output hashes.
     from src.analyzers.llm_refinement import OLLAMA_MODEL
     from src.artifacts.store import sha256_file as _sha256_file, write_kap_bundle
-    from src.assembler.latex_builder import SOURCE_DATE_EPOCH
+    from src.assembler.latex_builder import SOURCE_DATE_EPOCH, toolchain_fingerprint
 
     lock = {
         "lock_version": "1.0",
@@ -265,6 +265,9 @@ def _generate_pdf(
         "output_hashes": {
             "latex_pdf": f"sha256:{_sha256_file(output_path)}",
         },
+        # RFC 0012 §3.3: which TeX actually produced this PDF — the image installs
+        # TeX Live unpinned, so a later rebuild can differ and must be detectable.
+        "toolchain": {"xelatex": toolchain_fingerprint()},
     }
     lock_path = os.path.join(out_dir, "kae.lock")
     book_path = os.path.join(out_dir, "book.json")
