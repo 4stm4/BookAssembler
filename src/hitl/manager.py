@@ -216,7 +216,11 @@ class HITLManager:
             if tracker.get_lineage(node.id) is None:
                 source_loc = SourceLocation(
                     source_uri=doc.source_uri or "unknown_doc",
-                    source_sha256="",
+                    source_sha256=(
+                        doc.provenance_info.source_sha256
+                        if doc.provenance_info
+                        else ""
+                    ),
                 )
                 tracker.register_entity(node.id, source_loc)
 

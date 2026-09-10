@@ -92,6 +92,9 @@ def _record_translation(block: Any, original: str, translated: str, target_lang:
             "model": OLLAMA_MODEL,
             "temperature": 0.0,
             "seed": 42,
+            "prompt_hash": "sha256:" + hashlib.sha256(
+                _build_translate_prompt(original, target_lang).encode()
+            ).hexdigest(),
         },
         # RFC 0015 §4: drift above the threshold escalates the segment to a
         # human; HITLManager.flag_desynchronized_nodes turns this into a task.
@@ -102,13 +105,14 @@ def _record_translation(block: Any, original: str, translated: str, target_lang:
     }
 
 
+def _build_translate_prompt(text: str, target_lang: str) -> str:
+    return f"Translate to {target_lang}. Output ONLY the translation.\n\n{text}"
+
+
 def _translate_text(text: str, target_lang: str) -> str:
     if not text.strip() or len(text.strip()) < 3:
         return text
-    prompt = (
-        f"Translate to {target_lang}. Output ONLY the translation.\n\n"
-        f"{text}"
-    )
+    prompt = _build_translate_prompt(text, target_lang)
     # Task "translate" (RFC 0022 §4.4): the GPU takes it when the bulk
     # budget allows, the edge cluster when it does not.
     result = generate_text(prompt, task="translate")
