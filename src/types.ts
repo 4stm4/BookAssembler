@@ -284,11 +284,31 @@ export interface KRMNode {
   children?: KRMNode[];
   rows?: string[][];
   page_index?: number;
+  page_end?: number;
   page_role?: string;
+  metadata?: Record<string, any>;
+  caption_text?: string;
+  labels?: Array<{ text: string; x0: number; y0: number; x1: number; y1: number }>;
   bbox?: [number, number, number, number];
+  /** Per-line geometry kept from the sources a merged block absorbed
+   *  (RFC 0021 §5.4). Present on title pages; absent on ordinary blocks. */
+  lines?: Array<{
+    text: string;
+    bbox: [number, number, number, number];
+    style?: KRMStyle;
+  }>;
+  style?: KRMStyle;
   target_type?: string;
   label_number?: string;
   target_block_id?: string;
+}
+
+/** Per-page render strategy, decided server-side (RFC 0021 §3). */
+export interface PageLayout {
+  page_index: number;
+  role: string;
+  layout: 'positional' | 'reflow' | 'blank';
+  block_ids: string[];
 }
 
 export interface GraphVisualizationData {

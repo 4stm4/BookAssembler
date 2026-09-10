@@ -106,3 +106,4 @@ KAE меняет целевой артефакт обработки:
 - **RFC 0019: Job & Resource Manager** — управление заданиями и ресурсами.
 - **RFC 0020: Security & Trust** — подписи плагинов (Ed25519), доверенные ключи.
 - **RFC 0021: Target Document Assembly & Translation** — выходной слой: перевод и гибридная сборка целевого документа.
+- **RFC 0022: GPU Runner Orchestration** — двухуровневый агент (Manager+Runner) для по-требованному включения GPU (Kaggle T4, экономия квоты).

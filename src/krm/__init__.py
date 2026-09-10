@@ -4,6 +4,8 @@ Knowledge Representation Model (KRM) package.
 
 from src.krm.models import (
     BaseKRMNode,
+    BibEntryBlock,
+    CalloutBlock,
     CaptionBlock,
     CodeBlock,
     ContainerUnit,
@@ -37,6 +39,8 @@ from src.krm.models import (
     TableBlock,
     TableCell,
     TextLineInline,
+    TheoremSpec,
+    TocEntryBlock,
     BlankPageBlock,
     TitlePageBlock,
     VisualLayout,
@@ -45,6 +49,8 @@ from src.krm.models import (
 
 __all__ = [
     "BaseKRMNode",
+    "BibEntryBlock",
+    "CalloutBlock",
     "CaptionBlock",
     "CodeBlock",
     "ContainerUnit",
@@ -78,6 +84,8 @@ __all__ = [
     "TableBlock",
     "TableCell",
     "TextLineInline",
+    "TheoremSpec",
+    "TocEntryBlock",
     "BlankPageBlock",
     "TitlePageBlock",
     "VisualLayout",

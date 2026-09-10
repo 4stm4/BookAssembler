@@ -87,10 +87,118 @@ const NODE_TYPE_OPTIONS = [
   'TableBlock', 'CaptionBlock', 'TitlePageBlock', 'BlankPageBlock', 'ContainerUnit',
 ];
 
+// Group a container's children into runs sharing the same page_index. Containers
+// (they can span pages) and blocks without a page go into their own "un-paged"
+// group so we don't wrap them under a misleading page header.
+function groupChildrenByPage(children: KRMNode[]): Array<{ page: number | null; items: KRMNode[] }> {
+  const groups: Array<{ page: number | null; items: KRMNode[] }> = [];
+  for (const ch of children) {
+    const isContainer = ch.type === 'ContainerUnit';
+    const page: number | null = isContainer || ch.page_index == null ? null : ch.page_index;
+    const last = groups[groups.length - 1];
+    if (last && last.page === page) last.items.push(ch);
+    else groups.push({ page, items: [ch] });
+  }
+  return groups;
+}
+
+/** Page-layout map from the server. A context, not a prop, because the node
+ *  tree is rendered recursively and threading it through every level would be
+ *  noise. */
+const PageLayoutCtx = React.createContext<Record<number, PageLayout>>({});
+
+const PageGroup: React.FC<{
+  page: number;
+  jobId?: string;
+  onRefinePage?: (page: number) => Promise<void>;
+  items?: KRMNode[];
+  children: React.ReactNode;
+}> = ({ page, jobId, onRefinePage, items, children }) => {
+  const layout = React.useContext(PageLayoutCtx)[page]?.layout;
+  const [status, setStatus] = useState<'idle' | 'running' | 'done'>('idle');
+  const [showPreview, setShowPreview] = useState(false);
+  // Positional pages (cover, title, toc) open reconstructed — that layout is
+  // the information. Text pages stay a list, which reads better than a scan.
+  const canReconstruct = !!jobId && !!items?.some((n) => n.bbox);
+  const [view, setView] = useState<'list' | 'canvas'>(
+    layout === 'positional' ? 'canvas' : 'list'
+  );
+  useEffect(() => {
+    setView(layout === 'positional' ? 'canvas' : 'list');
+  }, [layout]);
+
+  return (
+    <div className="border border-slate-800/70 rounded-lg bg-slate-950/40">
+      <div className="flex items-center justify-between px-2 py-1 border-b border-slate-800/70 bg-slate-900/40">
+        <div className="text-[11px] font-mono text-slate-400 uppercase tracking-wide flex items-center gap-1.5">
+          Страница {page + 1}
+          {layout === 'positional' && (
+            <span className="px-1 rounded text-[9px] bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              позиционная
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          {canReconstruct && (
+            <button
+              onClick={() => setView((v) => (v === 'canvas' ? 'list' : 'canvas'))}
+              className={`px-1.5 py-0.5 rounded text-[9px] font-mono border flex items-center gap-1 ${
+                view === 'canvas'
+                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                  : 'bg-slate-800/60 text-slate-400 border-slate-700 hover:bg-slate-700/60'
+              }`}
+              title="Восстановить страницу по координатам блоков"
+            >
+              <LayoutTemplate className="w-3 h-3" />
+              {view === 'canvas' ? 'страница' : 'список'}
+            </button>
+          )}
+          {jobId && (
+            <button
+              onClick={() => setShowPreview(true)}
+              className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20 flex items-center gap-1"
+              title={`Открыть превью страницы ${page + 1}`}
+            >
+              <Eye className="w-3 h-3" />
+              превью
+            </button>
+          )}
+          {jobId && onRefinePage && (
+            <button
+              onClick={async () => {
+                setStatus('running');
+                try { await onRefinePage(page); setStatus('done'); }
+                catch { setStatus('idle'); }
+              }}
+              disabled={status === 'running'}
+              className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-violet-500/10 text-violet-300 border border-violet-500/20 hover:bg-violet-500/20 flex items-center gap-1 disabled:opacity-50"
+              title="Агент: пересобрать и уточнить эту страницу"
+            >
+              <Sparkles className="w-3 h-3" />
+              {status === 'running' ? '…' : status === 'done' ? '✓' : 'Агент'}
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="p-2 space-y-1">
+        {view === 'canvas' && canReconstruct ? (
+          <PageCanvas jobId={jobId!} pageIndex={page} nodes={items!} />
+        ) : (
+          children
+        )}
+      </div>
+      {showPreview && jobId && (
+        <PagePreviewModal jobId={jobId} pageIndex={page} onClose={() => setShowPreview(false)} />
+      )}
+    </div>
+  );
+};
+
 const KRMNodeView: React.FC<{
   node: KRMNode; depth: number; jobId?: string;
   onRefineRequest?: (nodeId: string, mode: 'agent' | 'manual', patch?: Partial<KRMNode>) => Promise<void>;
-}> = ({ node, depth, jobId, onRefineRequest }) => {
+  onRefinePage?: (page: number) => Promise<void>;
+}> = ({ node, depth, jobId, onRefineRequest, onRefinePage }) => {
   const [collapsed, setCollapsed] = useState(depth > 1);
   const [expanded, setExpanded] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -101,7 +209,8 @@ const KRMNodeView: React.FC<{
   const isContainer = node.type === 'ContainerUnit';
   const isTable = node.type === 'TableBlock';
   const hasChildren = node.children && node.children.length > 0;
-  const fullText = node.title || node.text || '';
+  const isDiagram = node.type === 'DiagramBlock';
+  const fullText = node.title || node.text || (node as any).caption_text || (isDiagram ? 'Схема' : '');
   const isLong = !isContainer && fullText.length > 80;
   const label = expanded || !isLong ? fullText : fullText.slice(0, 80) + '…';
   const confPct = (node.confidence_score * 100).toFixed(0);
@@ -152,6 +261,7 @@ const KRMNodeView: React.FC<{
                 ? (node.semantic_type === 'toc' ? 'TOC' : node.semantic_type === 'example' ? 'Example' : `L${node.level || 1}`)
                 : node.type === 'TitlePageBlock' ? (node.page_role === 'cover' ? 'Обложка' : 'Title Page')
                 : node.type === 'BlankPageBlock' ? 'Blank'
+                : node.type === 'DiagramBlock' ? 'Схема'
                 : node.type.replace('Block', '')}
             </span>
             <span className={`${expanded ? 'whitespace-pre-wrap break-words' : 'truncate'} ${isContainer ? 'font-semibold text-white' : 'text-slate-300'}`}>
@@ -166,7 +276,6 @@ const KRMNodeView: React.FC<{
                 title={`Открыть превью страницы ${node.page_index! + 1}`}
               >
                 <Eye className="w-3 h-3" />
-                стр.{node.page_index! + 1}
               </button>
             )}
             <span
@@ -195,6 +304,19 @@ const KRMNodeView: React.FC<{
               <Edit3 className="w-3.5 h-3.5" />
               Редактировать
             </button>
+          </div>
+        )}
+        {isDiagram && jobId && (
+          <div className="mt-2 pl-6">
+            <img
+              src={`/api/v1/jobs/${jobId}/diagram/${node.id}`}
+              alt={fullText}
+              className="max-w-md w-full rounded-lg border border-slate-700 bg-white"
+              loading="lazy"
+            />
+            {(node as any).labels?.length > 0 && (
+              <div className="mt-1 text-[10px] text-slate-500">{(node as any).labels.length} надписей сохранено</div>
+            )}
           </div>
         )}
         {refineStatus === 'sending' && (
@@ -271,8 +393,21 @@ const KRMNodeView: React.FC<{
       )}
       {hasChildren && !collapsed && (
         <div className="space-y-1 mt-1">
-          {node.children!.map((child: KRMNode) => (
-            <KRMNodeView key={child.id} node={child} depth={depth + 1} jobId={jobId} onRefineRequest={onRefineRequest} />
+          {groupChildrenByPage(node.children!).map((group, gi) => (
+            group.page == null ? (
+              // Un-paged children (containers, etc.) — render inline.
+              <React.Fragment key={`ung-${gi}`}>
+                {group.items.map((child) => (
+                  <KRMNodeView key={child.id} node={child} depth={depth + 1} jobId={jobId} onRefineRequest={onRefineRequest} onRefinePage={onRefinePage} />
+                ))}
+              </React.Fragment>
+            ) : (
+              <PageGroup key={`pg-${group.page}-${gi}`} page={group.page} jobId={jobId} onRefinePage={onRefinePage} items={group.items}>
+                {group.items.map((child) => (
+                  <KRMNodeView key={child.id} node={child} depth={depth + 1} jobId={jobId} onRefineRequest={onRefineRequest} onRefinePage={onRefinePage} />
+                ))}
+              </PageGroup>
+            )
           ))}
         </div>
       )}
@@ -347,6 +482,14 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
     } catch (err) {
       console.error('Refine failed:', err);
     }
+  };
+
+  const handleRefinePage = async (page: number) => {
+    if (!activeJobId) return;
+    await kaeApi.refinePage(activeJobId, page);
+    // Reload the KRM tree so rebuilt structures (title/diagram/table) show up.
+    const data = await kaeApi.getJobResult(activeJobId);
+    if (data?.containers) setKrmNodes(data.containers);
   };
 
   useEffect(() => {
@@ -709,8 +852,20 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
                 <div className="text-[11px] text-slate-400 uppercase tracking-wider font-sans font-semibold">
                   Иерархия узлов KRM (Knowledge Representation Model)
                 </div>
-                {krmNodes.map((node) => (
-                  <KRMNodeView key={node.id} node={node} depth={0} jobId={activeJobId || undefined} onRefineRequest={handleRefineRequest} />
+                {groupChildrenByPage(krmNodes).map((group, gi) => (
+                  group.page == null ? (
+                    <React.Fragment key={`root-ung-${gi}`}>
+                      {group.items.map((node) => (
+                        <KRMNodeView key={node.id} node={node} depth={0} jobId={activeJobId || undefined} onRefineRequest={handleRefineRequest} onRefinePage={handleRefinePage} />
+                      ))}
+                    </React.Fragment>
+                  ) : (
+                    <PageGroup key={`root-pg-${group.page}-${gi}`} page={group.page} jobId={activeJobId || undefined} onRefinePage={handleRefinePage} items={group.items}>
+                      {group.items.map((node) => (
+                        <KRMNodeView key={node.id} node={node} depth={0} jobId={activeJobId || undefined} onRefineRequest={handleRefineRequest} onRefinePage={handleRefinePage} />
+                      ))}
+                    </PageGroup>
+                  )
                 ))}
               </div>
               </PageLayoutCtx.Provider>

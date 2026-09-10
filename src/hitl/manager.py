@@ -14,15 +14,8 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from src.krm.models import (
-    BaseKRMNode,
-    ContainerUnit,
-    InlineUnit,
-    KnowledgeDocument,
-    ParagraphBlock,
-    SpanUnit,
-    TableBlock,
-)
+from src.krm.models import BaseKRMNode, KnowledgeDocument
+from src.krm.traversal import walk
 from src.provenance.models import ProvenanceTracker, SourceLocation, TransformationStep
 
 
@@ -162,7 +155,9 @@ class HITLManager:
             if key != "rejected" and hasattr(node, key):
                 before_state[key] = getattr(node, key)
 
-        # Apply payload attributes to node
+        # Apply payload attributes to node. Only whitelisted scalar fields go
+        # through setattr; `metadata` merges; everything else is recorded under
+        # metadata rather than written blindly onto the node.
         for key, value in correction_payload.items():
             if key == "rejected":
                 continue
@@ -248,33 +243,10 @@ class HITLManager:
 
     @staticmethod
     def _get_all_nodes(doc: KnowledgeDocument) -> List[BaseKRMNode]:
-        """
-        Recursively collects all KRM nodes from document root containers.
-        """
-        nodes: List[BaseKRMNode] = []
-
-        def _traverse(n: BaseKRMNode) -> None:
-            nodes.append(n)
-            if isinstance(n, ContainerUnit):
-                for child in n.children:
-                    _traverse(child)
-            elif isinstance(n, ParagraphBlock):
-                for inline in n.inlines:
-                    _traverse(inline)
-            elif isinstance(n, InlineUnit):
-                for span in n.spans:
-                    _traverse(span)
-            elif isinstance(n, TableBlock):
-                for row in n.grid:
-                    for cell in row:
-                        _traverse(cell)
-                        for content_node in cell.content:
-                            _traverse(content_node)
-
-        for root in doc.root_containers:
-            _traverse(root)
-
-        return nodes
+        """Every KRM node in the document (RFC 0002 §3), lists/callouts/sidebars
+        included — the hand-rolled walk here skipped those, so a low-confidence
+        block inside a list was never flagged for review."""
+        return [n for n in walk(doc) if isinstance(n, BaseKRMNode)]
 
     def _find_node_by_id(
         self, doc: KnowledgeDocument, target_id: str

@@ -377,6 +377,7 @@ class PipelineRunner:
             doc_snap = copy.deepcopy(doc)
             rg_snap = copy.deepcopy(rg)
             kg_snap = copy.deepcopy(kg)
+            krm_before = self._krm_signatures(doc)
 
             guarded_doc = GuardedKnowledgeDocument(doc, manifest.krm_permissions)
             guarded_rg = GuardedReadingGraph(rg, manifest.rg_permissions)
@@ -384,6 +385,11 @@ class PipelineRunner:
 
             try:
                 analyzer.run(guarded_doc, guarded_rg, guarded_kg, context)
+                self._verify_krm_permissions(
+                    krm_before, self._krm_signatures(doc), manifest
+                )
+            except SecurityViolationError:
+                raise
             except Exception:
                 logging.getLogger(__name__).exception(
                     "Analyzer '%s' failed; rolling back to pre-run state (RFC 0005 §6.1)",
@@ -394,9 +400,12 @@ class PipelineRunner:
                 self._restore_state(kg, kg_snap)
                 continue
 
+            if manifest.calibration_category:
+                self._calibrate_confidences(doc, manifest.calibration_category)
+
             # Upon successful run, log analyzer in provenance info across KRM nodes
             if KRMPermission.READ in manifest.krm_permissions:
-                self._record_provenance_recursive(doc, manifest.name)
+                self._record_provenance(doc, manifest.name)
 
         # RFC 0003 §5.1: verify no dangling KG edges after the pipeline completes.
         krm_ids = self._collect_krm_ids(doc)
@@ -407,32 +416,60 @@ class PipelineRunner:
                 len(violations), "; ".join(violations[:10]),
             )
 
+        # RFC 0004 §5.2/§5.3: Single Head per Track and No Isolation.
+        rg_violations = rg.validate_invariants(
+            self._container_members(doc), self._live_block_ids(doc)
+        )
+        if rg_violations:
+            logging.getLogger(__name__).warning(
+                "RG invariants: %d violation(s): %s",
+                len(rg_violations), "; ".join(rg_violations[:10]),
+            )
+
         if on_progress:
             on_progress(total, total, "done")
 
+    def _container_members(self, doc: KnowledgeDocument) -> Dict[str, Set[str]]:
+        """Live blocks each container holds directly (RFC 0004 §5.2).
+
+        Blocks nested inside another block (a paragraph in a table cell, a list
+        item) are not members: the reading order sequences container-level
+        blocks, and their parent carries what is inside them.
+        """
+        members: Dict[str, Set[str]] = {}
+        for node in walk_krm(doc):
+            if not isinstance(node, ContainerUnit):
+                continue
+            own = {
+                child.id
+                for child in node.children
+                if isinstance(child, StructuralUnit) and not child.is_tombstoned
+            }
+            if own:
+                members[node.id] = own
+        return members
+
+    def _live_block_ids(self, doc: KnowledgeDocument) -> Set[str]:
+        """Blocks a reading track must cover (RFC 0004 §5.3).
+
+        Only blocks a container holds directly: content nested inside a table
+        cell or a list item is carried by that parent block, which is itself
+        sequenced, so requiring a separate edge for it would flag every
+        well-formed document.
+        """
+        live: Set[str] = set()
+        for members in self._container_members(doc).values():
+            live |= members
+        return live
+
     def _collect_krm_ids(self, doc: KnowledgeDocument) -> Set[str]:
-        ids: Set[str] = set()
-
-        def walk(node: BaseKRMNode) -> None:
-            ids.add(node.id)
-            if isinstance(node, ContainerUnit):
-                for child in node.children:
-                    walk(child)
-            elif isinstance(node, ParagraphBlock):
-                for inline in node.inlines:
-                    ids.add(inline.id)
-                    for span in inline.spans:
-                        ids.add(span.id)
-            elif isinstance(node, TableBlock):
-                for row in node.grid:
-                    for cell in row:
-                        ids.add(cell.id)
-                        for block in cell.content:
-                            walk(block)
-
-        for container in doc.root_containers:
-            walk(container)
-        return ids
+        # One shared walk (src/krm/traversal): the hand-rolled version here
+        # skipped SidebarBlock bodies, so edges into a sidebar read as dangling
+        # (RFC 0003 §5.1) even when the target existed.
+        return {
+            n.id for n in walk_krm(doc)
+            if isinstance(n, BaseKRMNode)
+        }
 
     @staticmethod
     def _restore_state(target: Any, snapshot: Any) -> None:

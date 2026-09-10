@@ -269,6 +269,162 @@ class BlankPageBlock(StructuralUnit):
 
 
 @dataclass
+class EphemeraBlock(StructuralUnit):
+    """
+    Running header, footer, or page number — decorative content repeated
+    across pages that is not part of the logical document structure.
+    """
+    ephemera_type: str = "header"  # header, footer, page_number
+    repeated_text: str = ""
+
+
+@dataclass
+class AlgorithmBlock(StructuralUnit):
+    """
+    Pseudocode algorithm block (Algorithm N: Name).
+    Extends the concept of CodeBlock with algorithm-specific metadata.
+    """
+    algorithm_name: str = ""
+    algorithm_number: str = ""
+    pseudocode: str = ""
+
+
+@dataclass
+class SidebarBlock(StructuralUnit):
+    """
+    Content outside the main text column — sidebars, margin notes, pull quotes.
+    Detected by bbox position outside the dominant text column.
+    """
+    sidebar_type: str = "sidebar"  # sidebar, margin_note, pull_quote
+    content: List["StructuralUnit"] = field(default_factory=list)
+
+
+@dataclass
+class IndexEntryBlock(StructuralUnit):
+    """
+    Single entry in a back-of-book index: 'Term, p1, p2-p3'.
+    """
+    term: str = ""
+    page_refs: List[str] = field(default_factory=list)
+    subentries: List["IndexEntryBlock"] = field(default_factory=list)
+
+
+@dataclass
+class ListItemBlock(StructuralUnit):
+    """
+    Single item in a list. Content is any sequence of structural blocks so
+    items may hold nested lists, code blocks, paragraphs, etc.
+
+    `marker` is the original leading marker as it appeared in the source
+    ("•", "-", "1.", "a)", "iii."), preserved for round-trip and confidence
+    debugging; the assembler regenerates markers from `list_style`.
+    """
+    marker: str = ""
+    content: List["StructuralUnit"] = field(default_factory=list)
+
+
+@dataclass
+class BibEntryBlock(StructuralUnit):
+    """
+    Single bibliography / references entry.
+
+    * cite_key   — short identifier for cross-references. When the entry
+                   starts with "[N]", cite_key = "N"; otherwise a
+                   fabricated slug like 'smith2020' (author + year).
+    * authors    — first-pass extraction of the author list; raw source
+                   stays in raw_text so nothing is lost.
+    * year       — 4-digit publication year, if detected.
+    * title      — best-effort title span (between authors and year).
+    * raw_text   — verbatim source line — canonical source of truth for
+                   assembly and translation; parsed fields are advisory.
+    """
+    cite_key: str = ""
+    authors: List[str] = field(default_factory=list)
+    year: Optional[int] = None
+    title: str = ""
+    raw_text: str = ""
+
+
+@dataclass
+class FootnoteBlock(StructuralUnit):
+    """
+    Page footnote text ("¹ …", "* …", "1. …") — the small-font block that
+    sits at the bottom of a page and is referenced from the body by a
+    superscript marker.
+
+    * marker            — original marker as printed ('¹', '*', '1')
+    * footnote_number   — numeric normalization when the marker is a digit
+                          or a superscript numeral; None for symbols
+    * text              — the footnote content (plain text; the assembler
+                          escapes it before emitting \footnotetext{...})
+    * ref_block_ids     — ids of body blocks known to reference this note
+                          (populated post-hoc by a linker; empty until then)
+    """
+    marker: str = ""
+    footnote_number: Optional[int] = None
+    text: str = ""
+    ref_block_ids: List[str] = field(default_factory=list)
+
+
+@dataclass
+class CalloutBlock(StructuralUnit):
+    """
+    Boxed callout / admonition / notice — the kind of block that a book
+    prints inside a coloured frame ("Note", "Warning", "Tip", "Caution",
+    "Important", «Внимание», «Замечание»).
+
+    The assembler renders this via `mdframed`/`tcolorbox` so the visual
+    frame survives the round-trip instead of collapsing into prose.
+
+    * kind     — normalized label: 'note', 'warning', 'tip', 'important', 'caution'
+    * severity — 'info' | 'warning' | 'critical' (mirrors WarningSpec.severity
+                 so downstream renderers can pick a color)
+    * label    — original label as printed in the source ("Warning", «Внимание!»)
+    * content  — nested structural blocks (paragraphs, lists, code, …)
+    """
+    kind: str = "note"
+    severity: str = "info"
+    label: str = ""
+    content: List["StructuralUnit"] = field(default_factory=list)
+
+
+@dataclass
+class TocEntryBlock(StructuralUnit):
+    """
+    Single entry in a table of contents.
+
+    Fields (all optional except entry_text):
+      * entry_text     — full displayed line ("1.2  Registers ..... 45")
+      * chapter_number — parsed leader ("1.2", "Глава 5", "A")
+      * target_page    — 0-based physical page index the entry points to
+      * anchor_id      — id of the ContainerUnit this entry navigates to
+                         (populated once the heading tree is available)
+
+    Kept as a leaf StructuralUnit so a TOC ContainerUnit's children stay
+    typed (no more mixed ParagraphBlock inside `semantic_type='toc'`).
+    """
+    entry_text: str = ""
+    chapter_number: Optional[str] = None
+    target_page: Optional[int] = None
+    anchor_id: Optional[str] = None
+
+
+@dataclass
+class ListBlock(StructuralUnit):
+    """
+    Ordered or unordered list. Children are ListItemBlock (see RFC 0002).
+
+    `list_style` selects the assembler rendering:
+      * "bullet"       → LaTeX itemize / Markdown '-'
+      * "ordered"      → enumerate / '1.'
+      * "alpha"        → enumerate[label=\\alph*]  (a, b, c)
+      * "roman"        → enumerate[label=\\roman*] (i, ii, iii)
+    """
+    list_style: str = "bullet"
+    items: List[ListItemBlock] = field(default_factory=list)
+
+
+@dataclass
 class TitlePageBlock(ParagraphBlock):
     """
     Title page of the book or a major division (half-title, series page, etc.).
