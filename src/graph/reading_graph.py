@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 
+from src.errors import ErrorCategory, KAEError
+
 
 class ReadingTrack(str, Enum):
     """
@@ -40,11 +42,11 @@ class ReadingEdge:
     provenance_analyzer: str = ""
 
 
-class CyclicReadingPathError(Exception):
+class CyclicReadingPathError(KAEError):
     """
     Raised when adding an edge to the Reading Graph creates a cycle on a reading track.
     """
-    pass
+    category = ErrorCategory.ANALYZER_CONTRACT_VIOLATION
 
 
 class ReadingGraph:
