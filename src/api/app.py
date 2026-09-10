@@ -1840,8 +1840,10 @@ def create_app() -> FastAPI:
             return translate_and_assemble(doc, body.target_lang, output_path, job_id, pyjobkit_bridge, loop)
 
         await asyncio.to_thread(_run)
+        desynced = hitl_manager.flag_desynchronized_nodes(doc)
         audit_logger.log("BOOK_ASSEMBLED", "api", {
             "job_id": job_id, "target_lang": body.target_lang, "output": output_path,
+            "desynced_segments": len(desynced),
         })
         return {"status": "completed", "download_url": f"/api/v1/jobs/{job_id}/download/translated"}
 

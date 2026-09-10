@@ -32,6 +32,9 @@ log = logging.getLogger(__name__)
 
 MAX_TRANSLATE_TIME = 3600
 
+# RFC 0015 §4: WER above this escalates the segment to human review.
+DRIFT_WER_THRESHOLD = 0.15
+
 
 def _get_block_text(block: Any) -> str:
     if isinstance(block, ParagraphBlock):
@@ -63,6 +66,7 @@ def _record_translation(block: Any, original: str, translated: str, target_lang:
     import hashlib
 
     from src.analyzers.llm_refinement import OLLAMA_MODEL
+    from src.benchmark.metrics import compute_technical_drift
 
     vl = getattr(block, "visual_layout", None)
     bb = getattr(vl, "bounding_box", None) if vl else None
@@ -71,6 +75,7 @@ def _record_translation(block: Any, original: str, translated: str, target_lang:
          "x0": bb.x0, "y0": bb.y0, "x1": bb.x1, "y1": bb.y1}
         if bb else None
     )
+    drift = compute_technical_drift(original, translated)
     block.metadata = block.metadata or {}
     segments = block.metadata.setdefault("translations", {})
     segments[target_lang] = {
@@ -87,6 +92,12 @@ def _record_translation(block: Any, original: str, translated: str, target_lang:
             "model": OLLAMA_MODEL,
             "temperature": 0.0,
             "seed": 42,
+        },
+        # RFC 0015 §4: drift above the threshold escalates the segment to a
+        # human; HITLManager.flag_desynchronized_nodes turns this into a task.
+        "drift": {
+            "protected_token_wer": drift,
+            "escalated": drift > DRIFT_WER_THRESHOLD,
         },
     }
 
