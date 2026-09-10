@@ -11,18 +11,13 @@ import os
 import time
 from typing import Any, List, Optional
 
-from src.agents.text import generate_text
+from src.analyzers.llm_refinement import _call_ollama
 from src.krm.models import (
-    BibEntryBlock,
     BlankPageBlock,
-    CalloutBlock,
     CaptionBlock,
     CodeBlock,
     ContainerUnit,
-    FootnoteBlock,
     KnowledgeDocument,
-    ListBlock,
-    ListItemBlock,
     ParagraphBlock,
     TableBlock,
     TitlePageBlock,
@@ -31,9 +26,6 @@ from src.krm.models import (
 log = logging.getLogger(__name__)
 
 MAX_TRANSLATE_TIME = 3600
-
-# RFC 0015 §4: WER above this escalates the segment to human review.
-DRIFT_WER_THRESHOLD = 0.15
 
 
 def _get_block_text(block: Any) -> str:
@@ -50,10 +42,6 @@ def _get_block_text(block: Any) -> str:
         return (block.caption_text or "").strip()
     if isinstance(block, CodeBlock):
         return (block.code_text or "").strip()
-    if isinstance(block, FootnoteBlock):
-        return (block.text or "").strip()
-    if isinstance(block, BibEntryBlock):
-        return (block.raw_text or block.title or "").strip()
     return ""
 
 
@@ -66,7 +54,6 @@ def _record_translation(block: Any, original: str, translated: str, target_lang:
     import hashlib
 
     from src.analyzers.llm_refinement import OLLAMA_MODEL
-    from src.benchmark.metrics import compute_technical_drift
 
     vl = getattr(block, "visual_layout", None)
     bb = getattr(vl, "bounding_box", None) if vl else None
@@ -75,7 +62,6 @@ def _record_translation(block: Any, original: str, translated: str, target_lang:
          "x0": bb.x0, "y0": bb.y0, "x1": bb.x1, "y1": bb.y1}
         if bb else None
     )
-    drift = compute_technical_drift(original, translated)
     block.metadata = block.metadata or {}
     segments = block.metadata.setdefault("translations", {})
     segments[target_lang] = {
@@ -92,30 +78,18 @@ def _record_translation(block: Any, original: str, translated: str, target_lang:
             "model": OLLAMA_MODEL,
             "temperature": 0.0,
             "seed": 42,
-            "prompt_hash": "sha256:" + hashlib.sha256(
-                _build_translate_prompt(original, target_lang).encode()
-            ).hexdigest(),
-        },
-        # RFC 0015 §4: drift above the threshold escalates the segment to a
-        # human; HITLManager.flag_desynchronized_nodes turns this into a task.
-        "drift": {
-            "protected_token_wer": drift,
-            "escalated": drift > DRIFT_WER_THRESHOLD,
         },
     }
-
-
-def _build_translate_prompt(text: str, target_lang: str) -> str:
-    return f"Translate to {target_lang}. Output ONLY the translation.\n\n{text}"
 
 
 def _translate_text(text: str, target_lang: str) -> str:
     if not text.strip() or len(text.strip()) < 3:
         return text
-    prompt = _build_translate_prompt(text, target_lang)
-    # Task "translate" (RFC 0022 §4.4): the GPU takes it when the bulk
-    # budget allows, the edge cluster when it does not.
-    result = generate_text(prompt, task="translate")
+    prompt = (
+        f"Translate to {target_lang}. Output ONLY the translation.\n\n"
+        f"{text}"
+    )
+    result = _call_ollama(prompt)
     return result.strip() if result else text
 
 
@@ -134,23 +108,6 @@ def _collect_translatable(container: Any, result: list) -> None:
     elif isinstance(container, CaptionBlock):
         if container.caption_text and len(container.caption_text) > 2:
             result.append(("caption", container))
-    elif isinstance(container, ListBlock):
-        for item in container.items:
-            if getattr(item, "is_tombstoned", False):
-                continue
-            for child in item.content:
-                _collect_translatable(child, result)
-    elif isinstance(container, CalloutBlock):
-        for child in container.content:
-            _collect_translatable(child, result)
-    elif isinstance(container, FootnoteBlock):
-        if container.text and len(container.text) > 2:
-            result.append(("footnote", container))
-    elif isinstance(container, BibEntryBlock):
-        # Bibliography entries are usually kept in source language; translate
-        # only when the target document explicitly wants translated refs.
-        if container.raw_text and len(container.raw_text) > 5:
-            result.append(("bibentry", container))
 
 
 def translate_and_assemble(
@@ -181,10 +138,6 @@ def translate_and_assemble(
             original = _get_block_text(block)
         elif kind == "caption":
             original = block.caption_text
-        elif kind == "footnote":
-            original = block.text
-        elif kind == "bibentry":
-            original = block.raw_text
         else:
             original = ""
 
@@ -211,19 +164,17 @@ def translate_and_assemble(
         if (i + 1) % 10 == 0:
             log.info("Translated %d/%d blocks (%.0fs)", i + 1, total, time.time() - t_start)
 
-    _generate_pdf(doc, target_lang, output_path, job_id, page_aware=True)
+    _generate_pdf(doc, target_lang, output_path, job_id)
     log.info("Translation complete: %d blocks in %.0fs → %s", total, time.time() - t_start, output_path)
     return output_path
 
 
-def _generate_pdf(
-    doc: KnowledgeDocument, target_lang: str, output_path: str, job_id: str,
-    page_aware: bool = False,
-) -> None:
+def _generate_pdf(doc: KnowledgeDocument, target_lang: str, output_path: str, job_id: str) -> None:
     """
     RFC 0012 / 0021: build a XeLaTeX document from the KRM tree and compile it to
     PDF, then emit book.json + kae.lock with output hashes alongside the PDF.
     """
+    import hashlib
     import json
     import shutil
     from datetime import datetime, timezone
@@ -235,7 +186,7 @@ def _generate_pdf(
     base = os.path.splitext(os.path.basename(output_path))[0]
     tex_path = os.path.join(out_dir, f"{base}.tex")
 
-    tex_source = build_latex(doc, target_lang, page_aware=page_aware)
+    tex_source = build_latex(doc, target_lang)
     with open(tex_path, "w", encoding="utf-8") as f:
         f.write(tex_source)
 
@@ -244,15 +195,19 @@ def _generate_pdf(
         shutil.move(pdf_path, output_path)
 
     # RFC 0012: reproducibility manifest (book.json) + lock with output hashes.
+    def _sha256_file(path: str) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
     from src.analyzers.llm_refinement import OLLAMA_MODEL
-    from src.artifacts.store import sha256_file as _sha256_file, write_kap_bundle
-    from src.assembler.latex_builder import SOURCE_DATE_EPOCH, toolchain_fingerprint
 
     lock = {
         "lock_version": "1.0",
         "build_id": f"build-{job_id}",
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "source_date_epoch": SOURCE_DATE_EPOCH,
         "target_lang": target_lang,
         "input_artifacts": [{"source_uri": doc.source_uri}],
         "analyzers": {"pdf_extractor": "PdfSourceAdapter"},
@@ -265,9 +220,6 @@ def _generate_pdf(
         "output_hashes": {
             "latex_pdf": f"sha256:{_sha256_file(output_path)}",
         },
-        # RFC 0012 §3.3: which TeX actually produced this PDF — the image installs
-        # TeX Live unpinned, so a later rebuild can differ and must be detectable.
-        "toolchain": {"xelatex": toolchain_fingerprint()},
     }
     lock_path = os.path.join(out_dir, "kae.lock")
     book_path = os.path.join(out_dir, "book.json")
@@ -276,19 +228,26 @@ def _generate_pdf(
     with open(book_path, "w") as f:
         json.dump({"title": doc.title, "target_lang": target_lang, "source_uri": doc.source_uri}, f, indent=2)
 
-    # RFC 0013: content-addressed .kap bundle of the assembled artifacts, for
-    # offline deployment / dedup. One writer (src/artifacts/store) — the bundle
-    # was hand-rolled here and had no reader; kae.lock and build metadata stay
-    # out of the content address so identical inputs dedup.
-    kap_path = write_kap_bundle(
-        out_dir,
-        members=[
-            (output_path, os.path.basename(output_path)),
-            (tex_path, os.path.basename(tex_path)),
-            (lock_path, "kae.lock"),
-            (book_path, "book.json"),
-        ],
-        extra_manifest={"created_at": lock["created_at"], "job_id": job_id},
-        content_exclude=("kae.lock",),
-    )
+    # RFC 0013: content-addressed .kap bundle (SHA-256-indexed archive) of the
+    # assembled artifacts, for offline deployment / dedup.
+    import tarfile
+
+    members = [(output_path, os.path.basename(output_path)),
+               (tex_path, os.path.basename(tex_path)),
+               (lock_path, "kae.lock"), (book_path, "book.json")]
+    manifest = {"artifacts": [], "created_at": lock["created_at"], "job_id": job_id}
+    for path, arcname in members:
+        if os.path.exists(path):
+            manifest["artifacts"].append({"name": arcname, "sha256": _sha256_file(path)})
+    manifest_path = os.path.join(out_dir, "manifest.json")
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+
+    bundle_sha = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+    kap_path = os.path.join(out_dir, f"{bundle_sha[:16]}.kap")
+    with tarfile.open(kap_path, "w:gz") as tar:
+        tar.add(manifest_path, arcname="manifest.json")
+        for path, arcname in members:
+            if os.path.exists(path):
+                tar.add(path, arcname=arcname)
     log.info("Assembled .kap bundle: %s", kap_path)

@@ -9,31 +9,19 @@ via fontspec + polyglossia). Tombstoned nodes are skipped (RFC 0001 §2.4).
 
 import logging
 import os
-import re
 import subprocess
 from typing import Any, List
 
-from src.security.manager import Capability, get_security_manager
 from src.krm.models import (
-    AlgorithmBlock,
-    BibEntryBlock,
     BlankPageBlock,
-    CalloutBlock,
     CaptionBlock,
     CodeBlock,
     ContainerUnit,
-    EphemeraBlock,
     FigureBlock,
-    FootnoteBlock,
-    IndexEntryBlock,
     KnowledgeDocument,
-    FormulaBlock,
-    ListBlock,
     ParagraphBlock,
-    SidebarBlock,
     TableBlock,
     TitlePageBlock,
-    TocEntryBlock,
 )
 
 log = logging.getLogger(__name__)
@@ -44,20 +32,7 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 \usepackage{polyglossia}
 \setdefaultlanguage{russian}
 \setotherlanguage{english}
-\usepackage{amsmath}
-\usepackage{amsthm}
 \usepackage{graphicx}
-\newtheorem{theorem}{Theorem}[chapter]
-\newtheorem{lemma}[theorem]{Lemma}
-\newtheorem{corollary}[theorem]{Corollary}
-\newtheorem{proposition}[theorem]{Proposition}
-\newtheorem{remark}{Remark}[chapter]
-\newtheorem{exampleenv}{Example}[chapter]
-\theoremstyle{definition}
-\newtheorem{definitionenv}{Definition}[chapter]
-\usepackage{framed}  % lightweight alternative to algorithm2e
-\usepackage[framemethod=default]{mdframed}
-\usepackage{tikz}
 \usepackage[a4paper,margin=2.2cm]{geometry}
 \usepackage{sectsty}
 \setmainfont{DejaVu Serif}
@@ -83,30 +58,6 @@ def _esc(text: str) -> str:
     for ch in text or "":
         out.append(_SPECIAL.get(ch, ch))
     return "".join(out)
-
-
-# Primitives a model- or OCR-authored fragment (formula LaTeX, table LaTeX,
-# reconstructed TikZ) never legitimately needs, and which would let it read
-# host files into the PDF or wedge the compiler. The whole document is built
-# from an untrusted upload, so these fragments — the only places raw,
-# unescaped LaTeX from a model reaches the output — are filtered before
-# xelatex (which already runs without -shell-escape). A stripped primitive
-# becomes \relax (a no-op); its braced argument stays as literal text.
-_LATEX_FORBIDDEN = re.compile(
-    r"\\(?:input|include|includegraphics|write|openin|openout|read|catcode|"
-    r"def|edef|xdef|gdef|let|futurelet|csname|expandafter|immediate|special|"
-    r"usepackage|RequirePackage|directlua|shipout|newread|newwrite|"
-    r"InputIfFileExists|IfFileExists|lstinputlisting|batchmode|scrollmode)"
-    r"(?![A-Za-z@])",
-)
-
-
-def _sanitize_latex_fragment(text: str) -> str:
-    """Neutralise file/IO/programming primitives in a model-authored LaTeX
-    fragment. Math, tabular and TikZ drawing markup pass through untouched."""
-    if not text:
-        return text
-    return _LATEX_FORBIDDEN.sub(r"\\relax ", text)
 
 
 def _para_text(block: ParagraphBlock) -> str:
@@ -159,234 +110,57 @@ def _translated(node: Any, fallback: str, target_lang: str) -> str:
     return fallback
 
 
-def build_latex(
-    doc: KnowledgeDocument, target_lang: str = "", page_aware: bool = False,
-) -> str:
+def build_latex(doc: KnowledgeDocument, target_lang: str = "") -> str:
     """Render the KRM tree to a XeLaTeX document (hybrid strategy, RFC 0021).
 
     If target_lang is given, translated segments (metadata['translations']) are
     used in place of source text; the KRM source itself stays unmodified.
-
-    If page_aware is True, blocks are grouped by page_or_screen_index and
-    rendered per-page with positional layout for special pages (title, toc,
-    cover) and reflow for text pages (RFC 0021 §3).
     """
-    if page_aware:
-        from src.assembler.page_assembler import assemble_pages
-        title = _esc(doc.title or "Untitled")
-        header = f"\\title{{{title}}}\n\\maketitle\n"
-        return _PREAMBLE + header + assemble_pages(doc, target_lang) + _POSTAMBLE
-
     body: List[str] = []
     title = _esc(doc.title or "Untitled")
     body.append(f"\\title{{{title}}}\n\\maketitle\n")
 
+    def render(node: Any, depth: int = 0) -> None:
+        if getattr(node, "is_tombstoned", False):
+            return  # RFC 0001 §2.4
+        if isinstance(node, ContainerUnit):
+            if node.title:
+                cmd = _heading_cmd(node.level)
+                body.append(f"\\{cmd}{{{_esc(_translated(node, node.title, target_lang))}}}\n")
+            for child in node.children:
+                render(child, depth + 1)
+        elif isinstance(node, TitlePageBlock):
+            # Special page: centered, larger (cover/title/copyright).
+            txt = _esc(_para_text(node))
+            if txt:
+                body.append("\\begin{center}\n\\Large\n" + txt + "\n\\end{center}\n\\clearpage\n")
+        elif isinstance(node, BlankPageBlock):
+            body.append("\\clearpage\n")
+        elif isinstance(node, CodeBlock):
+            # Atomic block: verbatim, never reflowed/split (RFC 0007 §5.2).
+            code = node.code_text or ""
+            body.append("\\begin{verbatim}\n" + code + "\n\\end{verbatim}\n")
+        elif isinstance(node, CaptionBlock):
+            cap = _esc(_translated(node, node.caption_text or "", target_lang))
+            if cap:
+                body.append(f"\\textit{{{cap}}}\n\n")
+        elif isinstance(node, TableBlock):
+            body.append(_render_table(node))
+        elif isinstance(node, FigureBlock):
+            body.append("\\begin{center}[figure]\\end{center}\n")
+        elif isinstance(node, ParagraphBlock):
+            txt = _esc(_translated(node, _para_text(node), target_lang))
+            if txt:
+                body.append(_wrap_align(txt, _alignment(node)) + "\n")
+
     for container in doc.root_containers:
-        render_node(body, container, target_lang)
+        render(container)
 
     return _PREAMBLE + "".join(body) + _POSTAMBLE
 
 
-def render_node(
-    body: List[str], node: Any, target_lang: str = "",
-    depth: int = 0, recurse: bool = True,
-) -> None:
-    """Render one KRM node into `body` as LaTeX fragments.
-
-    Single dispatcher shared by the linear builder (`build_latex`) and the
-    page-aware assembler, so every node type is handled identically in both
-    modes and neither can silently drop content.
-
-    `recurse=False` renders a ContainerUnit's heading only, without descending
-    into children — the page-aware assembler places those children itself, on
-    the pages their bbox says they belong to. Bibliography containers are always
-    rendered whole: `thebibliography` is one atomic environment.
-    """
-    def render(n: Any, d: int = 0) -> None:
-        render_node(body, n, target_lang, d, recurse=True)
-
-    if getattr(node, "is_tombstoned", False):
-        return  # RFC 0001 §2.4
-    if isinstance(node, ContainerUnit):
-        if node.semantic_type == "bibliography":
-            entries = [c for c in node.children if isinstance(c, BibEntryBlock)]
-            if entries:
-                if node.title:
-                    cmd = _heading_cmd(node.level)
-                    body.append(
-                        f"\\{cmd}*{{{_esc(_translated(node, node.title, target_lang))}}}\n"
-                    )
-                widest = str(len(entries))
-                body.append(f"\\begin{{thebibliography}}{{{widest}}}\n")
-                for entry in entries:
-                    if entry.is_tombstoned:
-                        continue
-                    key = _esc(entry.cite_key or entry.id[:8])
-                    raw = _esc(_translated(entry, entry.raw_text or entry.title, target_lang))
-                    body.append(f"\\bibitem{{{key}}} {raw}\n")
-                body.append("\\end{thebibliography}\n")
-                return
-        if node.title:
-            cmd = _heading_cmd(node.level)
-            body.append(f"\\{cmd}{{{_esc(_translated(node, node.title, target_lang))}}}\n")
-        if recurse:
-            for child in node.children:
-                render(child, depth + 1)
-    elif isinstance(node, TitlePageBlock):
-        # Special page: centered, larger (cover/title/copyright).
-        txt = _esc(_para_text(node))
-        if txt:
-            body.append("\\begin{center}\n\\Large\n" + txt + "\n\\end{center}\n\\clearpage\n")
-    elif isinstance(node, BlankPageBlock):
-        body.append("\\clearpage\n")
-    elif isinstance(node, CodeBlock):
-        # Atomic block: verbatim, never reflowed/split (RFC 0007 §5.2).
-        code = node.code_text or ""
-        body.append("\\begin{verbatim}\n" + code + "\n\\end{verbatim}\n")
-    elif isinstance(node, CaptionBlock):
-        cap = _esc(_translated(node, node.caption_text or "", target_lang))
-        if cap:
-            body.append(f"\\textit{{{cap}}}\n\n")
-    elif isinstance(node, FootnoteBlock):
-        # We don't have inline references reliably; render as a plain
-        # small-font \footnotetext at the current position so the note
-        # itself is preserved even if the inline superscript is lost.
-        text = _esc(_translated(node, node.text, target_lang))
-        marker = _esc(node.marker) if node.marker else ""
-        body.append(
-            f"\\par\\noindent{{\\footnotesize {marker} {text}}}\\par\n"
-        )
-    elif isinstance(node, CalloutBlock):
-        label = _esc(_translated(node, node.label or node.kind.title(), target_lang))
-        body.append("\\begin{mdframed}\n")
-        if label:
-            body.append(f"\\textbf{{{label}}}\\\\[0.2em]\n")
-        for child in node.content:
-            render(child, depth + 1)
-        body.append("\\end{mdframed}\n")
-    elif isinstance(node, FormulaBlock):
-        # Prefer real LaTeX if a vision agent replaced the fallback. Model
-        # output goes in unescaped, so filter file/IO primitives first.
-        latex = _sanitize_latex_fragment((node.latex_expression or "").strip())
-        md = getattr(node, "metadata", None) or {}
-        has_real_latex = not md.get("needs_vision_ocr", False)
-        if has_real_latex and latex:
-            if node.is_numbered:
-                tag = _esc(node.formula_number or "")
-                body.append(f"\\begin{{equation}}\\tag{{{tag}}}\n{latex}\n\\end{{equation}}\n")
-            else:
-                body.append(f"\\[\n{latex}\n\\]\n")
-        elif latex:
-            # OCR fallback — no guarantee the text is valid LaTeX. Wrap
-            # as \text{} inside display math so xelatex doesn't blow up.
-            safe = _esc(latex)
-            if node.is_numbered:
-                tag = _esc(node.formula_number or "")
-                body.append(f"\\begin{{equation}}\\tag{{{tag}}}\n\\text{{{safe}}}\n\\end{{equation}}\n")
-            else:
-                body.append(f"\\[\n\\text{{{safe}}}\n\\]\n")
-    elif isinstance(node, TocEntryBlock):
-        num = _esc(node.chapter_number or "")
-        title = _esc(_translated(node, node.entry_text, target_lang))
-        page = str(node.target_page + 1) if isinstance(node.target_page, int) else ""
-        left = f"{num}~{title}" if num else title
-        if page:
-            body.append(
-                f"\\noindent {left}\\dotfill {page}\\\\\n"
-            )
-        else:
-            body.append(f"\\noindent {left}\\\\\n")
-    elif isinstance(node, ListBlock):
-        env = "enumerate" if node.list_style in ("ordered", "alpha", "roman") else "itemize"
-        opts = ""
-        if node.list_style == "alpha":
-            opts = "[label=\\alph*)]"
-        elif node.list_style == "roman":
-            opts = "[label=\\roman*.]"
-        body.append(f"\\begin{{{env}}}{opts}\n")
-        for it in node.items:
-            if getattr(it, "is_tombstoned", False):
-                continue
-            body.append("\\item ")
-            for child in it.content:
-                render(child, depth + 1)
-        body.append(f"\\end{{{env}}}\n")
-    elif isinstance(node, TableBlock):
-        body.append(_render_table(node))
-    elif isinstance(node, FigureBlock):
-        # The linear builder has no image pipeline — page-aware assembly renders
-        # the source region. Emit a valid framed placeholder with whatever
-        # caption/alt text exists, not the broken "\begin{center}[figure]".
-        cap = _esc(_translated(
-            node,
-            getattr(node, "caption_text", "") or node.alt_text or "",
-            target_lang,
-        ))
-        body.append(
-            f"\\begin{{center}}\n\\fbox{{\\textit{{[{cap or 'figure'}]}}}}\n"
-            f"\\end{{center}}\n"
-        )
-    elif isinstance(node, EphemeraBlock):
-        pass  # ephemera (headers/footers/pagenums) are intentionally omitted
-    elif isinstance(node, AlgorithmBlock):
-        name = _esc(node.algorithm_name) if node.algorithm_name else ""
-        num = _esc(str(node.algorithm_number or ""))
-        pseudo = _esc(node.pseudocode)
-        body.append(f"\\begin{{framed}}\n\\textbf{{{num}. {name}}}\\\\\n{pseudo}\n\\end{{framed}}\n")
-    elif isinstance(node, SidebarBlock):
-        # Delegate nested blocks to the shared dispatcher instead of a second,
-        # drifting renderer: the inline copy used ListBlock.ordered (no such
-        # field — always itemize) and CodeBlock.code (it is code_text — the
-        # verbatim came out empty), and ran ListItemBlock through _para_text
-        # (it has .content, not .inlines — every item came out empty).
-        body.append("\\begin{minipage}{0.35\\textwidth}\n")
-        for child in node.content:
-            render(child, depth + 1)
-        body.append("\\end{minipage}\n")
-    elif isinstance(node, IndexEntryBlock):
-        refs = ", ".join(_esc(r) for r in node.page_refs) if node.page_refs else ""
-        body.append(f"\\noindent {_esc(node.term)}\\dotfill {refs}\\\\\n")
-    elif isinstance(node, ParagraphBlock):
-        txt = _esc(_translated(node, _para_text(node), target_lang))
-        if not txt:
-            pass
-        elif (node.metadata or {}).get("semantic_decorator") in (
-            "theorem", "proof", "example", "remark", "definition",
-        ):
-            dec = node.metadata["semantic_decorator"]
-            _ENV = {
-                "theorem": {
-                    "theorem": "theorem", "lemma": "lemma",
-                    "corollary": "corollary", "proposition": "proposition",
-                },
-                "proof": "proof",
-                "example": "exampleenv",
-                "remark": "remark",
-                "definition": "definitionenv",
-            }
-            if dec == "theorem":
-                stype = (node.metadata or {}).get("statement_type", "theorem")
-                env = _ENV["theorem"].get(stype, "theorem")
-            elif dec == "proof":
-                env = "proof"
-            else:
-                env = _ENV.get(dec, dec)
-            body.append(f"\\begin{{{env}}}\n{txt}\n\\end{{{env}}}\n")
-        else:
-            body.append(_wrap_align(txt, _alignment(node)) + "\n")
-
-
 def _render_table(table: TableBlock) -> str:
-    """Render a table atomically (RFC 0007 §5.2).
-
-    If a table agent (GOT-OCR/MinerU) recognized it, use that LaTeX verbatim;
-    otherwise fall back to the spatial grid from TableDetector.
-    """
-    md = getattr(table, "metadata", None) or {}
-    recognized = md.get("latex")
-    if recognized:
-        safe = _sanitize_latex_fragment(recognized)
-        return "\\begin{center}\n" + safe + "\n\\end{center}\n"
+    """Render a table atomically (RFC 0007 §5.2)."""
     grid = getattr(table, "grid", None)
     if not grid:
         return ""
@@ -409,51 +183,13 @@ def _render_table(table: TableBlock) -> str:
     return "\n".join(lines)
 
 
-SOURCE_DATE_EPOCH = 0  # 1970-01-01; fixed so rebuilds are byte-identical
-
-
-def toolchain_fingerprint() -> str:
-    """Identity of the TeX toolchain that compiled a build (RFC 0012 §3.3).
-
-    The image installs TeX Live from apt without version pins, so an image built
-    months apart can carry a different XeTeX. Recording the banner in kae.lock
-    makes that visible instead of silently producing a different PDF.
-    """
-    try:
-        proc = subprocess.run(
-            ["xelatex", "--version"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return "unavailable"
-
-    banner = (proc.stdout or b"").decode("utf-8", "replace").strip().splitlines()
-    return banner[0].strip() if banner else "unknown"
-
-
-def compile_xelatex(
-    tex_path: str, work_dir: str, source_date_epoch: int = SOURCE_DATE_EPOCH,
-) -> str:
+def compile_xelatex(tex_path: str, work_dir: str) -> str:
     """
     Compile a .tex file to PDF via XeLaTeX (RFC 0012 §3.3, runs in the locked
     Docker image with pinned TeX Live). Returns the PDF path. Two passes resolve
     the table of contents / references.
-
-    SOURCE_DATE_EPOCH pins the timestamps XeTeX embeds as /CreationDate and
-    /ModDate (and, with FORCE_SOURCE_DATE, the ones \\today expands to). Without
-    it every rebuild produces a different PDF, so the output_hashes recorded in
-    kae.lock would never reproduce (RFC 0021 §5.3).
     """
-    get_security_manager().enforce(Capability.EXECUTE_LATEX_SANDBOX)
-
     base = os.path.splitext(os.path.basename(tex_path))[0]
-    env = {
-        **os.environ,
-        "SOURCE_DATE_EPOCH": str(source_date_epoch),
-        "FORCE_SOURCE_DATE": "1",
-    }
     for _ in range(2):
         proc = subprocess.run(
             ["xelatex", "-interaction=nonstopmode", "-halt-on-error", tex_path],
@@ -461,7 +197,6 @@ def compile_xelatex(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=1800,
-            env=env,
         )
     pdf_path = os.path.join(work_dir, f"{base}.pdf")
     if not os.path.exists(pdf_path):

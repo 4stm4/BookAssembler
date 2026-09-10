@@ -16,8 +16,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set
 
-from src.errors import ErrorCategory, KAEError
-
 
 class ReadingTrack(str, Enum):
     """
@@ -185,51 +183,6 @@ class ReadingGraph:
             sequence.append(current_id)
 
         return sequence
-
-    def validate_invariants(
-        self,
-        container_members: Dict[str, Set[str]],
-        live_block_ids: Set[str],
-    ) -> List[str]:
-        """Check Single Head per Track and No Isolation (RFC 0004 §5.2, §5.3).
-
-        Takes plain id collections rather than KRM objects so the graph stays
-        isolated from KRM internals. Acyclicity (§5.1) needs no check here — it
-        is enforced at insertion time by `add_step`.
-        """
-        violations: List[str] = []
-
-        for container_id, member_ids in sorted(container_members.items()):
-            for track in ReadingTrack:
-                participating = {
-                    member_id for member_id in member_ids
-                    if self.get_outgoing_edges(member_id, track)
-                    or self.get_incoming_edges(member_id, track)
-                }
-                if not participating:
-                    continue
-
-                heads = {
-                    member_id for member_id in participating
-                    if not self.get_incoming_edges(member_id, track)
-                }
-                # More than one start means the container's blocks form disjoint
-                # chains and the reading order is ambiguous. Zero is normal: the
-                # main flow is one chain across the document, so every container
-                # after the first is entered from the one before it.
-                if len(heads) > 1:
-                    violations.append(
-                        f"container '{container_id}' has {len(heads)} disjoint starts "
-                        f"on track '{track.value}' (expected at most 1)"
-                    )
-
-        linked_ids = set(self._adjacency_out) | set(self._adjacency_in)
-        for isolated_id in sorted(live_block_ids - linked_ids):
-            violations.append(
-                f"block '{isolated_id}' is not part of any reading track"
-            )
-
-        return violations
 
     def to_json_dict(self) -> Dict[str, Any]:
         return {
