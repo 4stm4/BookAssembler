@@ -27,6 +27,7 @@ from src.adapters.base import (
     BaseSourceAdapter,
     SourceAdapterParseError,
 )
+from src.adapters._shared import fallback_title
 from src.artifacts.store import sha256_file
 from src.krm.identity import derive_source_id
 from src.krm.models import (
@@ -45,14 +46,6 @@ from src.krm.models import (
 )
 
 
-def _get_fallback_title(source_uri: str) -> str:
-    if not source_uri:
-        return "Untitled Document"
-    base_name = source_uri.rstrip("/").split("/")[-1].split("?")[0]
-    if "." in base_name:
-        derived = base_name.rsplit(".", 1)[0]
-        return derived if derived else "Untitled Document"
-    return base_name if base_name else "Untitled Document"
 
 
 MONOSPACE_FAMILIES = {"courier", "consolas", "mono", "source code", "fira code", "dejavu sans mono"}
@@ -177,7 +170,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
             source_sha256=source_sha256,
         )
 
-        title = _get_fallback_title(source_uri)
+        title = fallback_title(source_uri)
         pdf_title = pdf_doc.metadata.get("title", "").strip() if pdf_doc.metadata else ""
         if pdf_title:
             title = pdf_title
