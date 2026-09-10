@@ -416,8 +416,45 @@ class PipelineRunner:
                 len(violations), "; ".join(violations[:10]),
             )
 
+        # RFC 0004 §5.2/§5.3: Single Head per Track and No Isolation.
+        rg_violations = rg.validate_invariants(
+            self._container_members(doc), self._live_block_ids(doc)
+        )
+        if rg_violations:
+            logging.getLogger(__name__).warning(
+                "RG invariants: %d violation(s): %s",
+                len(rg_violations), "; ".join(rg_violations[:10]),
+            )
+
         if on_progress:
             on_progress(total, total, "done")
+
+    def _container_members(self, doc: KnowledgeDocument) -> Dict[str, Set[str]]:
+        """Live block ids grouped by their nearest enclosing container (RFC 0004 §5.2)."""
+        members: Dict[str, Set[str]] = {}
+        for node in walk_krm(doc):
+            if not isinstance(node, ContainerUnit):
+                continue
+            own: Set[str] = set()
+            for child in node.children:
+                if isinstance(child, ContainerUnit):
+                    continue  # belongs to that container instead
+                for descendant in walk_krm(child):
+                    if (
+                        isinstance(descendant, StructuralUnit)
+                        and not descendant.is_tombstoned
+                    ):
+                        own.add(descendant.id)
+            if own:
+                members[node.id] = own
+        return members
+
+    def _live_block_ids(self, doc: KnowledgeDocument) -> Set[str]:
+        return {
+            node.id
+            for node in walk_krm(doc)
+            if isinstance(node, StructuralUnit) and not node.is_tombstoned
+        }
 
     def _collect_krm_ids(self, doc: KnowledgeDocument) -> Set[str]:
         # One shared walk (src/krm/traversal): the hand-rolled version here
