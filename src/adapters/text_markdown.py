@@ -22,6 +22,7 @@ from src.adapters.base import (
     BaseSourceAdapter,
     SourceAdapterParseError,
 )
+from src.adapters._shared import fallback_title
 from src.krm.models import (
     CodeBlock,
     ContainerUnit,
@@ -32,19 +33,6 @@ from src.krm.models import (
     StyledTextSpan,
     TextLineInline,
 )
-
-
-def _get_fallback_title(source_uri: str) -> str:
-    """
-    Derives a fallback title from the source URI string.
-    """
-    if not source_uri:
-        return "Untitled Document"
-    base_name = source_uri.rstrip("/").split("/")[-1].split("?")[0]
-    if "." in base_name:
-        derived = base_name.rsplit(".", 1)[0]
-        return derived if derived else "Untitled Document"
-    return base_name if base_name else "Untitled Document"
 
 
 class MarkdownSourceAdapter(BaseSourceAdapter):
@@ -94,9 +82,9 @@ class MarkdownSourceAdapter(BaseSourceAdapter):
             source_sha256=hashlib.sha256(raw_bytes).hexdigest(),
         )
 
-        fallback_title = _get_fallback_title(source_uri)
+        doc_title = fallback_title(source_uri)
         doc = KnowledgeDocument(
-            title=fallback_title,
+            title=doc_title,
             source_uri=source_uri,
             source_type="markdown",
             provenance_info=provenance,
@@ -277,16 +265,16 @@ class TextSourceAdapter(BaseSourceAdapter):
             source_sha256=hashlib.sha256(raw_bytes).hexdigest(),
         )
 
-        fallback_title = _get_fallback_title(source_uri)
+        doc_title = fallback_title(source_uri)
         doc = KnowledgeDocument(
-            title=fallback_title,
+            title=doc_title,
             source_uri=source_uri,
             source_type="text",
             provenance_info=provenance,
         )
 
         root_container = ContainerUnit(
-            title=fallback_title,
+            title=doc_title,
             level=1,
             provenance_info=provenance,
         )
