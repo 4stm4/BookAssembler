@@ -29,8 +29,17 @@ def test_two_chains_in_one_container_violate_single_head() -> None:
     )
 
     assert len(violations) == 1
-    assert "2 heads" in violations[0]
+    assert "2 disjoint starts" in violations[0]
     assert "main_flow" in violations[0]
+
+
+def test_container_entered_from_the_previous_one_is_not_a_violation() -> None:
+    """The main flow is one chain across the document: only the first container starts it."""
+    rg = _chain()
+
+    assert rg.validate_invariants(
+        {"chapter_1": {"a"}, "chapter_2": {"b", "c"}}, {"a", "b", "c"}
+    ) == []
 
 
 def test_tracks_are_checked_independently() -> None:
