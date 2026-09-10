@@ -2,14 +2,19 @@
 Unit tests for P3 Infrastructure Modules (RFC 0020).
 
 Tests:
-1. Capability Negotiation & CapabilityMismatchError (RFC 0020)
-2. Plugin Signature Verification (RFC 0020)
-3. Audit Log Engine & Immutable Event History (RFC 0020)
+1. Capability Negotiation & CapabilityMismatchError (RFC 0020 §2.1)
+2. Capability enforcement at execution sites (RFC 0020 §2.1)
+3. Plugin Signature Verification (RFC 0020 §3)
+
+The immutable audit trail (RFC 0020 §4) is covered against the on-disk chained
+logger in tests/unit/test_p0_infrastructure.py — src.audit.logger is the one
+wired into the API.
 """
 
+import pytest
+
 from src.security.manager import (
-    AuditEntry,
-    AuditLogger,
+    Capability,
     CapabilityMismatchError,
     PluginCapabilities,
     SecurityManager,
@@ -98,52 +103,34 @@ def test_plugin_signature_verification(tmp_path) -> None:
     ) is False
 
 
-def test_audit_logger_event_recording_and_target_filtering() -> None:
-    """
-    Test recording audit events, payload SHA-256 hashing, and retrieving history by target_id.
-    """
-    logger = AuditLogger()
+def test_enforce_blocks_ungranted_capability() -> None:
+    """A capability absent from the grant list is refused (RFC 0020 §2.1)."""
+    sec_mgr = SecurityManager(granted_capabilities=[Capability.READ_SEP_STORAGE])
 
-    actor_id = "human_reviewer_01"
-    target_node = "krm_node_paragraph_404"
-    payload = {"edited_text": "Corrected text content", "approved": True}
+    sec_mgr.enforce(Capability.READ_SEP_STORAGE)
 
-    entry1 = logger.log_event(
-        actor_id=actor_id,
-        action_type="HUMAN_CORRECTION",
-        target_id=target_node,
-        payload=payload,
-    )
-
-    assert entry1.actor_id == actor_id
-    assert entry1.action_type == "HUMAN_CORRECTION"
-    assert entry1.target_id == target_node
-    assert len(entry1.payload_hash) == 64
-
-    # Log second event for same target
-    entry2 = logger.log_event(
-        actor_id="system_agent_v2",
-        action_type="KG_EDGE_ADDED",
-        target_id=target_node,
-        payload="Linked to section 2.1",
-    )
-
-    # Log event for another target
-    logger.log_event(
-        actor_id="system_agent_v2",
-        action_type="TOMBSTONE_NODE",
-        target_id="krm_node_paragraph_500",
-        payload="Redundant node removed",
-    )
-
-    target_history = logger.get_history_for_target(target_node)
-    assert len(target_history) == 2
-    assert target_history[0].entry_id == entry1.entry_id
-    assert target_history[1].entry_id == entry2.entry_id
+    with pytest.raises(PermissionError, match="EXECUTE_LATEX_SANDBOX"):
+        sec_mgr.enforce(Capability.EXECUTE_LATEX_SANDBOX)
 
 
-if __name__ == "__main__":
-    test_capability_negotiation_pass_and_fail()
-    test_plugin_signature_verification()
-    test_audit_logger_event_recording_and_target_filtering()
-    print("ALL P3 SECURITY & AUDIT TESTS PASSED!")
+def test_capabilities_read_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("KAE_CAPABILITIES", "ACCESS_NETWORK_LLM, bogus_capability")
+    sec_mgr = SecurityManager.from_env()
+
+    assert sec_mgr.granted == {Capability.ACCESS_NETWORK_LLM}
+
+    monkeypatch.delenv("KAE_CAPABILITIES")
+    assert SecurityManager.from_env().granted == set(Capability)
+
+
+def test_latex_compilation_requires_capability(tmp_path, monkeypatch) -> None:
+    """The xelatex execution site actually asks before running (RFC 0020 §1)."""
+    from src.assembler import latex_builder
+    from src.security.manager import set_security_manager
+
+    set_security_manager(SecurityManager(granted_capabilities=[]))
+    try:
+        with pytest.raises(PermissionError, match="EXECUTE_LATEX_SANDBOX"):
+            latex_builder.compile_xelatex(str(tmp_path / "book.tex"), str(tmp_path))
+    finally:
+        set_security_manager(None)

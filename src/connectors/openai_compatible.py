@@ -21,6 +21,7 @@ from src.connectors.llm_base import (
     LLMRequest,
     LLMResponse,
 )
+from src.security.manager import Capability, get_security_manager
 
 
 class OpenAICompatibleAdapter(BaseLLMAdapter):
@@ -46,6 +47,8 @@ class OpenAICompatibleAdapter(BaseLLMAdapter):
         """
         Synchronous HTTP request worker executed in thread pool.
         """
+        get_security_manager().enforce(Capability.ACCESS_NETWORK_LLM)
+
         url = self.endpoint_url
         if not url.endswith("/chat/completions"):
             url = f"{url}/v1/chat/completions"
