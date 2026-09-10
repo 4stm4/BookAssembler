@@ -430,31 +430,37 @@ class PipelineRunner:
             on_progress(total, total, "done")
 
     def _container_members(self, doc: KnowledgeDocument) -> Dict[str, Set[str]]:
-        """Live block ids grouped by their nearest enclosing container (RFC 0004 §5.2)."""
+        """Live blocks each container holds directly (RFC 0004 §5.2).
+
+        Blocks nested inside another block (a paragraph in a table cell, a list
+        item) are not members: the reading order sequences container-level
+        blocks, and their parent carries what is inside them.
+        """
         members: Dict[str, Set[str]] = {}
         for node in walk_krm(doc):
             if not isinstance(node, ContainerUnit):
                 continue
-            own: Set[str] = set()
-            for child in node.children:
-                if isinstance(child, ContainerUnit):
-                    continue  # belongs to that container instead
-                for descendant in walk_krm(child):
-                    if (
-                        isinstance(descendant, StructuralUnit)
-                        and not descendant.is_tombstoned
-                    ):
-                        own.add(descendant.id)
+            own = {
+                child.id
+                for child in node.children
+                if isinstance(child, StructuralUnit) and not child.is_tombstoned
+            }
             if own:
                 members[node.id] = own
         return members
 
     def _live_block_ids(self, doc: KnowledgeDocument) -> Set[str]:
-        return {
-            node.id
-            for node in walk_krm(doc)
-            if isinstance(node, StructuralUnit) and not node.is_tombstoned
-        }
+        """Blocks a reading track must cover (RFC 0004 §5.3).
+
+        Only blocks a container holds directly: content nested inside a table
+        cell or a list item is carried by that parent block, which is itself
+        sequenced, so requiring a separate edge for it would flag every
+        well-formed document.
+        """
+        live: Set[str] = set()
+        for members in self._container_members(doc).values():
+            live |= members
+        return live
 
     def _collect_krm_ids(self, doc: KnowledgeDocument) -> Set[str]:
         # One shared walk (src/krm/traversal): the hand-rolled version here
