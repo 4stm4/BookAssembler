@@ -58,7 +58,11 @@ class CaptionAnalyzer(BaseAnalyzer):
         replacements: Dict[int, CaptionBlock] = {}
 
         for idx, child in enumerate(container.children):
-            if not isinstance(child, ParagraphBlock):
+            if not isinstance(child, ParagraphBlock) or child.is_tombstoned:
+                # A tombstoned block was removed by an earlier analyzer
+                # (ephemera, table absorption, …); reclassifying it here would
+                # resurrect it and trip the No Silent Deletions guard
+                # (RFC 0001 §2.4).
                 continue
             text = _get_text(child).strip()
             match = _CAPTION_RE.match(text)
