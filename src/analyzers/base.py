@@ -63,6 +63,9 @@ class AnalyzerManifest:
     rg_permissions: Set[RGPermission] = field(default_factory=set)
     kg_permissions: Set[KGPermission] = field(default_factory=set)
     depends_on: List[str] = field(default_factory=list)
+    # Extraction category whose calibration curve applies to the confidences this
+    # analyzer writes (RFC 0017 §3). Empty means scores are already calibrated.
+    calibration_category: str = ""
 
 class BaseAnalyzer(ABC):
     """

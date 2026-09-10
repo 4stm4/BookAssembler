@@ -41,6 +41,7 @@ class OCRAnalyzer(BaseAnalyzer):
                     KRMPermission.TOMBSTONE,
                 },
                 depends_on=["NormalizationAnalyzer"],
+                calibration_category="ocr_extraction",
             )
         )
 
