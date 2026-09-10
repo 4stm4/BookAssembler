@@ -210,6 +210,13 @@ class TocAnalyzer(BaseAnalyzer):
                 extraction_confidence=0.85,
                 confidence_score=min(0.85, conf),
             )
+            # How many entries each source block yields — a block split into
+            # several lines cannot give all of them its own id.
+            per_block: Dict[str, int] = {}
+            for _, block, text in run:
+                if text.strip() and not is_toc_heading(text):
+                    per_block[block.id] = per_block.get(block.id, 0) + 1
+
             for orig_idx, block, text in run:
                 if not text.strip() or is_toc_heading(text):
                     # The "CONTENTS" line is folded into the container, not
@@ -217,8 +224,14 @@ class TocAnalyzer(BaseAnalyzer):
                     tombstone.add(orig_idx)
                     continue
                 entry_text, chapter_number, target_page = parse_entry(text)
+                # RFC 0001 §2.3: a 1:1 reclassification keeps the source id; a
+                # block that split into several entries derives per line.
+                entry_id = (
+                    block.id if per_block.get(block.id) == 1
+                    else derive_composite_id("toc-entry", block.id, entry_text)
+                )
                 entry = TocEntryBlock(
-                    id=derive_composite_id("toc-entry", block.id, entry_text),
+                    id=entry_id,
                     entry_text=entry_text,
                     chapter_number=chapter_number,
                     target_page=target_page,

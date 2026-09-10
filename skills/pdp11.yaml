@@ -21,6 +21,7 @@ steps:
   - TableDetectorAnalyzer
   - PageAgentAnalyzer
   - CaptionAnalyzer
+  - TocAnalyzer
   - BlockClassifierAnalyzer
   - LLMRefinementAnalyzer
   - EntityExtractorAnalyzer
