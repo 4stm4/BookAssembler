@@ -13,6 +13,7 @@ Guarantees:
 """
 
 from datetime import datetime, timezone
+import hashlib
 import re
 from typing import Any, BinaryIO, Dict, List, Optional
 
@@ -90,6 +91,7 @@ class MarkdownSourceAdapter(BaseSourceAdapter):
         provenance = ProvenanceInfo(
             adapter_name=self.capabilities.adapter_name,
             extraction_timestamp_utc=timestamp,
+            source_sha256=hashlib.sha256(raw_bytes).hexdigest(),
         )
 
         fallback_title = _get_fallback_title(source_uri)
@@ -272,6 +274,7 @@ class TextSourceAdapter(BaseSourceAdapter):
         provenance = ProvenanceInfo(
             adapter_name=self.capabilities.adapter_name,
             extraction_timestamp_utc=timestamp,
+            source_sha256=hashlib.sha256(raw_bytes).hexdigest(),
         )
 
         fallback_title = _get_fallback_title(source_uri)

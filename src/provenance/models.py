@@ -40,6 +40,9 @@ class TransformationStep:
     output_snapshot_hash: str
     mutation_description: str
     confidence_score: float = 1.0
+    # Digest of the prompt that produced this step, so a replay can tell whether
+    # a rebuild would ask the model the same question (RFC 0012 §4).
+    prompt_hash: str = ""
     step_id: str = field(default_factory=lambda: str(uuid4()))
     timestamp_utc: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()

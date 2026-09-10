@@ -92,6 +92,9 @@ class ProvenanceInfo:
     adapter_name: str
     extraction_timestamp_utc: str
     source_byte_offset: Optional[Tuple[int, int]] = None
+    # Digest of the bytes this document was parsed from, so lineage records can
+    # be validated against the source they claim (RFC 0011 §3.1).
+    source_sha256: str = ""
     applied_analyzers: List[str] = field(default_factory=list)
     applied_skills: List[str] = field(default_factory=list)
 
