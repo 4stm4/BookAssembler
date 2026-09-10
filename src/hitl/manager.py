@@ -91,6 +91,41 @@ class HITLManager:
 
         return flagged_items
 
+    def flag_desynchronized_nodes(
+        self, doc: KnowledgeDocument, wer_threshold: float = 0.15
+    ) -> List[HITLTaskItem]:
+        """
+        Queues translated segments whose technical drift exceeds the threshold
+        (RFC 0015 §4). Drift is recorded per segment by the translator; a segment
+        that lost mnemonics, register names or formulas needs a human even when
+        the node's own confidence is high.
+        """
+        flagged_items: List[HITLTaskItem] = []
+
+        for node in self._get_all_nodes(doc):
+            if node.is_tombstoned:
+                continue
+            translations = (node.metadata or {}).get("translations") or {}
+            for target_lang, segment in translations.items():
+                drift = (segment or {}).get("drift") or {}
+                wer = float(drift.get("protected_token_wer", 0.0))
+                if wer <= wer_threshold:
+                    continue
+                task = HITLTaskItem(
+                    target_krm_id=node.id,
+                    current_confidence=node.confidence_score,
+                    suggested_fix={
+                        "reason": "DESYNC_TEXT_DRIFT",
+                        "target_lang": target_lang,
+                        "protected_token_wer": wer,
+                    },
+                    status=CorrectionStatus.PENDING_HUMAN_REVIEW,
+                )
+                self._tasks[task.task_id] = task
+                flagged_items.append(task)
+
+        return flagged_items
+
     def apply_human_correction(
         self,
         doc: KnowledgeDocument,
