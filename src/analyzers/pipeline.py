@@ -24,6 +24,7 @@ from src.analyzers.base import (
     RGPermission,
     SecurityViolationError,
 )
+from src.calibration.engine import ConfidenceCalibrator
 from src.graph.knowledge_graph import (
     KGEdge,
     KGEntityNode,
@@ -231,6 +232,7 @@ class PipelineRunner:
     def __init__(self, analyzers: List[BaseAnalyzer]) -> None:
         self._validate_dependencies(analyzers)
         self._analyzers = list(analyzers)
+        self._calibrator = ConfidenceCalibrator()
 
     def _validate_dependencies(self, analyzers: List[BaseAnalyzer]) -> None:
         """
@@ -324,6 +326,32 @@ class PipelineRunner:
             elif analyzer_name not in node.provenance_info.applied_analyzers:
                 node.provenance_info.applied_analyzers.append(analyzer_name)
 
+    def _calibrate_confidences(self, doc: KnowledgeDocument, category: str) -> None:
+        """Rescale raw confidences to empirical accuracy (RFC 0017 §3).
+
+        A node is calibrated once — the marker keeps a later analyzer in the same
+        run from rescaling an already-calibrated score, and preserves the raw
+        value so the mapping stays auditable.
+        """
+        for node in walk_krm(doc):
+            if not isinstance(node, BaseKRMNode):
+                continue
+            marker = (node.metadata or {}).get("calibration")
+            if marker:
+                continue
+
+            raw = node.confidence_score
+            calibrated = self._calibrator.calibrate_score(raw, category)
+            if calibrated == raw:
+                continue
+
+            node.confidence_score = calibrated
+            node.metadata = node.metadata or {}
+            node.metadata["calibration"] = {
+                "category": category,
+                "raw_confidence": raw,
+            }
+
     def execute(
         self,
         doc: KnowledgeDocument,
@@ -371,6 +399,9 @@ class PipelineRunner:
                 self._restore_state(rg, rg_snap)
                 self._restore_state(kg, kg_snap)
                 continue
+
+            if manifest.calibration_category:
+                self._calibrate_confidences(doc, manifest.calibration_category)
 
             # Upon successful run, log analyzer in provenance info across KRM nodes
             if KRMPermission.READ in manifest.krm_permissions:
