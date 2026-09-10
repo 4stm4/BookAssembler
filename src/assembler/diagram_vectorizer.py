@@ -8,12 +8,60 @@ in-diagram text labels (already stored on the DiagramBlock) to the boxes, and em
 a TikZ picture that XeLaTeX compiles into a crisp vector diagram — not a raster crop.
 """
 
+import hashlib
+import json
 import logging
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.assembler.latex_builder import _sanitize_latex_fragment
 
 log = logging.getLogger(__name__)
+
+
+def _cache_dir() -> str:
+    base = os.environ.get("KAE_SSD_PATH") or os.environ.get("KAE_DATA_DIR", ".kae")
+    return os.path.join(base, "cache", "tikz")
+
+
+def _cache_key(img: Any, labels: List[Dict[str, Any]], backend: str) -> str:
+    """Content address of a vectorization: the pixels in, the backend that runs."""
+    digest = hashlib.sha256()
+    digest.update(bytes(img.shape))
+    digest.update(img.tobytes())
+    digest.update(json.dumps(labels, sort_keys=True, default=str).encode())
+    digest.update(backend.encode())
+    return digest.hexdigest()
+
+
+def _cache_read(key: str) -> Optional[str]:
+    path = os.path.join(_cache_dir(), f"{key}.tex")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+def _cache_write(key: str, tikz: str) -> None:
+    directory = _cache_dir()
+    try:
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, f"{key}.tex"), "w", encoding="utf-8") as handle:
+            handle.write(tikz)
+    except OSError:
+        log.warning("Could not cache TikZ vectorization under %s", directory)
+
+
+def _backend_id() -> str:
+    """Which reconstruction path the current environment selects."""
+    if os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"):
+        return "cloud_vision"
+    if os.environ.get("VISION_OLLAMA_MODEL"):
+        return f"ollama_vision:{os.environ['VISION_OLLAMA_MODEL']}"
+    if os.environ.get("LLM_TIKZ_MODEL"):
+        return f"llm_tikz:{os.environ['LLM_TIKZ_MODEL']}"
+    return "cv_fallback"
 
 Rect = Tuple[int, int, int, int]  # x, y, w, h (pixels within the region image)
 
@@ -164,7 +212,12 @@ def vectorize_diagram(
         inside, header, free = _match_labels_to_boxes(boxes, region_labels, iw, ih)
         arrows = _detect_arrows(gray, boxes)
 
-        import os
+        # RFC 0021 §3.1: the TikZ for a region is content-addressed, so a rebuild
+        # of the same book does not send the same diagram to the model again.
+        cache_key = _cache_key(img, region_labels, _backend_id())
+        cached = _cache_read(cache_key)
+        if cached is not None:
+            return cached
 
         # Preferred (RFC 0011): a cloud vision model reconstructs the diagram image
         # into TikZ directly — the only path that reaches ~99% on complex schematics.
@@ -172,6 +225,7 @@ def vectorize_diagram(
         if os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"):
             vt = _vision_tikz(img, boxes, inside, header, iw, ih)
             if vt:
+                _cache_write(cache_key, vt)
                 return vt
 
         # Local ollama vision agent (llava/qwen-vl) — no cloud, no API key. Best on
@@ -179,16 +233,21 @@ def vectorize_diagram(
         if os.environ.get("VISION_OLLAMA_MODEL"):
             vt = _ollama_vision_tikz(img, inside, header, boxes)
             if vt:
+                _cache_write(cache_key, vt)
                 return vt
 
         # Local coder LLM: opt-in, degrades on weak CPU models (see notes on _llm_tikz).
         if os.environ.get("LLM_TIKZ_MODEL"):
             llm_tikz = _llm_tikz(boxes, inside, header, arrows, iw, ih)
             if llm_tikz:
+                _cache_write(cache_key, llm_tikz)
                 return llm_tikz
 
         # Deterministic CV fallback (works offline; good on simple diagrams).
-        return _build_tikz(boxes, inside, header, arrows, iw, ih)
+        tikz = _build_tikz(boxes, inside, header, arrows, iw, ih)
+        if tikz:
+            _cache_write(cache_key, tikz)
+        return tikz
     except Exception:
         log.exception("Diagram vectorization failed on page %s", page_index)
         return ""
