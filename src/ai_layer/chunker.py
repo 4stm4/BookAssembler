@@ -219,6 +219,17 @@ def _get_node_chunk_type_and_lang(node: BaseKRMNode) -> Tuple[str, Optional[str]
     return "narrative", None
 
 
+def _source_location(node: BaseKRMNode) -> Dict[str, Any]:
+    """Page and normalized bbox of a source node, for dataset provenance (RFC 0018 §3)."""
+    layout = node.visual_layout
+    box = layout.bounding_box if layout else None
+    return {
+        "krm_id": node.id,
+        "page": layout.page_or_screen_index if layout else None,
+        "bbox": [box.x0, box.y0, box.x1, box.y1] if box else None,
+    }
+
+
 def _is_atomic_block(node: BaseKRMNode) -> bool:
     """
     Returns True if the node is an atomic (non-splittable) block unit.
@@ -396,6 +407,7 @@ class SemanticChunker:
             related_figure_ids=related_figures,
             related_table_ids=related_tables,
             mentioned_entities=mentioned_entities,
+            source_locations=[_source_location(node) for node in nodes],
             metadata=metadata,
             breadcrumbs=breadcrumbs,
         )
