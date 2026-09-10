@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from src.errors import ErrorCategory, KAEError
 from src.plugins.manifest import PluginManifest
 from src.plugins.semver import satisfies
 from src.plugins.signing import verify_plugin_with_trusted_key
@@ -13,8 +14,8 @@ from src.version import KAE_CORE_VERSION
 log = logging.getLogger(__name__)
 
 
-class PluginLoadError(Exception):
-    pass
+class PluginLoadError(KAEError):
+    category = ErrorCategory.PLUGIN_LOAD_FAILURE
 
 
 class PluginRegistry:

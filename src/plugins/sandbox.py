@@ -13,6 +13,7 @@ import traceback
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
+from src.errors import ErrorCategory, KAEError
 from src.plugins.manifest import PluginPermissions
 
 log = logging.getLogger(__name__)
@@ -20,8 +21,10 @@ log = logging.getLogger(__name__)
 _KILL_GRACE_SECONDS = 1.0
 
 
-class PluginExecutionError(Exception):
+class PluginExecutionError(KAEError):
     """Raised when sandboxed plugin execution fails, times out, or is killed."""
+
+    category = ErrorCategory.PLUGIN_EXECUTION_FAILURE
 
 
 class PluginSandboxRunner(ABC):

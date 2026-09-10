@@ -12,12 +12,14 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
+from src.errors import ErrorCategory, KAEError
 
-class LLMProviderUnavailableError(Exception):
+
+class LLMProviderUnavailableError(KAEError):
     """
     Raised when an LLM provider endpoint is unreachable, timed out, or unavailable.
     """
-    pass
+    category = ErrorCategory.LLM_TIMEOUT
 
 
 @dataclass

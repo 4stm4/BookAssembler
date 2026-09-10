@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Tuple, Union
 
 from src.benchmark.metrics import compute_link_f1, compute_teds, compute_wer
 from src.graph.knowledge_graph import KnowledgeGraph
+from src.errors import ErrorCategory, KAEError
 from src.krm.models import (
     BaseKRMNode,
     CodeBlock,
@@ -34,11 +35,11 @@ from src.krm.models import (
 )
 
 
-class RegressionError(Exception):
+class RegressionError(KAEError):
     """
     Raised when benchmark metrics drop below strict regression thresholds.
     """
-    pass
+    category = ErrorCategory.QUALITY_REGRESSION
 
 
 @dataclass
