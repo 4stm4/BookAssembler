@@ -17,12 +17,14 @@ from typing import Any, BinaryIO, Dict, List, Optional
 
 from src.krm.models import KnowledgeDocument
 
+from src.errors import ErrorCategory, KAEError
 
-class SourceAdapterParseError(Exception):
+
+class SourceAdapterParseError(KAEError):
     """
     Unified exception raised when a source adapter fails to parse an input stream.
     """
-    pass
+    category = ErrorCategory.ANALYZER_PARSE_FAILURE
 
 
 @dataclass(frozen=True)
