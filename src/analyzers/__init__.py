@@ -31,6 +31,7 @@ from src.analyzers.heading import HeadingAnalyzer
 from src.analyzers.index import IndexDetectorAnalyzer
 from src.analyzers.list import ListDetectorAnalyzer
 from src.analyzers.normalization import NormalizationAnalyzer
+from src.analyzers.notebook_outputs import NotebookOutputAnalyzer
 from src.analyzers.ocr import OCRAnalyzer
 from src.analyzers.page_agent import PageAgentAnalyzer
 from src.analyzers.pipeline import PipelineRunner
@@ -47,6 +48,8 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         # Recovers text on pages with no text layer before anything tries to
         # read it — every detector downstream works on text (RFC 0008 §75).
         OCRAnalyzer(),
+        # No-op unless the document came from a notebook (RFC 0008 §3.4).
+        NotebookOutputAnalyzer(),
         FontStatsAnalyzer(),
         EphemeraDetectorAnalyzer(),
         DiagramDetectorAnalyzer(),
@@ -103,6 +106,7 @@ __all__ = [
     "ListDetectorAnalyzer",
     "KRMPermission",
     "NormalizationAnalyzer",
+    "NotebookOutputAnalyzer",
     "PipelineRunner",
     "ProperNounExtractorAnalyzer",
     "RGPermission",
