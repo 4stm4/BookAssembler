@@ -22,7 +22,7 @@ import io
 import json
 import logging
 import os
-from typing import Any, AsyncGenerator, BinaryIO, Dict, List, Optional
+from typing import Any, AsyncGenerator, BinaryIO, Dict, List, Optional, Union
 from uuid import uuid4
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
@@ -45,6 +45,7 @@ from src.api.stores import BoundedLRU, DocStore
 from src.jobs.resource_guard import ResourceGuard
 from src.ai_layer.chunker import SemanticChunker
 from src.ai_layer.exporter import AIKnowledgeExporter
+from src.eval.retrieval import DatasetGenerator, RetrievalEvaluator
 from src.analyzers import PipelineRunner, create_default_pipeline
 from src.audit.logger import AuditLogger
 from src.graph.knowledge_graph import KnowledgeGraph
@@ -1754,6 +1755,53 @@ def create_app() -> FastAPI:
         chunker = SemanticChunker()
         chunks = chunker.build_chunks(doc, rg, kg)
         return AIKnowledgeExporter.export_chunks_manifest(chunks)
+
+    @app.get("/api/v1/jobs/{job_id}/dataset")
+    async def get_job_dataset(job_id: str, kind: str = "instruction") -> Dict[str, Any]:
+        """Instruction/QA fine-tuning dataset built from the job's chunks (RFC 0018 §3)."""
+        if kind not in ("instruction", "qa"):
+            raise HTTPException(status_code=400, detail="kind must be 'instruction' or 'qa'")
+
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+
+        graphs = graphs_store.get(job_id, {})
+        chunks = SemanticChunker().build_chunks(
+            doc, graphs.get("rg", ReadingGraph()), graphs.get("kg", KnowledgeGraph())
+        )
+        items = (
+            DatasetGenerator.generate_instruction_dataset(chunks)
+            if kind == "instruction"
+            else DatasetGenerator.generate_qa_dataset(chunks)
+        )
+        return {"job_id": job_id, "kind": kind, "count": len(items), "items": items}
+
+    class RetrievalEvalRequest(BaseModel):
+        retrieved_ids: List[str]
+        relevant_ids: Union[List[str], Dict[str, float]]
+        k: int = 10
+
+    @app.post("/api/v1/eval/retrieval")
+    async def evaluate_retrieval(body: RetrievalEvalRequest) -> Dict[str, Any]:
+        """Recall@K / MRR / nDCG@K for one query (RFC 0018 §2)."""
+        relevant_for_rank = (
+            list(body.relevant_ids)
+            if isinstance(body.relevant_ids, dict)
+            else body.relevant_ids
+        )
+        return {
+            "recall_at_k": RetrievalEvaluator.compute_recall_at_k(
+                body.retrieved_ids, relevant_for_rank, body.k
+            ),
+            "mrr_score": RetrievalEvaluator.compute_mrr(
+                body.retrieved_ids, relevant_for_rank
+            ),
+            "ndcg_score": RetrievalEvaluator.compute_ndcg(
+                body.retrieved_ids, body.relevant_ids, body.k
+            ),
+            "k": body.k,
+        }
 
     class TranslateRequest(BaseModel):
         source_text: str
