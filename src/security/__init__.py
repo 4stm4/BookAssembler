@@ -1,24 +1,26 @@
 """
-Security, Capability Negotiation & Audit Log Engine for Knowledge Assembly Engine (KAE).
+Security, Capability Negotiation & Trust Engine for Knowledge Assembly Engine (KAE).
 
-Provides TrustLevel, CapabilityMismatchError, PluginCapabilities, AuditEntry, AuditLogger,
-and SecurityManager according to RFC 0020.
+Provides Capability, TrustLevel, CapabilityMismatchError, PluginCapabilities and
+SecurityManager according to RFC 0020. The audit trail lives in src.audit.logger.
 """
 
 from src.security.manager import (
-    AuditEntry,
-    AuditLogger,
+    Capability,
     CapabilityMismatchError,
     PluginCapabilities,
     SecurityManager,
     TrustLevel,
+    get_security_manager,
+    set_security_manager,
 )
 
 __all__ = [
-    "AuditEntry",
-    "AuditLogger",
+    "Capability",
     "CapabilityMismatchError",
     "PluginCapabilities",
     "SecurityManager",
     "TrustLevel",
+    "get_security_manager",
+    "set_security_manager",
 ]
