@@ -86,7 +86,7 @@ tikz_vectorization` из RFC 0011 §2.2. Конвейер (`src/assembler/diagra
    прямоугольников-блоков, стрелок, слов (`get_text("words")`, без склейки OCR),
    сопоставление текста/заголовков с блоками.
 2. **tikz_vectorization** одним из агентов (порядок по доступности):
-   - **Cloud vision** (`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`): картинка + CV-подсказки
+   - **Cloud vision** (`OPENAI_API_KEY`): картинка + CV-подсказки
      → TikZ. Даёт ~99% на сложных схемах. Данные уходят во внешний сервис —
      допустимо только для не-приватных источников.
    - **Локальный vision-агент** (ollama `llava`/`qwen2.5-vl`): та же задача на своём
@@ -101,7 +101,7 @@ tikz_vectorization` из RFC 0011 §2.2. Конвейер (`src/assembler/diagra
 |---|---|---|---|
 | RPi5/OrangePi (CPU) | ollama coder/vision | минуты/схема | локально |
 | **Google Colab (GPU)** | ollama vision/coder на T4/A100 | секунды/схема | локально* |
-| Cloud API | gpt-4o / claude vision | секунды/схема | данные в облаке |
+| Cloud API | gpt-4o vision | секунды/схема | данные в облаке |
 
 \* **Colab GPU-агент**: ноутбук поднимает `ollama serve` на бесплатном/Pro GPU и
 пробрасывает порт (cloudflared/ngrok) как ещё один агент в менеджере агентов

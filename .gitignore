@@ -31,7 +31,7 @@ ch*_compiled.pdf
 glossary_suggestions.json
 *.pdfhash
 
-# Claude Code / IDE local config
+# Local tooling / IDE config
 .claude/
 .vscode/
 .idea/
