@@ -13,6 +13,7 @@ import re
 import subprocess
 from typing import Any, List
 
+from src.security.manager import Capability, get_security_manager
 from src.krm.models import (
     AlgorithmBlock,
     BibEntryBlock,
@@ -424,6 +425,8 @@ def compile_xelatex(
     it every rebuild produces a different PDF, so the output_hashes recorded in
     kae.lock would never reproduce (RFC 0021 §5.3).
     """
+    get_security_manager().enforce(Capability.EXECUTE_LATEX_SANDBOX)
+
     base = os.path.splitext(os.path.basename(tex_path))[0]
     env = {
         **os.environ,
