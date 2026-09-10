@@ -1,6 +1,13 @@
 services:
   kae:
-    build: .
+    build:
+      context: .
+      network: host
+      extra_hosts:
+        - "deb.debian.org:151.101.2.132"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     container_name: kae-engine
     restart: unless-stopped
     ports:

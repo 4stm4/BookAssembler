@@ -2,9 +2,10 @@
 Skills, Recipes, and Profiles package for Knowledge Assembly Engine (KAE).
 
 Provides declarative domain skills models, skill loaders, pipeline recipe definitions,
-and source auto-detection profile resolvers (RFC 0006).
+source auto-detection profile resolvers, DSL evaluator, and SkillsRunner (RFC 0006).
 """
 
+from src.skills.dsl import DSLContext, DSLError, evaluate
 from src.skills.loader import ProfileResolver, SkillLoader
 from src.skills.models import (
     Recipe,
@@ -13,13 +14,19 @@ from src.skills.models import (
     SkillManifest,
     SourceProfile,
 )
+from src.skills.runner import SkillPack, SkillsRunner
 
 __all__ = [
+    "DSLContext",
+    "DSLError",
     "ProfileResolver",
     "Recipe",
     "RecipeStep",
     "Skill",
     "SkillLoader",
     "SkillManifest",
+    "SkillPack",
+    "SkillsRunner",
     "SourceProfile",
+    "evaluate",
 ]

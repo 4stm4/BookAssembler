@@ -55,6 +55,10 @@ class AIContextChunk:
     related_table_ids: List[str] = field(default_factory=list)
     mentioned_entities: List[str] = field(default_factory=list)
 
+    # Where each source node sits on the page: {krm_id, page, bbox} — the
+    # provenance a generated dataset item has to carry (RFC 0018 §3).
+    source_locations: List[Dict[str, Any]] = field(default_factory=list)
+
     metadata: Dict[str, Any] = field(default_factory=dict)
     breadcrumbs: Optional[ChunkBreadcrumbs] = None
 

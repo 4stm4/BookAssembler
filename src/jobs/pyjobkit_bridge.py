@@ -18,6 +18,9 @@ from uuid import UUID
 from pyjobkit import Engine, ExecContext, Executor, MemoryBackend, Worker
 from pyjobkit.events import LocalEventBus
 
+# Per-listener SSE/WS backlog cap. A stream that stops draining (client gone,
+# network stall) drops its oldest events instead of growing without bound.
+_LISTENER_QUEUE_MAXSIZE = 2048
 
 JobHandlerCallable = Callable[[str, Dict[str, Any], ExecContext], Coroutine[Any, Any, Dict[str, Any]]]
 
@@ -82,6 +85,11 @@ class KAEGenericExecutor(Executor):
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             })
             raise
+        finally:
+            # The per-job progress subscription created in submit_kae_job holds a
+            # closure over `payload` and `self` for the life of the process
+            # otherwise — one dangling entry per job ever submitted.
+            self.bridge._drop_job_subscription(str_id)
 
 
 class PyJobKitBridge:
@@ -170,25 +178,46 @@ class PyJobKitBridge:
 
         return str_id
 
+    def _drop_job_subscription(self, job_id: str) -> None:
+        """Remove the per-job progress subscription (LocalEventBus has no
+        unsubscribe, so drop the whole job-scoped topic)."""
+        try:
+            self.event_bus._subs.pop(f"job.{job_id}.progress", None)
+        except AttributeError:
+            pass
+
+    @staticmethod
+    def _offer(queue: "asyncio.Queue[Dict[str, Any]]", event: Dict[str, Any]) -> None:
+        """Enqueue without ever blocking a publisher on a slow/dead listener:
+        on a full queue, drop the oldest event and retry once."""
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            try:
+                queue.get_nowait()
+                queue.put_nowait(event)
+            except (asyncio.QueueEmpty, asyncio.QueueFull):
+                pass
+
     async def publish_event(self, event: Dict[str, Any]) -> None:
         """
         Broadcasting hook that sends job event to SSE global stream and specific WS job streams.
         """
         # Broadcast to all SSE listeners
         for queue in list(self._global_listeners):
-            await queue.put(event)
+            self._offer(queue, event)
 
         # Broadcast to specific job WS listeners
         job_id = str(event.get("job_id", ""))
         if job_id in self._job_listeners:
             for queue in list(self._job_listeners[job_id]):
-                await queue.put(event)
+                self._offer(queue, event)
 
     def subscribe_global_events(self) -> asyncio.Queue[Dict[str, Any]]:
         """
         Subscribes a new queue to all job events (used by SSE /api/v1/jobs/stream).
         """
-        q: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+        q: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(maxsize=_LISTENER_QUEUE_MAXSIZE)
         self._global_listeners.add(q)
         return q
 
@@ -202,7 +231,7 @@ class PyJobKitBridge:
         """
         Subscribes a new queue to events for a specific job_id (used by WS /api/v1/ws/jobs/{job_id}).
         """
-        q: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+        q: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(maxsize=_LISTENER_QUEUE_MAXSIZE)
         if job_id not in self._job_listeners:
             self._job_listeners[job_id] = set()
         self._job_listeners[job_id].add(q)

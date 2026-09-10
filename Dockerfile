@@ -42,6 +42,8 @@ RUN mkdir -p /data/ssd
 ENV NODE_ENV=production
 ENV PYTHONPATH=/app
 ENV KAE_SSD_PATH=/data/ssd
+# CMD below already runs uvicorn; stop server.ts from racing it for port 8000.
+ENV KAE_SPAWN_BACKEND=0
 
 EXPOSE 3000
 EXPOSE 8000

@@ -19,18 +19,28 @@ from src.ai_layer.models import AIContextChunk, ChunkBreadcrumbs
 from src.graph.knowledge_graph import KnowledgeGraph, RelationType
 from src.graph.reading_graph import ReadingGraph, ReadingTrack
 from src.krm.models import (
+    AlgorithmBlock,
     BaseKRMNode,
+    BibEntryBlock,
+    CalloutBlock,
     CodeBlock,
     ContainerUnit,
     DefinitionSpec,
+    EphemeraBlock,
     FigureBlock,
+    FootnoteBlock,
     FormulaBlock,
+    IndexEntryBlock,
     InstructionSpec,
     KnowledgeDocument,
+    ListBlock,
+    ListItemBlock,
     MathInline,
     ParagraphBlock,
+    SidebarBlock,
     TableBlock,
     TextLineInline,
+    TocEntryBlock,
     WarningSpec,
 )
 
@@ -99,6 +109,71 @@ def _extract_text_from_node(node: BaseKRMNode) -> str:
     elif isinstance(node, WarningSpec):
         return f"[{node.severity.upper()}]: {node.message_text}"
 
+    elif isinstance(node, TocEntryBlock):
+        left = (
+            f"{node.chapter_number} {node.entry_text}"
+            if node.chapter_number
+            else node.entry_text
+        )
+        right = f" … p.{node.target_page + 1}" if isinstance(node.target_page, int) else ""
+        return (left + right).strip()
+
+    elif isinstance(node, FootnoteBlock):
+        marker = node.marker or (str(node.footnote_number) if node.footnote_number else "")
+        return f"[footnote {marker}] {node.text}".strip()
+
+    elif isinstance(node, BibEntryBlock):
+        return node.raw_text or node.title
+
+    elif isinstance(node, CalloutBlock):
+        label = node.label or node.kind.title()
+        parts: List[str] = []
+        for child in node.content:
+            child_text = _extract_text_from_node(child)
+            if child_text:
+                parts.append(child_text)
+        body = " ".join(parts).strip()
+        return f"[{label.upper()}] {body}".strip()
+
+    elif isinstance(node, ListBlock):
+        # Render as markdown list — RFC 0007 §5.2 atomic (kept together).
+        lines: List[str] = []
+        ordered = node.list_style in ("ordered", "alpha", "roman")
+        for idx, item in enumerate(node.items, start=1):
+            if item.is_tombstoned:
+                continue
+            marker = f"{idx}." if ordered else "-"
+            item_text_parts: List[str] = []
+            for child in item.content:
+                child_text = _extract_text_from_node(child)
+                if child_text:
+                    item_text_parts.append(child_text)
+            body_text = " ".join(item_text_parts).strip()
+            if body_text:
+                lines.append(f"{marker} {body_text}")
+        return "\n".join(lines)
+
+    elif isinstance(node, AlgorithmBlock):
+        name = node.algorithm_name or ""
+        num = node.algorithm_number or ""
+        prefix = f"Algorithm {num}: {name}".strip(": ")
+        return f"{prefix}\n{node.pseudocode}" if node.pseudocode else prefix
+
+    elif isinstance(node, EphemeraBlock):
+        return node.repeated_text or f"[{node.ephemera_type}]"
+
+    elif isinstance(node, IndexEntryBlock):
+        refs = ", ".join(node.page_refs) if node.page_refs else ""
+        return f"{node.term} — {refs}" if refs else node.term
+
+    elif isinstance(node, SidebarBlock):
+        parts: List[str] = []
+        for child in node.content:
+            child_text = _extract_text_from_node(child)
+            if child_text:
+                parts.append(child_text)
+        return f"[Sidebar] {' '.join(parts)}".strip()
+
     return ""
 
 
@@ -120,16 +195,46 @@ def _get_node_chunk_type_and_lang(node: BaseKRMNode) -> Tuple[str, Optional[str]
         return "definition", None
     elif isinstance(node, WarningSpec):
         return "warning", None
+    elif isinstance(node, ListBlock):
+        return "list", node.list_style
+    elif isinstance(node, CalloutBlock):
+        return "callout", node.kind
+    elif isinstance(node, FootnoteBlock):
+        return "footnote", node.marker or (str(node.footnote_number or ""))
+    elif isinstance(node, BibEntryBlock):
+        return "bibliography", node.cite_key or None
+    elif isinstance(node, AlgorithmBlock):
+        return "algorithm", None
+    elif isinstance(node, EphemeraBlock):
+        return "ephemera", node.ephemera_type
+    elif isinstance(node, IndexEntryBlock):
+        return "index", None
+    elif isinstance(node, SidebarBlock):
+        return "sidebar", node.sidebar_type
     elif isinstance(node, ParagraphBlock):
+        dec = (getattr(node, "metadata", None) or {}).get("semantic_decorator")
+        if dec in ("theorem", "proof", "example", "remark", "definition"):
+            return dec, (getattr(node, "metadata", None) or {}).get("statement_type")
         return "narrative", None
     return "narrative", None
+
+
+def _source_location(node: BaseKRMNode) -> Dict[str, Any]:
+    """Page and normalized bbox of a source node, for dataset provenance (RFC 0018 §3)."""
+    layout = node.visual_layout
+    box = layout.bounding_box if layout else None
+    return {
+        "krm_id": node.id,
+        "page": layout.page_or_screen_index if layout else None,
+        "bbox": [box.x0, box.y0, box.x1, box.y1] if box else None,
+    }
 
 
 def _is_atomic_block(node: BaseKRMNode) -> bool:
     """
     Returns True if the node is an atomic (non-splittable) block unit.
     """
-    return isinstance(
+    if isinstance(
         node,
         (
             TableBlock,
@@ -139,8 +244,20 @@ def _is_atomic_block(node: BaseKRMNode) -> bool:
             InstructionSpec,
             DefinitionSpec,
             WarningSpec,
+            ListBlock,
+            CalloutBlock,
+            FootnoteBlock,
+            BibEntryBlock,
+            AlgorithmBlock,
+            EphemeraBlock,
+            IndexEntryBlock,
+            SidebarBlock,
         ),
-    )
+    ):
+        return True
+    if isinstance(node, ParagraphBlock) and (getattr(node, "metadata", None) or {}).get("semantic_decorator"):
+        return True
+    return False
 
 
 class SemanticChunker:
@@ -192,11 +309,13 @@ class SemanticChunker:
         return sorted(list(pages))
 
     def _extract_graph_links(
-        self, krm_ids: List[str], kg: KnowledgeGraph
+        self, krm_ids: List[str], kg: KnowledgeGraph,
+        node_kinds: Dict[str, str],
     ) -> Tuple[List[str], List[str], List[str]]:
-        """
-        Queries Knowledge Graph edges for figure links, table links, and mentioned entities.
-        """
+        """KG edges from/to this chunk's nodes → referenced figure ids, table
+        ids, and mentioned entity names. `node_kinds` maps a KRM id to
+        "figure"/"table" so a CAPTION_FOR/REFERENCES edge can be classified
+        (node ids are opaque UUIDs — the old `"fig" in id` test never matched)."""
         figures: Set[str] = set()
         tables: Set[str] = set()
         entities: Set[str] = set()
@@ -207,9 +326,10 @@ class SemanticChunker:
                 if entity is not None and entity.name:
                     entities.add(entity.name)
                 elif edge.relation_type in (RelationType.CAPTION_FOR, RelationType.REFERENCES):
-                    if "fig" in edge.target_id.lower():
+                    kind = node_kinds.get(edge.target_id)
+                    if kind == "figure":
                         figures.add(edge.target_id)
-                    elif "tbl" in edge.target_id.lower():
+                    elif kind == "table":
                         tables.add(edge.target_id)
 
             for edge in kg.get_incoming_edges(krm_id):
@@ -229,6 +349,7 @@ class SemanticChunker:
         chunk_type: str,
         language_or_arch: Optional[str],
         kg: KnowledgeGraph,
+        node_kinds: Dict[str, str],
     ) -> Optional[AIContextChunk]:
         """
         Constructs an AIContextChunk from a set of nodes.
@@ -259,7 +380,7 @@ class SemanticChunker:
         contextual_text = f"{breadcrumbs.to_header_string()}\n{raw_text}"
 
         related_figures, related_tables, mentioned_entities = self._extract_graph_links(
-            source_ids, kg
+            source_ids, kg, node_kinds
         )
 
         for node in nodes:
@@ -286,6 +407,7 @@ class SemanticChunker:
             related_figure_ids=related_figures,
             related_table_ids=related_tables,
             mentioned_entities=mentioned_entities,
+            source_locations=[_source_location(node) for node in nodes],
             metadata=metadata,
             breadcrumbs=breadcrumbs,
         )
@@ -305,15 +427,25 @@ class SemanticChunker:
                 self._collect_nodes_recursive(root_container, current_path=[])
             )
 
-        # Check ReadingGraph sequence
-        rg_sequence = rg.get_sequence("root", track=ReadingTrack.MAIN_FLOW)
+        node_kinds: Dict[str, str] = {}
+        for n, _pid, _path in collected_nodes:
+            if isinstance(n, FigureBlock):
+                node_kinds[n.id] = "figure"
+            elif isinstance(n, TableBlock):
+                node_kinds[n.id] = "table"
+
+        # Order nodes by the reading graph (RFC 0007 §5). The RG chains real leaf
+        # ids, never a synthetic "root", so walk from each MAIN_FLOW head. Ids
+        # the RG names that no longer map to a collected node — a block later
+        # analyzers moved into a list/callout/table or tombstoned — are skipped,
+        # and anything the RG does not cover falls through to document order.
         node_map = {node_item[0].id: node_item for node_item in collected_nodes}
 
         ordered_nodes: List[Tuple[BaseKRMNode, str, List[str]]] = []
         visited_ids: Set[str] = set()
 
-        if len(rg_sequence) > 1:
-            for n_id in rg_sequence:
+        for head_id in rg.heads(ReadingTrack.MAIN_FLOW):
+            for n_id in rg.get_sequence(head_id, track=ReadingTrack.MAIN_FLOW):
                 if n_id in node_map and n_id not in visited_ids:
                     ordered_nodes.append(node_map[n_id])
                     visited_ids.add(n_id)
@@ -325,8 +457,10 @@ class SemanticChunker:
 
         chunks: List[AIContextChunk] = []
         narrative_buffer: List[Tuple[BaseKRMNode, str, List[str]]] = []
+        buffer_tokens = 0
 
         def flush_narrative_buffer() -> None:
+            nonlocal buffer_tokens
             if not narrative_buffer:
                 return
             b_nodes = [item[0] for item in narrative_buffer]
@@ -342,10 +476,12 @@ class SemanticChunker:
                 chunk_type="narrative",
                 language_or_arch=None,
                 kg=kg,
+                node_kinds=node_kinds,
             )
             if chunk is not None:
                 chunks.append(chunk)
             narrative_buffer.clear()
+            buffer_tokens = 0
 
         for node, parent_container_id, container_path in ordered_nodes:
             if _is_atomic_block(node):
@@ -360,22 +496,21 @@ class SemanticChunker:
                     chunk_type=chunk_type,
                     language_or_arch=lang,
                     kg=kg,
+                    node_kinds=node_kinds,
                 )
                 if chunk is not None:
                     chunks.append(chunk)
             else:
+                new_tokens = _estimate_tokens(_extract_text_from_node(node))
                 if narrative_buffer:
                     prev_path = narrative_buffer[0][2]
-                    curr_tokens = sum(
-                        _estimate_tokens(_extract_text_from_node(it[0]))
-                        for it in narrative_buffer
-                    )
-                    new_tokens = _estimate_tokens(_extract_text_from_node(node))
-
-                    if prev_path != container_path or (curr_tokens + new_tokens > self.max_narrative_tokens):
+                    if prev_path != container_path or (
+                        buffer_tokens + new_tokens > self.max_narrative_tokens
+                    ):
                         flush_narrative_buffer()
 
                 narrative_buffer.append((node, parent_container_id, container_path))
+                buffer_tokens += new_tokens
 
         flush_narrative_buffer()
 

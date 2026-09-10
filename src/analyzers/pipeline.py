@@ -24,6 +24,7 @@ from src.analyzers.base import (
     RGPermission,
     SecurityViolationError,
 )
+from src.calibration.engine import ConfidenceCalibrator
 from src.graph.knowledge_graph import (
     KGEdge,
     KGEntityNode,
@@ -38,15 +39,11 @@ from src.graph.reading_graph import (
 from src.krm.models import (
     BaseKRMNode,
     ContainerUnit,
-    InlineUnit,
     KnowledgeDocument,
-    ParagraphBlock,
     ProvenanceInfo,
-    SpanUnit,
-    TableBlock,
-    TableCell,
+    StructuralUnit,
 )
-
+from src.krm.traversal import walk as walk_krm
 
 class GuardedReadingGraph(ReadingGraph):
     """
@@ -92,7 +89,6 @@ class GuardedReadingGraph(ReadingGraph):
         if RGPermission.READ not in self._permissions:
             raise SecurityViolationError("Analyzer lacks RGPermission.READ permission.")
         return self._target.get_sequence(root_id, track)
-
 
 class GuardedKnowledgeGraph(KnowledgeGraph):
     """
@@ -151,7 +147,6 @@ class GuardedKnowledgeGraph(KnowledgeGraph):
         if KGPermission.READ not in self._permissions:
             raise SecurityViolationError("Analyzer lacks KGPermission.READ permission.")
         return self._target.to_json_dict()
-
 
 class GuardedKnowledgeDocument(KnowledgeDocument):
     """
@@ -228,7 +223,6 @@ class GuardedKnowledgeDocument(KnowledgeDocument):
         setattr(target, name, value)
         object.__setattr__(self, name, value)
 
-
 class PipelineRunner:
     """
     Pipeline Engine responsible for validating dependency order, enforcing permissions,
@@ -238,6 +232,7 @@ class PipelineRunner:
     def __init__(self, analyzers: List[BaseAnalyzer]) -> None:
         self._validate_dependencies(analyzers)
         self._analyzers = list(analyzers)
+        self._calibrator = ConfidenceCalibrator()
 
     def _validate_dependencies(self, analyzers: List[BaseAnalyzer]) -> None:
         """
@@ -256,41 +251,106 @@ class PipelineRunner:
                     )
             registered_names.add(name)
 
-    def _record_provenance_recursive(self, node: BaseKRMNode, analyzer_name: str) -> None:
+    @staticmethod
+    def _krm_signatures(doc: KnowledgeDocument) -> Dict[str, tuple]:
+        """id -> (class name, is_tombstoned) for every structural KRM node —
+        containers and blocks. Inlines / spans / table cells are sub-parts of a
+        block and legitimately change shape when their block is transformed, so
+        they are not tracked here (RFC 0002 §inv4 already protects span text)."""
+        return {
+            n.id: (type(n).__name__, bool(n.is_tombstoned))
+            for n in walk_krm(doc)
+            if isinstance(n, (ContainerUnit, StructuralUnit))
+        }
+
+    def _verify_krm_permissions(
+        self, before: Dict[str, tuple], after: Dict[str, tuple], manifest: Any
+    ) -> None:
+        """Compare the KRM tree before/after an analyzer and reject structural
+        changes the manifest did not declare.
+
+        The Guarded* proxies only intercept attribute writes on the document
+        root — analyzers mutate child nodes directly, so the permission matrix
+        (RFC 0005 §2, §5) was effectively unenforced. This post-hoc check runs
+        against the deepcopy snapshot the pipeline already takes for rollback.
         """
-        Recursively visits all KRM nodes in the document tree to record the analyzer_name
-        in provenance_info.applied_analyzers.
+        perms = manifest.krm_permissions
+        # A block vanishing is a silent deletion (RFC 0001 §2.4) unless the
+        # analyzer may TRANSFORM_NODE — a transform legitimately consumes a
+        # block into another structure (a paragraph merged into a table cell).
+        removed = before.keys() - after.keys()
+        if removed and KRMPermission.TRANSFORM_NODE not in perms:
+            raise SecurityViolationError(
+                f"Analyzer '{manifest.name}' removed {len(removed)} block(s) from "
+                f"the KRM tree; blocks may only be tombstoned (RFC 0001 §2.4)."
+            )
+        added = after.keys() - before.keys()
+        if added and KRMPermission.INSERT not in perms:
+            raise SecurityViolationError(
+                f"Analyzer '{manifest.name}' inserted {len(added)} block(s) "
+                f"without KRMPermission.INSERT."
+            )
+        for nid in after.keys() & before.keys():
+            (b_type, b_tomb), (a_type, a_tomb) = before[nid], after[nid]
+            if a_type != b_type and KRMPermission.TRANSFORM_NODE not in perms:
+                raise SecurityViolationError(
+                    f"Analyzer '{manifest.name}' changed node {nid} "
+                    f"{b_type} -> {a_type} without KRMPermission.TRANSFORM_NODE."
+                )
+            if a_tomb and not b_tomb and KRMPermission.TOMBSTONE not in perms:
+                raise SecurityViolationError(
+                    f"Analyzer '{manifest.name}' tombstoned node {nid} "
+                    f"without KRMPermission.TOMBSTONE."
+                )
+            if b_tomb and not a_tomb:
+                raise SecurityViolationError(
+                    f"Analyzer '{manifest.name}' un-tombstoned node {nid} "
+                    f"(RFC 0001 §2.4)."
+                )
+
+    def _record_provenance(self, doc: KnowledgeDocument, analyzer_name: str) -> None:
+        """Record `analyzer_name` on every KRM node's applied_analyzers
+        (RFC 0011). One shared walk — the hand-rolled recursion here skipped
+        SidebarBlock and IndexEntryBlock subtrees.
         """
         utc_now = datetime.now(timezone.utc).isoformat()
+        for node in walk_krm(doc):
+            if not isinstance(node, BaseKRMNode):
+                continue
+            if node.provenance_info is None:
+                node.provenance_info = ProvenanceInfo(
+                    adapter_name="PipelineRunner",
+                    extraction_timestamp_utc=utc_now,
+                    applied_analyzers=[analyzer_name],
+                )
+            elif analyzer_name not in node.provenance_info.applied_analyzers:
+                node.provenance_info.applied_analyzers.append(analyzer_name)
 
-        if node.provenance_info is None:
-            node.provenance_info = ProvenanceInfo(
-                adapter_name="PipelineRunner",
-                extraction_timestamp_utc=utc_now,
-                applied_analyzers=[analyzer_name],
-            )
-        elif analyzer_name not in node.provenance_info.applied_analyzers:
-            node.provenance_info.applied_analyzers.append(analyzer_name)
+    def _calibrate_confidences(self, doc: KnowledgeDocument, category: str) -> None:
+        """Rescale raw confidences to empirical accuracy (RFC 0017 §3).
 
-        # Recurse down container and block hierarchies
-        if isinstance(node, KnowledgeDocument):
-            for container in node.root_containers:
-                self._record_provenance_recursive(container, analyzer_name)
-        elif isinstance(node, ContainerUnit):
-            for child in node.children:
-                self._record_provenance_recursive(child, analyzer_name)
-        elif isinstance(node, ParagraphBlock):
-            for inline in node.inlines:
-                self._record_provenance_recursive(inline, analyzer_name)
-        elif isinstance(node, TableBlock):
-            for row in node.grid:
-                for cell in row:
-                    self._record_provenance_recursive(cell, analyzer_name)
-                    for block in cell.content:
-                        self._record_provenance_recursive(block, analyzer_name)
-        elif isinstance(node, InlineUnit):
-            for span in node.spans:
-                self._record_provenance_recursive(span, analyzer_name)
+        A node is calibrated once — the marker keeps a later analyzer in the same
+        run from rescaling an already-calibrated score, and preserves the raw
+        value so the mapping stays auditable.
+        """
+        for node in walk_krm(doc):
+            if not isinstance(node, BaseKRMNode):
+                continue
+            marker = (node.metadata or {}).get("calibration")
+            if marker:
+                continue
+
+            raw = node.confidence_score
+            calibrated = self._calibrator.calibrate_score(raw, category)
+            if calibrated == raw:
+                continue
+
+            node.confidence_score = calibrated
+            node.metadata = node.metadata or {}
+            node.metadata["calibration"] = {
+                "category": category,
+                "raw_confidence": raw,
+            }
 
     def execute(
         self,

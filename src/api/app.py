@@ -14,7 +14,7 @@ Implements REST API endpoints according to KAE specifications:
 
 Guarantees:
 - Strict typing (100% mypy --strict compatible)
-- Integrates JobManager, HITLManager, ArtifactStore, KnowledgeDocument, and SEPManager
+- Integrates JobManager, HITLManager, KnowledgeDocument, and SEPManager
 """
 
 import asyncio
@@ -22,7 +22,7 @@ import io
 import json
 import logging
 import os
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, BinaryIO, Dict, List, Optional, Union
 from uuid import uuid4
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
@@ -54,19 +54,25 @@ from src.adapters.providers import (
     SEPManager,
     SEPType,
 )
-from src.artifacts.store import ArtifactStore
 from src.hitl.manager import CorrectionStatus, HITLManager, HITLTaskItem
 from src.jobs.manager import JobManager, JobRecord, JobStatus
 from src.jobs.pyjobkit_bridge import PyJobKitBridge
 from src.krm.models import (
+    AlgorithmBlock,
     BaseKRMNode,
     CaptionBlock,
     CodeBlock,
     ContainerUnit,
+    DiagramBlock,
+    EphemeraBlock,
     FigureBlock,
     FormulaBlock,
     KnowledgeDocument,
+    ListBlock,
+    ListItemBlock,
     ParagraphBlock,
+    SidebarBlock,
+    TocEntryBlock,
     StyledTextSpan,
     TableBlock,
     TableCell,
@@ -175,7 +181,6 @@ def create_app() -> FastAPI:
 
     job_manager = JobManager()
     hitl_manager = HITLManager()
-    artifact_store = ArtifactStore()
     sep_manager = SEPManager()
     pyjobkit_bridge = PyJobKitBridge()
     adapter_registry = create_default_registry()
@@ -189,6 +194,8 @@ def create_app() -> FastAPI:
         nvme_config = SEPConfig(
             name="RPi5 NVMe SSD (HAT+)",
             sep_type=SEPType.LOCAL_FS,
+            # Stable id so sep:// source URIs survive restarts (was random uuid4).
+            provider_id="nvme-local",
             options={"root_path": kae_ssd_path},
         )
         sep_manager.register_provider(nvme_config)
@@ -626,27 +633,58 @@ def create_app() -> FastAPI:
     ) -> DocumentUploadResponse:
         """
         Uploads a document or text payload and initializes a processing Job.
+
+        For PDF/supported files: saves the file, then parses via the appropriate
+        adapter and runs the full analyzer pipeline in background.
+        For text payloads: creates a simple document synchronously.
         """
         source_uri = "upload://file.txt"
+        raw_bytes: Optional[bytes] = None
 
         if file is not None and file.filename:
             source_uri = f"upload://{file.filename}"
-            _raw_bytes = await file.read()
+            raw_bytes = await file.read()
         elif payload is not None and payload.source_uri:
             source_uri = payload.source_uri
 
         job = job_manager.create_job(source_uri=source_uri)
 
-        # Create initial document and attach to docs store
+        ext = ""
+        if "." in source_uri:
+            ext = source_uri.rsplit(".", 1)[1].lower()
+
+        if raw_bytes and ext and adapter_registry.get_adapter_for_extension(ext):
+            upload_dir = os.path.join(kae_ssd_path, job.job_id)
+            os.makedirs(upload_dir, exist_ok=True)
+            filename = os.path.basename(source_uri.replace("upload://", ""))
+            saved_path = os.path.join(upload_dir, filename)
+            with open(saved_path, "wb") as f:
+                f.write(raw_bytes)
+
+            file_stream = open(saved_path, "rb")
+            job_manager.update_status(job.job_id, JobStatus.RUNNING)
+            progress_store[job.job_id] = {"step": 0, "total": 10, "stage": "Запуск..."}
+            asyncio.create_task(_run_pipeline_background(job, file_stream, ext))
+
+            return DocumentUploadResponse(
+                job_id=job.job_id,
+                status="PROCESSING",
+                source_uri=job.source_uri,
+            )
+
         doc = KnowledgeDocument(source_uri=source_uri)
         container = ContainerUnit(title="Root Section", level=1)
-        
-        content_text = payload.content if (payload and payload.content) else "Sample uploaded text content"
-        paragraph = ParagraphBlock(
-            confidence_score=0.5,
-            inlines=[TextLineInline(spans=[StyledTextSpan(text=content_text)])]
-        )
-        container.children.append(paragraph)
+        content_text = payload.content if (payload and payload.content) else ""
+        if raw_bytes and not content_text:
+            content_text = raw_bytes.decode("utf-8", errors="replace")
+        if not content_text:
+            content_text = ""
+        if content_text:
+            paragraph = ParagraphBlock(
+                confidence_score=0.5,
+                inlines=[TextLineInline(spans=[StyledTextSpan(text=content_text)])]
+            )
+            container.children.append(paragraph)
         doc.root_containers.append(container)
 
         docs_store[job.job_id] = doc
@@ -1060,12 +1098,38 @@ def create_app() -> FastAPI:
 
     # --- Document & Job Result Endpoints ---
 
+    def _avg_confidence(doc: KnowledgeDocument) -> float:
+        """Mean confidence over the leaves that carry one.
+
+        Containers have no meaningful score of their own, so averaging them in
+        would drag the number toward 1.0 and hide exactly what it is for.
+        """
+        scores: List[float] = []
+
+        def walk(node: Any) -> None:
+            kids = getattr(node, "children", None)
+            if kids:
+                for c in kids:
+                    walk(c)
+                return
+            if getattr(node, "is_tombstoned", False):
+                return
+            cs = getattr(node, "confidence_score", None)
+            if isinstance(cs, (int, float)):
+                scores.append(float(cs))
+
+        for c in doc.root_containers:
+            walk(c)
+        return round(sum(scores) / len(scores), 3) if scores else 0.0
+
     @app.get("/api/v1/documents")
     async def list_documents() -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
         for job_id, doc in docs_store.items():
             job = job_manager.get_job(job_id)
             node_count = _count_nodes(doc)
+            prog = progress_store.get(job_id) or {}
+            step, total = prog.get("step", 0), prog.get("total", 0)
             results.append({
                 "job_id": job_id,
                 "title": doc.title or "Untitled",
@@ -1075,6 +1139,12 @@ def create_app() -> FastAPI:
                 "updated_at": job.updated_at if job else "",
                 "node_count": node_count,
                 "page_count": doc.metadata.get("page_count", 0) if doc.metadata else 0,
+                # Real numbers: the dashboard used to hardcode 1.0 for both, so
+                # every document showed "Avg Conf: 100%" and a progress bar that
+                # sat at 0% until it jumped to 100%.
+                "confidence_avg": _avg_confidence(doc),
+                "progress": (step / total) if total else 0.0,
+                "stage": prog.get("stage", ""),
             })
         return results
 
@@ -1377,6 +1447,451 @@ def create_app() -> FastAPI:
             }
 
         raise HTTPException(status_code=400, detail=f"Unknown mode: {body.mode}")
+
+    @app.get("/api/v1/agents/config")
+    async def get_agents_config() -> Dict[str, Any]:
+        saved = _load_agents_config()
+        result = []
+        for h in saved:
+            kind = h.get("kind", "ollama")
+            available, models, extra = _probe_agent(h["host"], kind)
+            active = h.get("active_model", "")
+            if available and active and active not in models:
+                active = models[0] if models else ""
+            entry = {
+                "name": h["name"],
+                "host": h["host"],
+                "kind": kind,
+                "roles": h.get("roles", []),
+                "models": models,
+                "active_model": active,
+                "available": available,
+            }
+            entry.update({k: v for k, v in extra.items() if v is not None})
+            result.append(entry)
+        return {"agents": result}
+
+    class AgentCreateRequest(BaseModel):
+        name: str
+        host: str
+        active_model: str = ""
+        kind: str = "ollama"
+        roles: List[str] = Field(default_factory=list)
+
+    @app.post("/api/v1/agents/config")
+    async def add_agent(body: AgentCreateRequest) -> Dict[str, Any]:
+        agents = _load_agents_config()
+        if any(a["host"] == body.host for a in agents):
+            raise HTTPException(400, "Agent with this host already exists")
+        agents.append({"name": body.name, "host": body.host,
+                       "active_model": body.active_model, "kind": body.kind,
+                       "roles": body.roles})
+        _save_agents_config(agents)
+        return {"status": "added", "name": body.name}
+
+    @app.put("/api/v1/agents/config")
+    async def update_agent(body: AgentCreateRequest) -> Dict[str, Any]:
+        agents = _load_agents_config()
+        for a in agents:
+            if a["host"] == body.host:
+                a["name"] = body.name
+                a["active_model"] = body.active_model
+                a["roles"] = body.roles
+                _save_agents_config(agents)
+                return {"status": "updated", "name": body.name}
+        raise HTTPException(404, "Agent not found")
+
+    def _pick_agent_for_role(role: str) -> tuple:
+        """First reachable agent that declares `role`, else any reachable ollama.
+        Returns (host, model, kind)."""
+        cfg = _load_agents_config()
+        for a in cfg:
+            if role in (a.get("roles") or []):
+                kind = a.get("kind", "ollama")
+                available, models, extra = _probe_agent(a["host"], kind)
+                # For managed: only route when the underlying Runner is UP.
+                if available and (kind != "managed" or extra.get("runner") == "up"):
+                    model = a.get("active_model") or (models[0] if models else None)
+                    return a["host"], model, kind
+        # Fallback: any reachable ollama agent (keeps old behaviour working).
+        for a in cfg:
+            if a.get("kind", "ollama") == "ollama":
+                available, models = _probe_ollama(a["host"])
+                if available:
+                    return a["host"], (a.get("active_model") or (models[0] if models else None)), "ollama"
+        return None, None, "ollama"
+
+    @app.delete("/api/v1/agents/{host:path}")
+    async def delete_agent(host: str) -> Dict[str, Any]:
+        agents = _load_agents_config()
+        new = [a for a in agents if a["host"] != host]
+        if len(new) == len(agents):
+            raise HTTPException(404, "Agent not found")
+        _save_agents_config(new)
+        return {"status": "deleted"}
+
+    # --- Node Refinement (HITL / LLM Agent) ---
+
+    class RefineRequest(BaseModel):
+        node_id: str
+        mode: str  # 'agent' | 'manual'
+        patch: Optional[Dict[str, Any]] = None
+
+    @app.post("/api/v1/jobs/{job_id}/refine")
+    async def refine_node(job_id: str, body: RefineRequest) -> Dict[str, Any]:
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+
+        def find_node(containers, node_id):
+            for c in containers:
+                if getattr(c, 'id', None) == node_id:
+                    return c
+                for child in getattr(c, 'children', []):
+                    if getattr(child, 'id', None) == node_id:
+                        return child
+                found = find_node(getattr(c, 'children', []), node_id)
+                if found:
+                    return found
+            return None
+
+        target = find_node(doc.root_containers, body.node_id)
+        if target is None:
+            raise HTTPException(status_code=404, detail="Node not found")
+
+        if body.mode == 'manual' and body.patch:
+            if 'type' in body.patch and hasattr(target, 'block_type'):
+                target.block_type = body.patch['type']
+            if 'text' in body.patch:
+                if hasattr(target, 'title'):
+                    target.title = body.patch['text']
+            target.classification_confidence = 1.0
+            target.extraction_confidence = 1.0
+            _persist_doc(job_id, doc)
+            audit_logger.log("HITL_CORRECTION", "user", {
+                "job_id": job_id, "node_id": body.node_id, "mode": "manual",
+            })
+            return {"status": "updated", "node_id": body.node_id}
+
+        if body.mode == 'agent':
+            from src.analyzers.llm_refinement import VALID_TYPES, OLLAMA_MODEL
+            from src.analyzers.llm_refinement.rules import _call_ollama
+            import re as _re
+            text_parts = []
+            if hasattr(target, 'inlines'):
+                for inline in (target.inlines or []):
+                    for span in getattr(inline, 'spans', []):
+                        if hasattr(span, 'text'):
+                            text_parts.append(span.text)
+            elif hasattr(target, 'title'):
+                text_parts.append(target.title or '')
+            node_text = " ".join(text_parts).strip()
+            if not node_text:
+                return {"status": "error", "detail": "Node has no text"}
+
+            snippet = node_text[:200]
+            prompt = (
+                f'Classify this text block from a book. Reply with ONLY one word from: '
+                f'paragraph, toc_entry, caption, heading, code, formula, list_item, table_cell.\n\n'
+                f'Text: "{snippet}"\n\nType:'
+            )
+            response = _call_ollama(prompt)
+            if not response:
+                return {"status": "error", "detail": "LLM unavailable or timed out"}
+
+            block_type = response.strip().lower().replace('"', '').replace("'", "").split()[0] if response.strip() else ""
+            block_type = block_type.rstrip(".,;:")
+            if block_type not in VALID_TYPES:
+                for vt in VALID_TYPES:
+                    if vt in response.lower():
+                        block_type = vt
+                        break
+
+            if block_type in VALID_TYPES:
+                target.classification_confidence = 0.85
+                target.update_confidence()
+                if not target.metadata:
+                    target.metadata = {}
+                target.metadata["llm_suggested_type"] = block_type
+                target.metadata["llm_model"] = OLLAMA_MODEL
+                _persist_doc(job_id, doc)
+
+            audit_logger.log("HITL_CORRECTION", "llm_agent", {
+                "job_id": job_id, "node_id": body.node_id, "mode": "agent",
+                "llm_type": block_type, "raw": response.strip()[:100],
+            })
+            return {
+                "status": "refined",
+                "node_id": body.node_id,
+                "llm_result": {"type": block_type, "confidence": target.confidence_score},
+                "confidence": target.confidence_score,
+            }
+
+        raise HTTPException(status_code=400, detail=f"Unknown mode: {body.mode}")
+
+    @app.post("/api/v1/jobs/{job_id}/refine-page/{page}")
+    async def refine_page(job_id: str, page: int) -> Dict[str, Any]:
+        """
+        Page-level agent refinement: the agent looks at every block on one page at
+        once (with its text and page image) and classifies the undetermined ones.
+        More context than per-block refine, so it fixes what single blocks miss.
+        """
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        from src.analyzers.llm_refinement import VALID_TYPES
+        from src.analyzers.llm_refinement.rules import _call_ollama
+
+        def _text(n: Any) -> str:
+            if hasattr(n, "inlines"):
+                return " ".join(s.text for i in (n.inlines or [])
+                                for s in getattr(i, "spans", []) if hasattr(s, "text")).strip()
+            return (getattr(n, "title", "") or "").strip()
+
+        # Collect non-tombstoned leaf blocks on this page.
+        blocks: List[Any] = []
+        def walk(nodes: list) -> None:  # type: ignore[type-arg]
+            for n in nodes:
+                if getattr(n, "is_tombstoned", False):
+                    continue
+                vl = getattr(n, "visual_layout", None)
+                pg = getattr(vl, "page_or_screen_index", None) if vl else None
+                if pg == page and not isinstance(n, ContainerUnit) and _text(n):
+                    blocks.append(n)
+                if getattr(n, "children", None):
+                    walk(n.children)
+        for c in doc.root_containers:
+            walk([c])
+
+        if not blocks:
+            return {"status": "empty", "page": page, "refined": 0}
+
+        listing = "\n".join(f'{i+1}. "{_text(b)[:120]}"' for i, b in enumerate(blocks))
+        prompt = (
+            "This image is one page of a scanned book. Along with it you get the "
+            "text blocks extracted from the page, in reading order.\n\n"
+            f"BLOCKS:\n{listing}\n\n"
+            "First decide the PAGE ROLE: title, toc, table, diagram, figure, code, "
+            "formula, text. Then classify EACH block: paragraph, heading, toc_entry, "
+            "caption, code, formula, list_item, table_cell, title, label.\n"
+            'Reply with ONLY JSON: {"role":"...","blocks":[{"n":1,"type":"..."},...]}. '
+            "No prose, no code fences."
+        )
+
+        # Prefer a vision agent (sees the page image); fall back to text-only ollama.
+        from src.agents.router import pick as _pick_role, call_infer as _call_agent
+        from src.analyzers.source_io import resolve_source_path as _resolve_source_path
+        host_v, model_v, _ = _pick_role("vision")
+        model = model_v
+        resp: Optional[str] = None
+        if host_v:
+            try:
+                import pymupdf as fitz
+                pdf_path = _resolve_source_path(doc)
+                if pdf_path:
+                    pdf = fitz.open(pdf_path)
+                    png = pdf[page].get_pixmap(dpi=100).tobytes("png")
+                    pdf.close()
+                    resp = await asyncio.to_thread(_call_agent, host_v, "vision", png, prompt)
+            except Exception:
+                logging.getLogger(__name__).exception("vision refine-page failed; falling back")
+        if not resp:
+            host, model = _pick_agent()
+            resp = _call_ollama(prompt, host=host, model=model)
+        if not resp:
+            raise HTTPException(status_code=503, detail="Agent unavailable or timed out")
+
+        import re as _re, json as _json
+        role = "text"
+        types: Dict[int, str] = {}
+        m = _re.search(r"\{.*\}", resp, _re.DOTALL)
+        if m:
+            try:
+                data = _json.loads(m.group())
+                role = str(data.get("role", "text")).lower().strip()
+                for item in data.get("blocks", []):
+                    idx = int(item.get("n", 0)) - 1
+                    bt = str(item.get("type", "")).lower().strip()
+                    if 0 <= idx < len(blocks) and bt in VALID_TYPES:
+                        types[idx] = bt
+            except Exception:
+                pass
+
+        rebuilt = None
+        # Rebuild the page structure per the agent's role decision (RFC 0001 §2.4:
+        # absorbed blocks are tombstoned, not deleted).
+        if role in ("title", "diagram", "table", "toc"):
+            rebuilt = _rebuild_page(doc, blocks, role, page, types)
+
+        refined = 0
+        for idx, bt in types.items():
+            b = blocks[idx]
+            if getattr(b, "is_tombstoned", False):
+                continue
+            b.classification_confidence = 0.85
+            b.update_confidence()
+            if not b.metadata:
+                b.metadata = {}
+            b.metadata["llm_suggested_type"] = bt
+            b.metadata["llm_model"] = model or ""
+            refined += 1
+
+        _persist_doc(job_id, doc)
+        audit_logger.log("HITL_CORRECTION", "llm_agent", {
+            "job_id": job_id, "mode": "page", "page": page,
+            "role": role, "refined": refined, "rebuilt": rebuilt,
+        })
+        return {"status": "refined", "page": page, "role": role,
+                "blocks": len(blocks), "refined": refined, "rebuilt": rebuilt}
+
+    # TOC entry prefix: "Section 2", "Chapter III", "Appendix A", "1.2.3", "2.1"
+    import re as _re_toc
+    _RE_TOC_BOUNDARY = _re_toc.compile(
+        r"\s+(?=(?:Section|Chapter|Appendix|Part|Глава|Раздел|Приложение)\b|\d+\.\d)",
+        _re_toc.IGNORECASE,
+    )
+    _RE_TOC_ENTRY = _re_toc.compile(
+        r"^(?P<kind>Section|Chapter|Appendix|Part|Глава|Раздел|Приложение)?\s*"
+        r"(?P<num>[A-Z0-9]+(?:\.\d+)*)?\s*"
+        r"(?P<title>.*?)"
+        r"(?:\s*[.\s]{2,}\s*|\s+)(?P<page>\d{1,4}|[ivxlcdm]+|[IVXLCDM]+)?\s*$",
+        _re_toc.IGNORECASE,
+    )
+
+    def _split_toc_line(text: str) -> List[str]:
+        """Split OCR-glued TOC lines at prefix boundaries ("Section 2 X 2.1 Y…")."""
+        parts = _RE_TOC_BOUNDARY.split(text.strip())
+        return [p.strip() for p in parts if p.strip()]
+
+    def _parse_toc_entry(text: str) -> Dict[str, Any]:
+        """Extract {level, number, title, target_page, display} from one entry."""
+        t = text.strip()
+        m = _RE_TOC_ENTRY.match(t)
+        if not m:
+            return {"level": 1, "number": None, "title": t, "target_page": None, "display": t}
+        kind = (m.group("kind") or "").strip()
+        num = (m.group("num") or "").strip()
+        title = (m.group("title") or "").strip(" .·—-").strip()
+        page = m.group("page")
+        try:
+            page_num = int(page) if page and page.isdigit() else None
+        except Exception:
+            page_num = None
+        level = 1 if not num or "." not in num else 1 + num.count(".")
+        prefix = " ".join(x for x in (kind, num) if x).strip()
+        display = f"{prefix}. {title}" if prefix and title else (prefix or title or t)
+        if page_num is not None:
+            display = f"{display} … {page_num}"
+        return {"level": level, "number": prefix or None, "title": title,
+                "target_page": page_num, "display": display}
+
+    def _rebuild_page(doc: KnowledgeDocument, blocks: List[Any], role: str, page: int,
+                      types: Optional[Dict[int, str]] = None) -> Optional[str]:
+        """Reassemble a page's blocks into a title / diagram / table / toc structure."""
+        from src.krm.models import (TitlePageBlock, DiagramBlock, TextLineInline,
+                                     StyledTextSpan, VisualLayout, NormalizedRect)
+
+        def _text(n: Any) -> str:
+            if hasattr(n, "inlines"):
+                return " ".join(s.text for i in (n.inlines or [])
+                                for s in getattr(i, "spans", []) if hasattr(s, "text")).strip()
+            return (getattr(n, "title", "") or "").strip()
+
+        # Locate the parent container + insertion index of the first block.
+        parent, first_idx = None, 0
+        for c in doc.root_containers:
+            stack = [(c, None)]
+            while stack:
+                node, par = stack.pop()
+                if node is blocks[0] and par is not None:
+                    parent = par
+                    first_idx = par.children.index(node)
+                for ch in getattr(node, "children", []) or []:
+                    stack.append((ch, node))
+        if parent is None:
+            parent = doc.root_containers[0]
+
+        region = NormalizedRect(0.0, 0.0, 1.0, 1.0)
+        bbs = [getattr(getattr(b, "visual_layout", None), "bounding_box", None) for b in blocks]
+        bbs = [b for b in bbs if b]
+        if bbs:
+            region = NormalizedRect(
+                max(0.0, min(b.x0 for b in bbs) - 0.02), max(0.0, min(b.y0 for b in bbs) - 0.02),
+                min(1.0, max(b.x1 for b in bbs) + 0.05), min(1.0, max(b.y1 for b in bbs) + 0.03))
+
+        if role == "toc":
+            # Skip if this page's parent already holds a TOC container — don't
+            # nest a second "Оглавление" on repeat clicks.
+            if getattr(parent, "semantic_type", "") == "toc":
+                return "toc:already"
+            # A TOC is a LIST, not paragraphs. Split glued OCR lines into entries
+            # (e.g. "Section 2 X 2.1 Y 2.2 Z" → three items) and parse each entry
+            # into level/number/title/page for the assembler.
+            entries: List[Dict[str, Any]] = []
+            for b in blocks:
+                txt = _text(b)
+                if not txt:
+                    continue
+                for e in _split_toc_line(txt):
+                    parsed = _parse_toc_entry(e)
+                    entries.append(parsed)
+
+            new = ContainerUnit(title="Оглавление", level=2, semantic_type="toc")
+            new.visual_layout = VisualLayout(bounding_box=region, page_or_screen_index=page)
+            new.extraction_confidence = 0.95
+            new.classification_confidence = 0.95
+            new.confidence_score = 0.95
+            for e in entries:
+                target_page = e["target_page"]
+                zero_based = target_page - 1 if isinstance(target_page, int) else None
+                item = TocEntryBlock(
+                    entry_text=e["display"],
+                    chapter_number=e["number"],
+                    target_page=zero_based,
+                    visual_layout=VisualLayout(bounding_box=region, page_or_screen_index=page),
+                    extraction_confidence=0.95,
+                    classification_confidence=0.95,
+                    confidence_score=0.95,
+                )
+                item.metadata = {
+                    "llm_suggested_type": "toc_entry",
+                    "llm_source": "PageAgent",
+                    "toc": {"level": e["level"], "title": e["title"]},
+                }
+                new.children.append(item)
+            parent.children.insert(min(first_idx, len(parent.children)), new)
+            for b in blocks:
+                b.is_tombstoned = True
+                if not b.metadata:
+                    b.metadata = {}
+                b.metadata["tombstone_reason"] = f"page_agent_rebuilt:toc:{new.id}"
+            return f"toc:{new.id}"
+        if role == "title":
+            new = TitlePageBlock(page_role="title")
+            new.inlines = [TextLineInline(spans=[StyledTextSpan(text="\n".join(_text(b) for b in blocks if _text(b)))])]
+            new.visual_layout = VisualLayout(bounding_box=region, page_or_screen_index=page)
+        elif role == "diagram":
+            new = DiagramBlock(
+                labels=[{"text": _text(b), **{k: getattr(bb, k) for k in ("x0", "y0", "x1", "y1")}}
+                        for b, bb in zip(blocks, bbs) if _text(b)],
+                visual_layout=VisualLayout(bounding_box=region, page_or_screen_index=page))
+        else:  # table — mark cells; spatial table build stays with TableDetector
+            for b in blocks:
+                if not b.metadata:
+                    b.metadata = {}
+                b.metadata["llm_suggested_type"] = "table_cell"
+            return "table_cells_marked"
+
+        new.extraction_confidence = 0.9
+        new.classification_confidence = 0.9
+        new.confidence_score = 0.9
+        parent.children.insert(min(first_idx, len(parent.children)), new)
+        for b in blocks:
+            b.is_tombstoned = True
+            if not b.metadata:
+                b.metadata = {}
+            b.metadata["tombstone_reason"] = f"page_agent_rebuilt:{role}:{new.id}"
+        return f"{role}:{new.id}"
 
     # --- PyJobKit Reactive SSE and WebSocket Endpoints ---
 

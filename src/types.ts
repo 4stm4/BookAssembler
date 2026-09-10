@@ -262,6 +262,15 @@ export interface SEPRemoteFile {
   modified_at_utc: string;
 }
 
+export interface KRMStyle {
+  font_family?: string;
+  font_size_pt?: number;
+  is_bold?: boolean;
+  is_italic?: boolean;
+  is_monospace?: boolean;
+  text_color_rgb?: [number, number, number];
+}
+
 export interface KRMNode {
   id: string;
   type: string;
@@ -305,4 +314,5 @@ export interface KAEDocumentItem {
   updated_at: string;
   node_count?: number;
   confidence_avg?: number;
+  stage?: string;
 }

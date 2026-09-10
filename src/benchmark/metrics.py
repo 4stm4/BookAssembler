@@ -3,13 +3,15 @@ Benchmark Quality Metrics for Knowledge Assembly Engine (KAE).
 
 Implements Wagner-Fischer edit distance, Word Error Rate (WER), TEDS
 (Tree Edit Distance for Structure), and Link Precision/Recall/F1 metrics
-according to RFC 0009 (docs/architecture/0009-benchmark.md).
+according to RFC 0009 (docs/architecture/0009-benchmark.md), plus the text
+desynchronization metrics of RFC 0015 §3 (CER, technical drift).
 
 Guarantees:
 - Strict typing (100% mypy --strict compatible)
-- Standard library dependencies only (typing, json, math)
+- Standard library dependencies only (typing, json, math, re)
 """
 
+import re
 from typing import Any, Dict, List, Tuple
 
 
@@ -53,6 +55,53 @@ def compute_wer(reference_text: str, hypothesis_text: str) -> float:
 
     edit_dist = compute_edit_distance(ref_words, hyp_words)
     return float(edit_dist) / float(len(ref_words))
+
+
+def compute_cer(reference_text: str, hypothesis_text: str) -> float:
+    """
+    Computes Character Error Rate (CER) between reference and hypothesis texts
+    (RFC 0015 §3.3). Catches OCR drift that leaves word counts intact.
+    """
+    reference = reference_text.strip()
+    hypothesis = hypothesis_text.strip()
+
+    if not reference:
+        return 0.0 if not hypothesis else 1.0
+
+    edit_dist = compute_edit_distance(list(reference), list(hypothesis))
+    return float(edit_dist) / float(len(reference))
+
+
+_PROTECTED_TOKEN_RE = re.compile(
+    r"\$[^$]+\$"                 # inline math
+    r"|\\[A-Za-z]+"              # LaTeX commands
+    r"|[A-Za-z]*[-_]?\d[A-Za-z0-9_.\-]*"  # R0, PDP-11, 0x1F, 3.14
+    r"|\b[A-Z]{2,}\b"            # MOV, JMP, ASCII
+)
+
+
+def extract_protected_tokens(text: str) -> List[str]:
+    """
+    Tokens that must survive translation byte-for-byte: mnemonics, register and
+    part numbers, numeric literals and math (RFC 0015 §3.1).
+    """
+    return _PROTECTED_TOKEN_RE.findall(text or "")
+
+
+def compute_technical_drift(source_text: str, translated_text: str) -> float:
+    """
+    Desynchronization of a translated segment (RFC 0015 §3.1).
+
+    Word Error Rate across languages would flag every correct translation, so
+    drift is measured only over the protected tokens that a translation must
+    carry through unchanged. Returns 0.0 when the source has none.
+    """
+    reference = extract_protected_tokens(source_text)
+    if not reference:
+        return 0.0
+
+    hypothesis = extract_protected_tokens(translated_text)
+    return float(compute_edit_distance(reference, hypothesis)) / float(len(reference))
 
 
 def _dict_to_structure_tokens(obj: Any) -> List[str]:

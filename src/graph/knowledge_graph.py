@@ -29,6 +29,15 @@ class EntityType(str, Enum):
     CONCEPT_TERM = "concept_term"
     SOFTWARE_API = "software_api"
     BIBLIOGRAPHY_CITE = "bibliography_cite"
+    PERSON = "person"
+    ORGANIZATION = "organization"
+    PRODUCT = "product"
+    SIGNAL = "signal"
+    FORMULA_ID = "formula_id"
+    LOCATION = "location"
+    DATE = "date"
+    VERSION = "version"
+    URL = "url"
 
 
 @dataclass
@@ -59,6 +68,12 @@ class RelationType(str, Enum):
     USES_REGISTER = "uses_register"
     AFFECTS_FLAG = "affects_flag"
     PART_OF_ARCHITECTURE = "part_of_arch"
+    AUTHORED_BY = "authored_by"
+    PUBLISHED_IN = "published_in"
+    CITES = "cites"
+    PART_OF = "part_of"
+    VERSION_OF = "version_of"
+    ALIAS_OF = "alias_of"
 
 
 @dataclass

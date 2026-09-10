@@ -2,15 +2,19 @@
 Unit tests for P3 Infrastructure Modules (RFC 0020).
 
 Tests:
-1. Capability Negotiation & CapabilityMismatchError (RFC 0020)
-2. Plugin Signature Verification (RFC 0020)
-3. Audit Log Engine & Immutable Event History (RFC 0020)
+1. Capability Negotiation & CapabilityMismatchError (RFC 0020 §2.1)
+2. Capability enforcement at execution sites (RFC 0020 §2.1)
+3. Plugin Signature Verification (RFC 0020 §3)
+
+The immutable audit trail (RFC 0020 §4) is covered against the on-disk chained
+logger in tests/unit/test_p0_infrastructure.py — src.audit.logger is the one
+wired into the API.
 """
 
-import hashlib
+import pytest
+
 from src.security.manager import (
-    AuditEntry,
-    AuditLogger,
+    Capability,
     CapabilityMismatchError,
     PluginCapabilities,
     SecurityManager,
@@ -70,69 +74,63 @@ def test_capability_negotiation_pass_and_fail() -> None:
         assert "allow_filesystem=True" in str(exc)
 
 
-def test_plugin_signature_verification() -> None:
-    """
-    Test plugin digital signature verification using public_key digest matching.
-    """
+def test_plugin_signature_verification(tmp_path) -> None:
+    """Ed25519 signature verification against a trusted key (RFC 0020 §3)."""
+    import base64
+
+    from src.plugins.signing import generate_keypair, sign_plugin
+
     sec_mgr = SecurityManager(trust_level=TrustLevel.VERIFIED_ONLY)
 
-    plugin_id = "plugin_layout_analyzer"
-    public_key = "pubkey_kae_core_2026_x86"
-    valid_signature = hashlib.sha256(f"{plugin_id}:{public_key}".encode("utf-8")).hexdigest()
+    priv, pub = generate_keypair()
+    (tmp_path / "core.pub").write_bytes(base64.b64encode(pub))
+    plugin_bytes = b"fake plugin payload"
+    sig_b64 = base64.b64encode(sign_plugin(plugin_bytes, priv)).decode()
 
-    # Valid signature check
-    assert sec_mgr.verify_plugin_signature(plugin_id, valid_signature, public_key) is True
+    # Valid signature
+    assert sec_mgr.verify_plugin_signature(
+        plugin_bytes, sig_b64, "core", keys_dir=tmp_path
+    ) is True
 
-    # Invalid signature check
-    assert sec_mgr.verify_plugin_signature(plugin_id, "invalid_signature_hex", public_key) is False
+    # Tampered payload
+    assert sec_mgr.verify_plugin_signature(
+        b"tampered", sig_b64, "core", keys_dir=tmp_path
+    ) is False
 
-
-def test_audit_logger_event_recording_and_target_filtering() -> None:
-    """
-    Test recording audit events, payload SHA-256 hashing, and retrieving history by target_id.
-    """
-    logger = AuditLogger()
-
-    actor_id = "human_reviewer_01"
-    target_node = "krm_node_paragraph_404"
-    payload = {"edited_text": "Corrected text content", "approved": True}
-
-    entry1 = logger.log_event(
-        actor_id=actor_id,
-        action_type="HUMAN_CORRECTION",
-        target_id=target_node,
-        payload=payload,
-    )
-
-    assert entry1.actor_id == actor_id
-    assert entry1.action_type == "HUMAN_CORRECTION"
-    assert entry1.target_id == target_node
-    assert len(entry1.payload_hash) == 64
-
-    # Log second event for same target
-    entry2 = logger.log_event(
-        actor_id="system_agent_v2",
-        action_type="KG_EDGE_ADDED",
-        target_id=target_node,
-        payload="Linked to section 2.1",
-    )
-
-    # Log event for another target
-    logger.log_event(
-        actor_id="system_agent_v2",
-        action_type="TOMBSTONE_NODE",
-        target_id="krm_node_paragraph_500",
-        payload="Redundant node removed",
-    )
-
-    target_history = logger.get_history_for_target(target_node)
-    assert len(target_history) == 2
-    assert target_history[0].entry_id == entry1.entry_id
-    assert target_history[1].entry_id == entry2.entry_id
+    # Unknown key id
+    assert sec_mgr.verify_plugin_signature(
+        plugin_bytes, sig_b64, "nope", keys_dir=tmp_path
+    ) is False
 
 
-if __name__ == "__main__":
-    test_capability_negotiation_pass_and_fail()
-    test_plugin_signature_verification()
-    test_audit_logger_event_recording_and_target_filtering()
-    print("ALL P3 SECURITY & AUDIT TESTS PASSED!")
+def test_enforce_blocks_ungranted_capability() -> None:
+    """A capability absent from the grant list is refused (RFC 0020 §2.1)."""
+    sec_mgr = SecurityManager(granted_capabilities=[Capability.READ_SEP_STORAGE])
+
+    sec_mgr.enforce(Capability.READ_SEP_STORAGE)
+
+    with pytest.raises(PermissionError, match="EXECUTE_LATEX_SANDBOX"):
+        sec_mgr.enforce(Capability.EXECUTE_LATEX_SANDBOX)
+
+
+def test_capabilities_read_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("KAE_CAPABILITIES", "ACCESS_NETWORK_LLM, bogus_capability")
+    sec_mgr = SecurityManager.from_env()
+
+    assert sec_mgr.granted == {Capability.ACCESS_NETWORK_LLM}
+
+    monkeypatch.delenv("KAE_CAPABILITIES")
+    assert SecurityManager.from_env().granted == set(Capability)
+
+
+def test_latex_compilation_requires_capability(tmp_path, monkeypatch) -> None:
+    """The xelatex execution site actually asks before running (RFC 0020 §1)."""
+    from src.assembler import latex_builder
+    from src.security.manager import set_security_manager
+
+    set_security_manager(SecurityManager(granted_capabilities=[]))
+    try:
+        with pytest.raises(PermissionError, match="EXECUTE_LATEX_SANDBOX"):
+            latex_builder.compile_xelatex(str(tmp_path / "book.tex"), str(tmp_path))
+    finally:
+        set_security_manager(None)

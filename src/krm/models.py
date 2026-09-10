@@ -92,6 +92,9 @@ class ProvenanceInfo:
     adapter_name: str
     extraction_timestamp_utc: str
     source_byte_offset: Optional[Tuple[int, int]] = None
+    # Digest of the bytes this document was parsed from, so lineage records can
+    # be validated against the source they claim (RFC 0011 §3.1).
+    source_sha256: str = ""
     applied_analyzers: List[str] = field(default_factory=list)
     applied_skills: List[str] = field(default_factory=list)
 
@@ -223,6 +226,21 @@ class FigureBlock(StructuralUnit):
 
 
 @dataclass
+class DiagramBlock(FigureBlock):
+    """
+    A diagram / schematic (e.g. block diagram, flowchart) detected on a scanned
+    page. Unlike a plain FigureBlock, it preserves the in-diagram text labels
+    (with their positions) so the diagram can be reconstructed faithfully, and
+    references the source page region it was cropped from.
+    The visual is rendered on demand from the source page region (bounding_box
+    of visual_layout), so all lines/arrows/labels are kept exactly as scanned.
+    """
+    # Each label: {"text": str, "x0","y0","x1","y1": normalized floats}
+    labels: List[Dict[str, Any]] = field(default_factory=list)
+    caption_text: str = ""
+
+
+@dataclass
 class CodeBlock(StructuralUnit):
     """
     Code listing or preformatted source code block.
@@ -316,6 +334,42 @@ class WarningSpec(SemanticUnit):
     message_text: str = ""
 
 
+@dataclass
+class TheoremSpec(SemanticUnit):
+    """
+    Formal mathematical statement (theorem, lemma, corollary, proposition).
+    """
+    statement_type: str = "theorem"  # theorem, lemma, corollary, proposition
+    name: str = ""
+    number: str = ""
+
+
+@dataclass
+class ProofSpec(SemanticUnit):
+    """
+    Proof of a theorem/lemma. Links back to statement via target_block_id.
+    """
+    proved_statement_id: str = ""
+
+
+@dataclass
+class ExampleSpec(SemanticUnit):
+    """
+    Worked example illustrating a concept or theorem.
+    """
+    name: str = ""
+    number: str = ""
+
+
+@dataclass
+class RemarkSpec(SemanticUnit):
+    """
+    Remark, note, or observation in mathematical/technical discourse.
+    """
+    name: str = ""
+    number: str = ""
+
+
 # ============================================================================
 # 5. Container & Root Units
 # ============================================================================
@@ -340,3 +394,4 @@ class KnowledgeDocument(BaseKRMNode):
     source_uri: str = ""
     source_type: str = ""  # e.g., 'pdf', 'docx', 'html', 'ipynb'
     root_containers: List[ContainerUnit] = field(default_factory=list)
+    semantic_units: List["SemanticUnit"] = field(default_factory=list)
