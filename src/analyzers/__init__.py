@@ -40,6 +40,7 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
 
 
 __all__ = [
+    "AlgorithmDetectorAnalyzer",
     "AnalyzerManifest",
     "BaseAnalyzer",
     "BlockClassifierAnalyzer",
@@ -51,6 +52,7 @@ __all__ = [
     "KRMPermission",
     "NormalizationAnalyzer",
     "PipelineRunner",
+    "ProperNounExtractorAnalyzer",
     "RGPermission",
     "ReadingOrderAnalyzer",
     "SecurityViolationError",

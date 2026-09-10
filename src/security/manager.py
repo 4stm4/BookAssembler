@@ -1,21 +1,33 @@
 """
-Security, Capability Negotiation & Audit Log Engine for Knowledge Assembly Engine (KAE).
+Security, Capability Negotiation & Trust Engine for Knowledge Assembly Engine (KAE).
 
-Implements TrustLevel, CapabilityMismatchError, PluginCapabilities, AuditEntry, AuditLogger,
-and SecurityManager according to RFC 0020.
+Implements Capability, TrustLevel, CapabilityMismatchError, PluginCapabilities and
+SecurityManager according to RFC 0020. The immutable audit trail (RFC 0020 §4) lives
+in src.audit.logger — that is the chained, on-disk logger wired into the API.
 
 Guarantees:
 - Strict typing (100% mypy --strict compatible)
-- Standard library dependencies only (dataclasses, enum, typing, json, hashlib, datetime, uuid)
+- Standard library dependencies only (dataclasses, enum, typing, os, pathlib)
 """
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from enum import Enum
-import hashlib
-import json
-from typing import Any, Dict, List, Optional
-from uuid import uuid4
+import logging
+import os
+from pathlib import Path
+from typing import Iterable, Optional, Set
+
+log = logging.getLogger(__name__)
+
+
+class Capability(str, Enum):
+    """
+    Capabilities a plugin or worker node must be granted before acting (RFC 0020 §2.1).
+    """
+    READ_SEP_STORAGE = "READ_SEP_STORAGE"
+    WRITE_SEP_STORAGE = "WRITE_SEP_STORAGE"
+    EXECUTE_LATEX_SANDBOX = "EXECUTE_LATEX_SANDBOX"
+    ACCESS_NETWORK_LLM = "ACCESS_NETWORK_LLM"
 
 
 class TrustLevel(Enum):
@@ -46,70 +58,30 @@ class PluginCapabilities:
     allow_filesystem: bool = False
 
 
-@dataclass
-class AuditEntry:
-    """
-    Immutable audit log record for security, transformation, and mutation operations.
-    """
-    actor_id: str
-    action_type: str
-    target_id: str
-    payload_hash: str
-    entry_id: str = field(default_factory=lambda: str(uuid4()))
-    timestamp_utc: str = field(
-        default_factory=lambda: datetime.now(timezone.utc).isoformat()
-    )
-
-
-class AuditLogger:
-    """
-    Immutable audit trail recorder for operations across the Knowledge Assembly Engine.
-    """
-
-    def __init__(self) -> None:
-        self._entries: List[AuditEntry] = []
-
-    def log_event(
-        self, actor_id: str, action_type: str, target_id: str, payload: Any
-    ) -> AuditEntry:
-        """
-        Hashes event payload and records an immutable AuditEntry.
-        """
-        if isinstance(payload, bytes):
-            raw_bytes = payload
-        elif isinstance(payload, str):
-            raw_bytes = payload.encode("utf-8")
-        elif isinstance(payload, (dict, list)):
-            raw_bytes = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
-        else:
-            raw_bytes = str(payload).encode("utf-8")
-
-        payload_hash = hashlib.sha256(raw_bytes).hexdigest()
-
-        entry = AuditEntry(
-            actor_id=actor_id,
-            action_type=action_type,
-            target_id=target_id,
-            payload_hash=payload_hash,
-        )
-
-        self._entries.append(entry)
-        return entry
-
-    def get_history_for_target(self, target_id: str) -> List[AuditEntry]:
-        """
-        Retrieves all audit entries for a specific target_id.
-        """
-        return [entry for entry in self._entries if entry.target_id == target_id]
-
-
 class SecurityManager:
     """
-    Security manager for plugin capability negotiation and signature verification.
+    Security manager for capability enforcement, plugin capability negotiation,
+    and signature verification.
     """
 
-    def __init__(self, trust_level: TrustLevel = TrustLevel.VERIFIED_ONLY) -> None:
+    def __init__(
+        self,
+        trust_level: TrustLevel = TrustLevel.VERIFIED_ONLY,
+        granted_capabilities: Optional[Iterable[Capability]] = None,
+    ) -> None:
         self.trust_level = trust_level
+        self.granted: Set[Capability] = (
+            set(Capability)
+            if granted_capabilities is None
+            else set(granted_capabilities)
+        )
+
+    def enforce(self, capability: Capability) -> None:
+        """
+        Raises PermissionError unless the capability was granted (RFC 0020 §2.1).
+        """
+        if capability not in self.granted:
+            raise PermissionError(f"Access denied for capability: {capability.value}")
 
     def negotiate_capabilities(
         self, requested: PluginCapabilities, system_policy: PluginCapabilities
@@ -135,14 +107,58 @@ class SecurityManager:
 
         return True
 
-    def verify_plugin_signature(
-        self, plugin_id: str, signature: str, public_key: str
-    ) -> bool:
+    @classmethod
+    def from_env(cls) -> "SecurityManager":
         """
-        Verifies plugin signature using public_key digest matching.
+        Builds a manager from KAE_CAPABILITIES (comma-separated). Unset grants
+        everything, so an operator opts into restriction rather than out of it.
         """
-        if not plugin_id or not signature or not public_key:
-            return False
+        raw = os.environ.get("KAE_CAPABILITIES", "").strip()
+        if not raw:
+            return cls()
 
-        expected_sig = hashlib.sha256(f"{plugin_id}:{public_key}".encode("utf-8")).hexdigest()
-        return signature == expected_sig
+        granted: Set[Capability] = set()
+        for name in raw.split(","):
+            name = name.strip().upper()
+            if not name:
+                continue
+            try:
+                granted.add(Capability(name))
+            except ValueError:
+                log.warning("Unknown capability in KAE_CAPABILITIES: %s", name)
+        return cls(granted_capabilities=granted)
+
+    def verify_plugin_signature(
+        self, plugin_bytes: bytes, signature_b64: str, pubkey_id: str,
+        keys_dir: Optional[Path] = None,
+    ) -> bool:
+        """Verify a plugin's Ed25519 signature against a trusted key (RFC 0020 §3).
+
+        Delegates to src.plugins.signing — the previous implementation compared
+        sha256("{plugin_id}:{public_key}"), which anyone knowing the (public)
+        id and key could forge.
+        """
+        from src.plugins.signing import verify_plugin_with_trusted_key
+
+        if not plugin_bytes or not signature_b64 or not pubkey_id:
+            return False
+        return verify_plugin_with_trusted_key(
+            plugin_bytes, signature_b64, pubkey_id, keys_dir
+        )
+
+
+_manager: Optional[SecurityManager] = None
+
+
+def get_security_manager() -> SecurityManager:
+    """Process-wide manager used by the capability checks at execution sites."""
+    global _manager
+    if _manager is None:
+        _manager = SecurityManager.from_env()
+    return _manager
+
+
+def set_security_manager(manager: Optional[SecurityManager]) -> None:
+    """Override the process-wide manager (None resets it to the environment default)."""
+    global _manager
+    _manager = manager

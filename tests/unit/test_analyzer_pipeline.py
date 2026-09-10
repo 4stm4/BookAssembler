@@ -251,3 +251,37 @@ def test_security_violation_rg_mutation() -> None:
 
     with pytest.raises(SecurityViolationError, match="MUTATE_EDGES"):
         runner.execute(doc, rg, kg)
+
+
+class ChildTombstoningAnalyzer(BaseAnalyzer):
+    """Tombstones a nested block directly — the case the root proxy misses."""
+
+    def __init__(self) -> None:
+        super().__init__(AnalyzerManifest(
+            name="ChildTombstoner",
+            version="1.0.0",
+            description="Tombstones a child block without TOMBSTONE permission.",
+            krm_permissions={KRMPermission.READ, KRMPermission.MUTATE_ATTRIBUTES},
+            rg_permissions=set(),
+            kg_permissions=set(),
+            depends_on=[],
+        ))
+
+    def run(self, doc, rg, kg, context=None) -> None:
+        doc.root_containers[0].children[0].is_tombstoned = True
+
+
+def test_security_violation_child_node_tombstone() -> None:
+    """A nested-node structural change is rejected even though the Guarded proxy
+    never sees the write (RFC 0005 §5, RFC 0001 §2.4)."""
+    runner = PipelineRunner([ChildTombstoningAnalyzer()])
+
+    doc = KnowledgeDocument(title="Doc")
+    chapter = ContainerUnit(title="Ch")
+    chapter.children.append(ParagraphBlock(
+        inlines=[TextLineInline(spans=[StyledTextSpan(text="body")])]
+    ))
+    doc.root_containers.append(chapter)
+
+    with pytest.raises(SecurityViolationError, match="TOMBSTONE"):
+        runner.execute(doc, ReadingGraph(), KnowledgeGraph())

@@ -43,6 +43,8 @@ from src.krm.models import (
     FormulaBlock,
     InstructionSpec,
     KnowledgeDocument,
+    ListBlock,
+    ListItemBlock,
     MathInline,
     NormalizedRect,
     ParagraphBlock,
@@ -221,6 +223,33 @@ def test_knowledge_document_assembly() -> None:
     assert isinstance(first_child, ParagraphBlock)
     assert len(first_child.inlines) == 1
     assert len(first_child.inlines[0].spans) == 2
+
+
+def test_list_block_and_item_types() -> None:
+    """ListBlock/ListItemBlock: identity, tombstoning, nested content."""
+    item1 = ListItemBlock(marker="•", content=[ParagraphBlock()])
+    item2 = ListItemBlock(marker="•", content=[ParagraphBlock()])
+    lst = ListBlock(list_style="bullet", items=[item1, item2])
+
+    assert isinstance(lst, StructuralUnit)
+    assert isinstance(item1, StructuralUnit)
+    assert lst.list_style == "bullet"
+    assert len(lst.items) == 2
+    assert item1.marker == "•"
+    assert isinstance(item1.content[0], ParagraphBlock)
+    # UUID identity + tombstoning inherited from BaseKRMNode
+    assert item1.id != item2.id
+    assert lst.is_tombstoned is False
+    lst.is_tombstoned = True
+    assert lst.is_tombstoned is True
+
+    # Ordered list nests a bullet sub-list — items may contain lists.
+    inner = ListBlock(list_style="bullet", items=[ListItemBlock(marker="-")])
+    outer = ListBlock(
+        list_style="ordered",
+        items=[ListItemBlock(marker="1.", content=[inner])],
+    )
+    assert isinstance(outer.items[0].content[0], ListBlock)
 
 
 def test_provenance_info() -> None:

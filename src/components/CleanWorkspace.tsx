@@ -19,10 +19,12 @@ import {
   Download,
   Eye,
   ChevronDown,
+  LayoutTemplate,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import kaeApi from '../api/client';
-import { HITLTask, KAEJobEvent, KRMNode } from '../types';
+import { HITLTask, KAEJobEvent, KRMNode, PageLayout } from '../types';
+import PageCanvas from './PageCanvas';
 import SEPSourcesDialog from './SEPSourcesDialog';
 
 const TYPE_COLORS: Record<string, string> = {
@@ -306,6 +308,8 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
   const [sourceText, setSourceText] = useState<string>('');
   const [targetMarkdown, setTargetMarkdown] = useState<string>('');
   const [krmNodes, setKrmNodes] = useState<KRMNode[]>([]);
+  // Per-page render strategy from the assembler (RFC 0021 §3), keyed by page.
+  const [pageLayouts, setPageLayouts] = useState<Record<number, PageLayout>>({});
 
   // HITL Verification Banner State
   const [pendingHitlTasks, setPendingHitlTasks] = useState<HITLTask[]>([]);
@@ -350,6 +354,31 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
       setActiveJobId(initialJobId);
     }
   }, [initialJobId]);
+
+  // Refresh the page-layout map whenever the tree changes: re-running a page
+  // can turn it from reflow into positional (or back).
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeJobId || krmNodes.length === 0) {
+      setPageLayouts({});
+      return;
+    }
+    kaeApi
+      .getPageLayouts(activeJobId)
+      .then((res) => {
+        if (cancelled) return;
+        const byPage: Record<number, PageLayout> = {};
+        for (const p of res.pages) byPage[p.page_index] = p;
+        setPageLayouts(byPage);
+      })
+      .catch(() => {
+        // Layout is an enhancement; the list view stands on its own.
+        if (!cancelled) setPageLayouts({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeJobId, krmNodes]);
 
   // Fetch real KRM data when job is active
   useEffect(() => {
@@ -675,6 +704,7 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
           {/* Pane Content */}
           <div className="flex-1 overflow-y-auto p-5 font-mono text-xs leading-relaxed text-slate-300">
             {activeTabLeft === 'krm' ? (
+              <PageLayoutCtx.Provider value={pageLayouts}>
               <div className="space-y-4">
                 <div className="text-[11px] text-slate-400 uppercase tracking-wider font-sans font-semibold">
                   Иерархия узлов KRM (Knowledge Representation Model)
@@ -683,6 +713,7 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
                   <KRMNodeView key={node.id} node={node} depth={0} jobId={activeJobId || undefined} onRefineRequest={handleRefineRequest} />
                 ))}
               </div>
+              </PageLayoutCtx.Provider>
             ) : (
               <textarea
                 value={sourceText}

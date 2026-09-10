@@ -10,7 +10,7 @@ Guarantees:
 
 from dataclasses import dataclass
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from src.ai_layer.models import AIContextChunk
 
@@ -64,26 +64,36 @@ class RetrievalEvaluator:
 
     @staticmethod
     def compute_ndcg(
-        retrieved_ids: List[str], relevant_ids: List[str], k: int
+        retrieved_ids: List[str],
+        relevant_ids: Union[List[str], Dict[str, float]],
+        k: int,
     ) -> float:
         """
-        Calculates Normalized Discounted Cumulative Gain at K (nDCG@K).
+        Calculates Normalized Discounted Cumulative Gain at K (nDCG@K) with the
+        graded gain 2^r - 1 of RFC 0018 §2.3.
+
+        `relevant_ids` may be a list (every hit graded 1) or a mapping id -> grade,
+        which is what distinguishes a merely related chunk from the right one.
         """
         if not relevant_ids or not retrieved_ids or k <= 0:
             return 0.0
 
-        top_k = retrieved_ids[:k]
-        relevant_set = set(relevant_ids)
+        grades: Dict[str, float] = (
+            dict(relevant_ids)
+            if isinstance(relevant_ids, dict)
+            else {item_id: 1.0 for item_id in relevant_ids}
+        )
 
         dcg = 0.0
-        for i, item_id in enumerate(top_k, start=1):
-            rel = 1.0 if item_id in relevant_set else 0.0
-            dcg += rel / math.log2(i + 1)
+        for i, item_id in enumerate(retrieved_ids[:k], start=1):
+            gain = (2.0 ** grades.get(item_id, 0.0)) - 1.0
+            dcg += gain / math.log2(i + 1)
 
-        idcg = 0.0
-        num_relevant_in_k = min(len(relevant_ids), k)
-        for i in range(1, num_relevant_in_k + 1):
-            idcg += 1.0 / math.log2(i + 1)
+        ideal_grades = sorted(grades.values(), reverse=True)[:k]
+        idcg = sum(
+            ((2.0 ** grade) - 1.0) / math.log2(i + 1)
+            for i, grade in enumerate(ideal_grades, start=1)
+        )
 
         if idcg == 0.0:
             return 0.0
@@ -136,6 +146,7 @@ class DatasetGenerator:
                 "chunk_id": chunk.chunk_id,
                 "source_krm_ids": list(chunk.source_krm_ids),
                 "parent_container_id": chunk.parent_container_id,
+                "source_locations": [dict(loc) for loc in chunk.source_locations],
                 "metadata": dict(chunk.metadata),
             }
 
@@ -173,6 +184,7 @@ class DatasetGenerator:
                 "chunk_id": chunk.chunk_id,
                 "source_krm_ids": list(chunk.source_krm_ids),
                 "parent_container_id": chunk.parent_container_id,
+                "source_locations": [dict(loc) for loc in chunk.source_locations],
             }
 
             item: Dict[str, Any] = {

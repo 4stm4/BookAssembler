@@ -26,6 +26,24 @@ from src.krm.models import (
 from src.provenance.models import ProvenanceTracker, SourceLocation, TransformationStep
 
 
+# Attributes a human reviewer may set directly on a KRM node. Anything else in
+# a correction payload is stored under node.metadata instead of being written
+# through setattr — the endpoint takes the payload straight from the request
+# body, and an unfiltered setattr let a client rewrite `id`, flip
+# `is_tombstoned`, or replace `children`/`inlines` with arbitrary values,
+# breaking node identity and KRM invariants (RFC 0002 §inv3/§inv4).
+_CORRECTABLE_FIELDS = frozenset({
+    "text", "title", "caption_text", "entry_text", "raw_text", "code_text",
+    "pseudocode", "latex_expression", "definition_text", "message_text",
+    "term", "marker", "label",
+    "programming_language", "list_style", "kind", "severity", "ephemera_type",
+    "sidebar_type", "statement_type", "page_role", "target_type",
+    "algorithm_name", "algorithm_number", "formula_number", "chapter_number",
+    "is_bold", "is_italic",
+    "confidence_score", "extraction_confidence", "classification_confidence",
+})
+
+
 class CorrectionStatus(Enum):
     """
     Status lifecycle for Human-in-the-Loop correction task items.
@@ -80,6 +98,41 @@ class HITLManager:
 
         return flagged_items
 
+    def flag_desynchronized_nodes(
+        self, doc: KnowledgeDocument, wer_threshold: float = 0.15
+    ) -> List[HITLTaskItem]:
+        """
+        Queues translated segments whose technical drift exceeds the threshold
+        (RFC 0015 §4). Drift is recorded per segment by the translator; a segment
+        that lost mnemonics, register names or formulas needs a human even when
+        the node's own confidence is high.
+        """
+        flagged_items: List[HITLTaskItem] = []
+
+        for node in self._get_all_nodes(doc):
+            if node.is_tombstoned:
+                continue
+            translations = (node.metadata or {}).get("translations") or {}
+            for target_lang, segment in translations.items():
+                drift = (segment or {}).get("drift") or {}
+                wer = float(drift.get("protected_token_wer", 0.0))
+                if wer <= wer_threshold:
+                    continue
+                task = HITLTaskItem(
+                    target_krm_id=node.id,
+                    current_confidence=node.confidence_score,
+                    suggested_fix={
+                        "reason": "DESYNC_TEXT_DRIFT",
+                        "target_lang": target_lang,
+                        "protected_token_wer": wer,
+                    },
+                    status=CorrectionStatus.PENDING_HUMAN_REVIEW,
+                )
+                self._tasks[task.task_id] = task
+                flagged_items.append(task)
+
+        return flagged_items
+
     def apply_human_correction(
         self,
         doc: KnowledgeDocument,
@@ -113,10 +166,23 @@ class HITLManager:
         for key, value in correction_payload.items():
             if key == "rejected":
                 continue
-            if hasattr(node, key):
+            if key == "metadata" and isinstance(value, dict):
+                node.metadata.update(value)
+                continue
+            if key in _CORRECTABLE_FIELDS and hasattr(node, key):
+                current = getattr(node, key)
+                if isinstance(current, bool):
+                    value = bool(value)
+                elif isinstance(current, (int, float)) and isinstance(value, (int, float)):
+                    value = type(current)(value)
+                elif current is not None and not isinstance(value, type(current)):
+                    raise ValueError(
+                        f"HITL correction for '{key}' expects "
+                        f"{type(current).__name__}, got {type(value).__name__}"
+                    )
                 setattr(node, key, value)
             else:
-                node.metadata[key] = value
+                node.metadata[str(key)] = value
 
         # Human correction boosts confidence to 1.0
         node.confidence_score = 1.0
@@ -155,7 +221,11 @@ class HITLManager:
             if tracker.get_lineage(node.id) is None:
                 source_loc = SourceLocation(
                     source_uri=doc.source_uri or "unknown_doc",
-                    source_sha256="",
+                    source_sha256=(
+                        doc.provenance_info.source_sha256
+                        if doc.provenance_info
+                        else ""
+                    ),
                 )
                 tracker.register_entity(node.id, source_loc)
 
@@ -209,11 +279,8 @@ class HITLManager:
     def _find_node_by_id(
         self, doc: KnowledgeDocument, target_id: str
     ) -> Optional[BaseKRMNode]:
-        """
-        Finds a node by ID in document.
-        """
-        all_nodes = self._get_all_nodes(doc)
-        for n in all_nodes:
-            if n.id == target_id:
+        """Finds a node by ID anywhere in the document tree."""
+        for n in walk(doc):
+            if isinstance(n, BaseKRMNode) and n.id == target_id:
                 return n
         return None

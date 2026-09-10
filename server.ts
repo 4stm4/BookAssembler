@@ -39,23 +39,31 @@ app.use('/api/v1', createProxyMiddleware({
 
 app.use(express.json({ limit: '10mb' }));
 
-// Attempt to spawn Python FastAPI Backend for PyJobKit & KAE API if python3/uvicorn available
-try {
-  const fastApiProcess = spawn(
-    'python3',
-    ['-m', 'uvicorn', 'src.api.app:app', '--host', '127.0.0.1', '--port', '8000'],
-    {
-      stdio: 'ignore',
-      env: { ...process.env, PYTHONPATH: '.' },
-    }
-  );
-  fastApiProcess.on('error', () => {
-    // Ignore error if python environment is not active
-  });
-  process.on('exit', () => {
-    try { fastApiProcess.kill(); } catch (_) {}
-  });
-} catch (_) {}
+// Attempt to spawn Python FastAPI Backend for PyJobKit & KAE API if python3/uvicorn available.
+// Skipped when the backend is already supervised elsewhere (KAE_SPAWN_BACKEND=0):
+// the container image starts uvicorn from its CMD, and a second instance here
+// races it for port 8000. Whichever loses dies with EADDRINUSE — and when the
+// CMD one loses, nothing is left listening on the published port.
+if (process.env.KAE_SPAWN_BACKEND !== '0') {
+  try {
+    const fastApiProcess = spawn(
+      'python3',
+      ['-m', 'uvicorn', 'src.api.app:app', '--host', '127.0.0.1', '--port', '8000'],
+      {
+        // 'inherit', not 'ignore': the backend's logs are the only view into
+        // pipeline and assembly work, and discarding them hides real failures.
+        stdio: 'inherit',
+        env: { ...process.env, PYTHONPATH: '.' },
+      }
+    );
+    fastApiProcess.on('error', () => {
+      // Ignore error if python environment is not active
+    });
+    process.on('exit', () => {
+      try { fastApiProcess.kill(); } catch (_) {}
+    });
+  } catch (_) {}
+}
 
 // In-Memory Database Stores
 let bookConfig: BookConfig = {

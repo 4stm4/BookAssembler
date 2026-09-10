@@ -157,7 +157,7 @@ export const App: React.FC = () => {
     return () => {
       unsubscribe();
     };
-  }, []);
+  }, [loadTranslationData]);
 
   const handleOpenGraph = (jobId: string) => {
     setGraphModalJobId(jobId);

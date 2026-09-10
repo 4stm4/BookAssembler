@@ -1,0 +1,27 @@
+{
+  "block_counts": {
+    "BlankPageBlock": 4,
+    "CaptionBlock": 5,
+    "ContainerUnit": 4,
+    "EphemeraBlock": 32,
+    "ParagraphBlock": 202,
+    "TableBlock": 3,
+    "TitlePageBlock": 1
+  },
+  "vision_classifications": {
+    "caption": 4,
+    "heading": 17,
+    "label": 3,
+    "list_item": 29,
+    "paragraph": 31,
+    "table_cell": 2,
+    "title": 10
+  },
+  "vision_model": "Qwen2.5-VL-7B-Instruct",
+  "vision_agent": "Kaggle-T4-Cloudflare",
+  "pages_classified": 14,
+  "pages_timeout": 8,
+  "pages_total": 34,
+  "agent_tables": 3,
+  "total_blocks": 251
+}

@@ -16,6 +16,7 @@ Guarantees:
 """
 
 import hashlib
+import os
 from datetime import datetime, timezone
 from typing import Any, BinaryIO, Dict, List, Optional
 
@@ -26,6 +27,9 @@ from src.adapters.base import (
     BaseSourceAdapter,
     SourceAdapterParseError,
 )
+from src.adapters._shared import fallback_title
+from src.artifacts.store import sha256_file
+from src.krm.identity import derive_source_id
 from src.krm.models import (
     CodeBlock,
     ContainerUnit,
@@ -42,14 +46,6 @@ from src.krm.models import (
 )
 
 
-def _get_fallback_title(source_uri: str) -> str:
-    if not source_uri:
-        return "Untitled Document"
-    base_name = source_uri.rstrip("/").split("/")[-1].split("?")[0]
-    if "." in base_name:
-        derived = base_name.rsplit(".", 1)[0]
-        return derived if derived else "Untitled Document"
-    return base_name if base_name else "Untitled Document"
 
 
 MONOSPACE_FAMILIES = {"courier", "consolas", "mono", "source code", "fira code", "dejavu sans mono"}
@@ -125,6 +121,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     pdf_doc = fitz.open(file_path)
                 except Exception as e:
                     raise SourceAdapterParseError(f"PyMuPDF failed to open PDF: {e}") from e
+                source_sha256 = sha256_file(file_path)
             else:
                 raw_bytes = stream.read()
                 if not isinstance(raw_bytes, bytes):
@@ -133,6 +130,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     pdf_doc = fitz.open(stream=raw_bytes, filetype="pdf")
                 except Exception as e:
                     raise SourceAdapterParseError(f"PyMuPDF failed to open PDF: {e}") from e
+                source_sha256 = hashlib.sha256(raw_bytes).hexdigest()
         except SourceAdapterParseError:
             raise
         except Exception as e:
@@ -142,9 +140,10 @@ class PdfSourceAdapter(BaseSourceAdapter):
         provenance = ProvenanceInfo(
             adapter_name=self.capabilities.adapter_name,
             extraction_timestamp_utc=timestamp,
+            source_sha256=source_sha256,
         )
 
-        title = _get_fallback_title(source_uri)
+        title = fallback_title(source_uri)
         pdf_title = pdf_doc.metadata.get("title", "").strip() if pdf_doc.metadata else ""
         if pdf_title:
             title = pdf_title
@@ -165,6 +164,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
         # HeadingAnalyzer builds the heading hierarchy downstream. Typography
         # (font size, bold) is preserved in each block's StyleDescriptor.
         current_container = ContainerUnit(
+            id=derive_source_id("root-container", source_uri, None, None, title),
             title=title,
             level=1,
             provenance_info=provenance,
@@ -183,12 +183,10 @@ class PdfSourceAdapter(BaseSourceAdapter):
                 btype = block.get("type", 0)
                 bbox = block.get("bbox", (0, 0, pw, ph))
 
-                norm_rect = NormalizedRect(
-                    x0=max(0.0, min(1.0, bbox[0] / pw)),
-                    y0=max(0.0, min(1.0, bbox[1] / ph)),
-                    x1=max(0.0, min(1.0, bbox[2] / pw)),
-                    y1=max(0.0, min(1.0, bbox[3] / ph)),
-                )
+                # _norm_rect sorts the corners; a rotated/negative PyMuPDF bbox
+                # with x0 > x1 would otherwise trip NormalizedRect.__post_init__
+                # and abort the whole parse (the inline version here did).
+                norm_rect = _norm_rect(bbox, pw, ph)
                 if norm_rect.x0 >= norm_rect.x1:
                     continue
                 if norm_rect.y0 >= norm_rect.y1:
@@ -204,6 +202,9 @@ class PdfSourceAdapter(BaseSourceAdapter):
                         image_uri = f"artifact://{img_sha}"
 
                     fig = FigureBlock(
+                        id=derive_source_id(
+                            "figure", source_uri, page_idx, norm_rect, image_uri
+                        ),
                         image_uri=image_uri,
                         mime_type=mime,
                         alt_text="",
@@ -230,6 +231,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
                 max_font_size = 0.0
                 is_bold_block = False
 
+                line_records: List[Dict[str, Any]] = []
                 for line in lines:
                     line_parts: List[str] = []
                     for span in line.get("spans", []):
@@ -264,6 +266,13 @@ class PdfSourceAdapter(BaseSourceAdapter):
                 full_text = " ".join(line_texts).strip()
                 if not full_text:
                     continue
+                # Drop OCR noise from non-text regions (logos/crests/artifacts) so
+                # it doesn't pollute paragraphs or title pages.
+                if not is_mono_block and _is_ocr_garbage(full_text):
+                    page_flags = doc.root_containers[0].metadata.setdefault("ocr_garbage_pages", [])
+                    if page_idx not in page_flags:
+                        page_flags.append(page_idx)
+                    continue
 
                 style = StyleDescriptor(
                     font_family=block_spans_info[0]["font"] if block_spans_info else "sans-serif",
@@ -280,6 +289,9 @@ class PdfSourceAdapter(BaseSourceAdapter):
                 if is_mono_block:
                     ext_conf = _extraction_confidence(full_text)
                     code = CodeBlock(
+                        id=derive_source_id(
+                            "code", source_uri, page_idx, norm_rect, full_text
+                        ),
                         code_text=full_text,
                         parent_container_id=current_container.id,
                         provenance_info=provenance,
