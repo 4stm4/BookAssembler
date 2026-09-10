@@ -14,7 +14,7 @@ Implements REST API endpoints according to KAE specifications:
 
 Guarantees:
 - Strict typing (100% mypy --strict compatible)
-- Integrates JobManager, HITLManager, ArtifactStore, KnowledgeDocument, and SEPManager
+- Integrates JobManager, HITLManager, KnowledgeDocument, and SEPManager
 """
 
 import asyncio
@@ -57,7 +57,6 @@ from src.adapters.providers import (
     SEPManager,
     SEPType,
 )
-from src.artifacts.store import ArtifactStore
 from src.hitl.manager import CorrectionStatus, HITLManager, HITLTaskItem
 from src.jobs.manager import JobManager, JobRecord, JobStatus
 from src.jobs.pyjobkit_bridge import PyJobKitBridge
@@ -189,7 +188,6 @@ def create_app() -> FastAPI:
 
     job_manager = JobManager()
     hitl_manager = HITLManager()
-    artifact_store = ArtifactStore()
     sep_manager = SEPManager()
     pyjobkit_bridge = PyJobKitBridge()
     adapter_registry = create_default_registry()

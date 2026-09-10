@@ -43,6 +43,9 @@ scratchpad/
 # Agent state (RFC 0022)
 .manager/
 .runner/
+
+# Runtime data dir: audit log, caches (RFC 0020 §4)
+.kae/
 .scratchpad/
 .claude/settings.local.json
 

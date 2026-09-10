@@ -1,32 +1,13 @@
 """
-Artifact Store & Multi-Level Cache Engine for Knowledge Assembly Engine (KAE).
+Artifact bundle packaging for Knowledge Assembly Engine (KAE), RFC 0013.
 
-Provides ArtifactType, StorageTier, ArtifactManifest, SnapshotManifest,
-PackFileBuilder, PackFileReader, ArtifactStore, and MultiLevelCache according to RFC 0013.
+Provides the content-addressed `.kap` bundle writer/reader used by the build.
 """
 
-from src.artifacts.models import (
-    ArtifactManifest,
-    ArtifactType,
-    SnapshotManifest,
-    StorageTier,
-)
-from src.artifacts.store import (
-    ArtifactMeta,
-    ArtifactStore,
-    MultiLevelCache,
-    PackFileBuilder,
-    PackFileReader,
-)
+from src.artifacts.store import read_kap_bundle, sha256_file, write_kap_bundle
 
 __all__ = [
-    "ArtifactManifest",
-    "ArtifactMeta",
-    "ArtifactStore",
-    "ArtifactType",
-    "MultiLevelCache",
-    "PackFileBuilder",
-    "PackFileReader",
-    "SnapshotManifest",
-    "StorageTier",
+    "read_kap_bundle",
+    "sha256_file",
+    "write_kap_bundle",
 ]
