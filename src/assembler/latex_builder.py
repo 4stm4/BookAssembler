@@ -412,6 +412,27 @@ def _render_table(table: TableBlock) -> str:
 SOURCE_DATE_EPOCH = 0  # 1970-01-01; fixed so rebuilds are byte-identical
 
 
+def toolchain_fingerprint() -> str:
+    """Identity of the TeX toolchain that compiled a build (RFC 0012 §3.3).
+
+    The image installs TeX Live from apt without version pins, so an image built
+    months apart can carry a different XeTeX. Recording the banner in kae.lock
+    makes that visible instead of silently producing a different PDF.
+    """
+    try:
+        proc = subprocess.run(
+            ["xelatex", "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unavailable"
+
+    banner = (proc.stdout or b"").decode("utf-8", "replace").strip().splitlines()
+    return banner[0].strip() if banner else "unknown"
+
+
 def compile_xelatex(
     tex_path: str, work_dir: str, source_date_epoch: int = SOURCE_DATE_EPOCH,
 ) -> str:
