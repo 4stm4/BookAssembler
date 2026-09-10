@@ -18,8 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # RFC 0012 §3.3: XeLaTeX toolchain for target-document assembly (Cyrillic-capable).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    texlive-xetex texlive-latex-recommended texlive-lang-cyrillic \
-    texlive-fonts-recommended fonts-dejavu && \
+    texlive-xetex texlive-latex-recommended texlive-latex-extra \
+    texlive-lang-cyrillic texlive-fonts-recommended fonts-dejavu && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

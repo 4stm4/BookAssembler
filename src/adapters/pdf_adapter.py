@@ -77,6 +77,33 @@ def _extraction_confidence(text: str) -> float:
     return max(0.10, min(0.95, base))
 
 
+def _is_ocr_garbage(text: str) -> bool:
+    """Detect OCR noise from non-text regions (logos, crests, scan artifacts),
+    e.g. ", 1IIIIiK,8I ,..i!C\"'-". Real text has a decent letter ratio and at
+    least one proper word; garbage is mostly punctuation/digits and letter debris.
+    """
+    import re
+    t = text.strip()
+    if len(t) < 4:
+        return False  # too short to judge; blank-page logic handles these
+    letters = sum(c.isalpha() for c in t)
+    if letters / len(t) < 0.5:
+        return True
+    # A proper word: 3+ letters containing a vowel and not all the same letter.
+    words = re.findall(r"[A-Za-z]{3,}", t)
+    proper = [w for w in words if re.search(r"[aeiouAEIOUyY]", w) and len(set(w.lower())) >= 2]
+    return len(proper) == 0
+
+
+def _norm_rect(bbox: Any, pw: float, ph: float) -> NormalizedRect:
+    """Clamp a PyMuPDF bbox into the [0,1] page grid (RFC 0002 §inv3)."""
+    x0, y0, x1, y1 = (bbox or (0, 0, pw, ph))[:4]
+    c = lambda v, d: max(0.0, min(1.0, v / d))
+    nx0, nx1 = sorted((c(x0, pw), c(x1, pw)))
+    ny0, ny1 = sorted((c(y0, ph), c(y1, ph)))
+    return NormalizedRect(x0=nx0, y0=ny0, x1=nx1, y1=ny1)
+
+
 def _is_monospace(font_name: str) -> bool:
     lower = font_name.lower()
     return any(m in lower for m in MONOSPACE_FAMILIES)
@@ -157,7 +184,13 @@ class PdfSourceAdapter(BaseSourceAdapter):
         )
 
         opts = options or {}
-        max_pages = opts.get("max_pages", min(50, len(pdf_doc)))
+        # Whole document by default. A silent min(50, …) default truncated every
+        # book longer than 50 pages — for a book pipeline that is data loss, not
+        # a safety limit. A memory-constrained deploy sets KAE_MAX_PAGES; a
+        # per-call options["max_pages"] still overrides both.
+        _env_cap = os.environ.get("KAE_MAX_PAGES")
+        default_max = int(_env_cap) if _env_cap else len(pdf_doc)
+        max_pages = opts.get("max_pages", default_max)
 
         # RFC 0008 §5.2: the adapter performs no semantic analysis (no heading
         # detection). It emits a flat block list under a single root container;
@@ -261,7 +294,18 @@ class PdfSourceAdapter(BaseSourceAdapter):
                             "mono": is_mono,
                         })
                     if line_parts:
-                        line_texts.append("".join(line_parts))
+                        joined_line = "".join(line_parts)
+                        line_texts.append(joined_line)
+                        first = line.get("spans", [{}])[0] if line.get("spans") else {}
+                        line_records.append({
+                            "text": joined_line,
+                            "bbox": line.get("bbox"),
+                            "font": first.get("font", ""),
+                            "size": first.get("size", 12.0),
+                            "bold": bool(first.get("flags", 0) & (1 << 4)),
+                            "italic": bool(first.get("flags", 0) & (1 << 1)),
+                            "mono": _is_monospace(first.get("font", "")),
+                        })
 
                 full_text = " ".join(line_texts).strip()
                 if not full_text:
@@ -302,17 +346,44 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     )
                     current_container.children.append(code)
                 else:
-                    styled_span = StyledTextSpan(
-                        text=full_text,
-                        visual_layout=VisualLayout(
-                            bounding_box=norm_rect,
+                    # One inline per source line, each with the line's own bbox
+                    # and style. Collapsing a block's lines into a single span
+                    # discards the geometry the assembler needs to rebuild a
+                    # laid-out page — a two-column contents list comes back as
+                    # one run-on paragraph (RFC 0021 §3, §5.4).
+                    inlines: List[InlineUnit] = []
+                    for rec in line_records:
+                        line_layout = VisualLayout(
+                            bounding_box=_norm_rect(rec["bbox"], pw, ph),
                             page_or_screen_index=page_idx,
-                            style=style,
-                        ),
-                    )
+                            style=StyleDescriptor(
+                                font_family=rec["font"] or "sans-serif",
+                                font_size_pt=rec["size"],
+                                is_bold=rec["bold"],
+                                is_italic=rec["italic"],
+                                is_monospace=rec["mono"],
+                            ),
+                        )
+                        inline = TextLineInline(spans=[StyledTextSpan(
+                            text=rec["text"], visual_layout=line_layout,
+                        )])
+                        inline.visual_layout = line_layout
+                        inlines.append(inline)
+                    if not inlines:
+                        inlines = [TextLineInline(spans=[StyledTextSpan(
+                            text=full_text,
+                            visual_layout=VisualLayout(
+                                bounding_box=norm_rect,
+                                page_or_screen_index=page_idx,
+                                style=style,
+                            ),
+                        )])]
                     ext_conf = _extraction_confidence(full_text)
                     para = ParagraphBlock(
-                        inlines=[TextLineInline(spans=[styled_span])],
+                        id=derive_source_id(
+                            "paragraph", source_uri, page_idx, norm_rect, full_text
+                        ),
+                        inlines=inlines,
                         parent_container_id=current_container.id,
                         provenance_info=provenance,
                         visual_layout=layout,
@@ -324,6 +395,9 @@ class PdfSourceAdapter(BaseSourceAdapter):
 
             if not page_has_text:
                 placeholder = ParagraphBlock(
+                    id=derive_source_id(
+                        "ocr-placeholder", source_uri, page_idx, None, ""
+                    ),
                     inlines=[TextLineInline(spans=[StyledTextSpan(text="")])],
                     parent_container_id=current_container.id,
                     provenance_info=provenance,
@@ -331,8 +405,13 @@ class PdfSourceAdapter(BaseSourceAdapter):
                         bounding_box=NormalizedRect(0.0, 0.0, 1.0, 1.0),
                         page_or_screen_index=page_idx,
                     ),
-                    extraction_confidence=1.0,
-                    classification_confidence=1.0,
+                    # Nothing was extracted, so nothing is certain. A page we
+                    # could not read must not be reported as confidently empty:
+                    # downstream that reads as fact, and the UI showed 100% on
+                    # eight unreadable scan pages.
+                    extraction_confidence=0.1,
+                    classification_confidence=0.1,
+                    confidence_score=0.1,
                 )
                 current_container.children.append(placeholder)
                 if page.get_images():

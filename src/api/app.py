@@ -41,8 +41,11 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.adapters import create_default_registry
+from src.api.stores import BoundedLRU, DocStore
+from src.jobs.resource_guard import ResourceGuard
 from src.ai_layer.chunker import SemanticChunker
 from src.ai_layer.exporter import AIKnowledgeExporter
+from src.eval.retrieval import DatasetGenerator, RetrievalEvaluator
 from src.analyzers import PipelineRunner, create_default_pipeline
 from src.audit.logger import AuditLogger
 from src.graph.knowledge_graph import KnowledgeGraph
@@ -60,13 +63,17 @@ from src.jobs.pyjobkit_bridge import PyJobKitBridge
 from src.krm.models import (
     AlgorithmBlock,
     BaseKRMNode,
+    BibEntryBlock,
+    CalloutBlock,
     CaptionBlock,
     CodeBlock,
     ContainerUnit,
     DiagramBlock,
     EphemeraBlock,
     FigureBlock,
+    FootnoteBlock,
     FormulaBlock,
+    IndexEntryBlock,
     KnowledgeDocument,
     ListBlock,
     ListItemBlock,
@@ -226,6 +233,40 @@ def create_app() -> FastAPI:
             walk(c.children)
         return count
 
+    def _serialize_lines(node: Any) -> List[Dict[str, Any]]:
+        """Inlines that carry their own bbox, as flat {text, bbox, style}.
+
+        Set when a merged block kept the geometry of the source lines it
+        absorbed (RFC 0021 §5.4); empty for ordinary single-line blocks.
+        """
+        out: List[Dict[str, Any]] = []
+        for inline in (getattr(node, "inlines", None) or []):
+            vl = getattr(inline, "visual_layout", None)
+            bb = getattr(vl, "bounding_box", None) if vl else None
+            if not bb:
+                continue
+            text = " ".join(
+                s.text for s in getattr(inline, "spans", []) if hasattr(s, "text")
+            ).strip()
+            if not text:
+                continue
+            entry: Dict[str, Any] = {
+                "text": text,
+                "bbox": [bb.x0, bb.y0, bb.x1, bb.y1],
+            }
+            st = getattr(vl, "style", None)
+            if st:
+                entry["style"] = {
+                    "font_family": st.font_family,
+                    "font_size_pt": st.font_size_pt,
+                    "is_bold": st.is_bold,
+                    "is_italic": st.is_italic,
+                    "is_monospace": st.is_monospace,
+                    "text_color_rgb": list(st.text_color_rgb),
+                }
+            out.append(entry)
+        return out if len(out) > 1 else []
+
     def _serialize_document(doc: KnowledgeDocument) -> Dict[str, Any]:
         def _first_page(node: Any) -> Optional[int]:
             """Smallest page index found anywhere in this node's subtree."""
@@ -240,6 +281,22 @@ def create_app() -> FastAPI:
                     continue
                 cp = _first_page(child)
                 if cp is not None and (best is None or cp < best):
+                    best = cp
+            return best
+
+        def _last_page(node: Any) -> Optional[int]:
+            """Largest page index anywhere in this node's subtree."""
+            vl = getattr(node, "visual_layout", None)
+            best: Optional[int] = None
+            if vl is not None:
+                pi = getattr(vl, "page_or_screen_index", None)
+                if isinstance(pi, int):
+                    best = pi
+            for child in getattr(node, "children", []) or []:
+                if getattr(child, "is_tombstoned", False):
+                    continue
+                cp = _last_page(child)
+                if cp is not None and (best is None or cp > best):
                     best = cp
             return best
 
@@ -270,10 +327,31 @@ def create_app() -> FastAPI:
             # Uniformly attach real page/bbox/style from visual_layout (RFC 0002),
             # falling back to subtree's first page so every node keeps a page number.
             _layout_into(result, node)
+            # Per-line geometry, for any block whose inlines kept it. A block is
+            # one PDF text block, which can span several laid-out lines; without
+            # them the editor can only draw one box for a whole contents list
+            # (RFC 0021 §3, §5.4).
+            if "lines" not in result:
+                lines = _serialize_lines(node)
+                if lines:
+                    result["lines"] = lines
             if "page_index" not in result:
                 cp = _first_page(node)
                 if cp is not None:
                     result["page_index"] = cp
+            # Containers span a page range — expose the last page so the UI can
+            # show "стр.N–M" instead of just the first page.
+            if isinstance(node, ContainerUnit):
+                lp = _last_page(node)
+                if lp is not None and lp != result.get("page_index"):
+                    result["page_end"] = lp
+            # Expose useful metadata to the UI: translations, agent-suggested type,
+            # toc-entry parts, etc. (skip internal-only keys).
+            md = getattr(node, "metadata", None) or {}
+            if md:
+                slim = {k: v for k, v in md.items() if k not in ("tombstone_reason",)}
+                if slim:
+                    result["metadata"] = slim
             return result
 
         def _serialize_body(node: Any) -> Dict[str, Any]:
@@ -329,6 +407,14 @@ def create_app() -> FastAPI:
                 vl = getattr(node, "visual_layout", None)
                 if vl and hasattr(vl, "page_or_screen_index"):
                     result["page_index"] = vl.page_or_screen_index
+                if vl and getattr(vl, "bounding_box", None):
+                    bb = vl.bounding_box
+                    result["bbox"] = [bb.x0, bb.y0, bb.x1, bb.y1]
+                # Per-line geometry of the merged sources (RFC 0021 §5.4) — what
+                # lets the editor place a title page instead of drawing one box.
+                lines = _serialize_lines(node)
+                if lines:
+                    result["lines"] = lines
                 return result
             elif isinstance(node, ParagraphBlock):
                 text_parts = []
@@ -356,6 +442,17 @@ def create_app() -> FastAPI:
                     "text": node.code_text or "",
                     "confidence_score": node.confidence_score,
                 }
+            elif isinstance(node, DiagramBlock):
+                # Must precede FigureBlock (DiagramBlock subclasses it).
+                return {
+                    "id": node.id,
+                    "type": "DiagramBlock",
+                    "caption_text": node.caption_text,
+                    "labels": node.labels,
+                    "confidence_score": node.confidence_score,
+                    "extraction_confidence": node.extraction_confidence,
+                    "classification_confidence": node.classification_confidence,
+                }
             elif isinstance(node, FigureBlock):
                 return {
                     "id": node.id,
@@ -381,6 +478,92 @@ def create_app() -> FastAPI:
                     "confidence_score": node.confidence_score,
                     "extraction_confidence": node.extraction_confidence,
                     "classification_confidence": node.classification_confidence,
+                }
+                vl = getattr(node, "visual_layout", None)
+                if vl and hasattr(vl, "page_or_screen_index"):
+                    result["page_index"] = vl.page_or_screen_index
+                return result
+            elif isinstance(node, BibEntryBlock):
+                result = {
+                    "id": node.id,
+                    "type": "BibEntryBlock",
+                    "cite_key": node.cite_key,
+                    "authors": node.authors,
+                    "year": node.year,
+                    "title": node.title,
+                    "text": node.raw_text,
+                    "confidence_score": node.confidence_score,
+                }
+                vl = getattr(node, "visual_layout", None)
+                if vl and hasattr(vl, "page_or_screen_index"):
+                    result["page_index"] = vl.page_or_screen_index
+                return result
+            elif isinstance(node, FootnoteBlock):
+                result = {
+                    "id": node.id,
+                    "type": "FootnoteBlock",
+                    "marker": node.marker,
+                    "footnote_number": node.footnote_number,
+                    "text": node.text,
+                    "ref_block_ids": list(node.ref_block_ids),
+                    "confidence_score": node.confidence_score,
+                }
+                vl = getattr(node, "visual_layout", None)
+                if vl and hasattr(vl, "page_or_screen_index"):
+                    result["page_index"] = vl.page_or_screen_index
+                return result
+            elif isinstance(node, CalloutBlock):
+                result = {
+                    "id": node.id,
+                    "type": "CalloutBlock",
+                    "kind": node.kind,
+                    "severity": node.severity,
+                    "label": node.label,
+                    "content": [
+                        serialize_node(b) for b in node.content
+                        if not getattr(b, "is_tombstoned", False)
+                    ],
+                    "confidence_score": node.confidence_score,
+                }
+                vl = getattr(node, "visual_layout", None)
+                if vl and hasattr(vl, "page_or_screen_index"):
+                    result["page_index"] = vl.page_or_screen_index
+                return result
+            elif isinstance(node, TocEntryBlock):
+                result = {
+                    "id": node.id,
+                    "type": "TocEntryBlock",
+                    "text": node.entry_text,
+                    "chapter_number": node.chapter_number,
+                    "target_page": node.target_page,
+                    "anchor_id": node.anchor_id,
+                    "confidence_score": node.confidence_score,
+                    "extraction_confidence": node.extraction_confidence,
+                    "classification_confidence": node.classification_confidence,
+                }
+                vl = getattr(node, "visual_layout", None)
+                if vl and hasattr(vl, "page_or_screen_index"):
+                    result["page_index"] = vl.page_or_screen_index
+                return result
+            elif isinstance(node, ListBlock):
+                result = {
+                    "id": node.id,
+                    "type": "ListBlock",
+                    "list_style": node.list_style,
+                    "items": [
+                        {
+                            "id": it.id,
+                            "type": "ListItemBlock",
+                            "marker": it.marker,
+                            "content": [
+                                serialize_node(b) for b in it.content
+                                if not getattr(b, "is_tombstoned", False)
+                            ],
+                        }
+                        for it in node.items
+                        if not getattr(it, "is_tombstoned", False)
+                    ],
+                    "confidence_score": node.confidence_score,
                 }
                 vl = getattr(node, "visual_layout", None)
                 if vl and hasattr(vl, "page_or_screen_index"):
@@ -414,6 +597,51 @@ def create_app() -> FastAPI:
                     if bb:
                         result["bbox"] = [bb.x0, bb.y0, bb.x1, bb.y1]
                 return result
+            elif isinstance(node, EphemeraBlock):
+                return {
+                    "id": node.id,
+                    "type": "EphemeraBlock",
+                    "ephemera_type": node.ephemera_type,
+                    "repeated_text": node.repeated_text,
+                    # The UI reads "text"; without it a running head renders as
+                    # an empty box on the reconstructed page.
+                    "text": node.repeated_text,
+                    "confidence_score": node.confidence_score,
+                }
+            elif isinstance(node, AlgorithmBlock):
+                return {
+                    "id": node.id,
+                    "type": "AlgorithmBlock",
+                    "algorithm_name": node.algorithm_name,
+                    "algorithm_number": node.algorithm_number,
+                    "pseudocode": node.pseudocode,
+                    "confidence_score": node.confidence_score,
+                }
+            elif isinstance(node, SidebarBlock):
+                children = [
+                    serialize_node(c) for c in node.content
+                    if not getattr(c, "is_tombstoned", False)
+                ]
+                return {
+                    "id": node.id,
+                    "type": "SidebarBlock",
+                    "sidebar_type": node.sidebar_type,
+                    "content": children,
+                    "confidence_score": node.confidence_score,
+                }
+            elif isinstance(node, IndexEntryBlock):
+                subs = [
+                    {"term": s.term, "page_refs": s.page_refs}
+                    for s in node.subentries
+                ] if node.subentries else []
+                return {
+                    "id": node.id,
+                    "type": "IndexEntryBlock",
+                    "term": node.term,
+                    "page_refs": node.page_refs,
+                    "subentries": subs,
+                    "confidence_score": node.confidence_score,
+                }
             fallback = {"id": getattr(node, "id", ""), "type": type(node).__name__}
             cp = _first_page(node)
             if cp is not None:
@@ -437,12 +665,29 @@ def create_app() -> FastAPI:
         ]
         _fill_pages(serialized, [None])
 
+        semantic = []
+        for su in getattr(doc, "semantic_units", []) or []:
+            entry: Dict[str, Any] = {
+                "id": su.id,
+                "kind": type(su).__name__,
+                "target_block_id": getattr(su, "target_block_id", ""),
+            }
+            for attr in ("statement_type", "name", "number", "proved_statement_id",
+                         "term", "definition_text", "severity", "message_text",
+                         "architecture_or_platform", "mnemonic_or_function",
+                         "operands_or_arguments", "affected_flags_or_state"):
+                val = getattr(su, attr, None)
+                if val is not None and val != "" and val != []:
+                    entry[attr] = val
+            semantic.append(entry)
+
         return {
             "title": doc.title,
             "source_uri": doc.source_uri,
             "source_type": doc.source_type,
             "page_count": doc.metadata.get("page_count", 0) if doc.metadata else 0,
             "containers": serialized,
+            "semantic_units": semantic,
         }
 
     def _rebuild_document(data: Dict[str, Any]) -> KnowledgeDocument:
@@ -534,6 +779,15 @@ def create_app() -> FastAPI:
                     tp.inlines = [TextLineInline(spans=[StyledTextSpan(text=text)])]
                 _restore_layout(tp, n)
                 return tp
+            elif t == "DiagramBlock":
+                dg = DiagramBlock(
+                    caption_text=n.get("caption_text", ""),
+                    labels=n.get("labels", []),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                dg.id = n.get("id", dg.id)
+                _restore_layout(dg, n)
+                return dg
             elif t == "FigureBlock":
                 fb = FigureBlock(
                     image_uri=n.get("image_uri", ""),
@@ -561,6 +815,68 @@ def create_app() -> FastAPI:
                 cap.id = n.get("id", cap.id)
                 _restore_layout(cap, n)
                 return cap
+            elif t == "BibEntryBlock":
+                be = BibEntryBlock(
+                    cite_key=n.get("cite_key", ""),
+                    authors=list(n.get("authors", []) or []),
+                    year=n.get("year"),
+                    title=n.get("title", ""),
+                    raw_text=n.get("text", ""),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                be.id = n.get("id", be.id)
+                _restore_layout(be, n)
+                return be
+            elif t == "FootnoteBlock":
+                fn = FootnoteBlock(
+                    marker=n.get("marker", ""),
+                    footnote_number=n.get("footnote_number"),
+                    text=n.get("text", ""),
+                    ref_block_ids=list(n.get("ref_block_ids", []) or []),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                fn.id = n.get("id", fn.id)
+                _restore_layout(fn, n)
+                return fn
+            elif t == "CalloutBlock":
+                cb = CalloutBlock(
+                    kind=n.get("kind", "note"),
+                    severity=n.get("severity", "info"),
+                    label=n.get("label", ""),
+                    content=[rebuild_node(b) for b in n.get("content", [])],
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                cb.id = n.get("id", cb.id)
+                _restore_layout(cb, n)
+                return cb
+            elif t == "TocEntryBlock":
+                te = TocEntryBlock(
+                    entry_text=n.get("text", ""),
+                    chapter_number=n.get("chapter_number"),
+                    target_page=n.get("target_page"),
+                    anchor_id=n.get("anchor_id"),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                te.id = n.get("id", te.id)
+                _restore_layout(te, n)
+                return te
+            elif t == "ListBlock":
+                items: List[ListItemBlock] = []
+                for it in n.get("items", []):
+                    li = ListItemBlock(
+                        marker=it.get("marker", ""),
+                        content=[rebuild_node(b) for b in it.get("content", [])],
+                    )
+                    li.id = it.get("id", li.id)
+                    items.append(li)
+                lb = ListBlock(
+                    list_style=n.get("list_style", "bullet"),
+                    items=items,
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                lb.id = n.get("id", lb.id)
+                _restore_layout(lb, n)
+                return lb
             elif t == "TableBlock":
                 grid = []
                 for row in n.get("rows", []):
@@ -587,40 +903,82 @@ def create_app() -> FastAPI:
         )
         for c in data.get("containers", []):
             doc.root_containers.append(rebuild_node(c))
+
+        from src.krm.models import (
+            TheoremSpec, ProofSpec, ExampleSpec, RemarkSpec,
+            DefinitionSpec, InstructionSpec, WarningSpec,
+        )
+        _SU_MAP = {
+            "TheoremSpec": TheoremSpec, "ProofSpec": ProofSpec,
+            "ExampleSpec": ExampleSpec, "RemarkSpec": RemarkSpec,
+            "DefinitionSpec": DefinitionSpec, "InstructionSpec": InstructionSpec,
+            "WarningSpec": WarningSpec,
+        }
+        for su_data in data.get("semantic_units", []):
+            cls = _SU_MAP.get(su_data.get("kind", ""))
+            if cls is None:
+                continue
+            kwargs: Dict[str, Any] = {"target_block_id": su_data.get("target_block_id", "")}
+            for field_name in ("statement_type", "name", "number", "proved_statement_id",
+                               "term", "definition_text", "severity", "message_text",
+                               "architecture_or_platform", "mnemonic_or_function",
+                               "operands_or_arguments", "affected_flags_or_state"):
+                if field_name in su_data:
+                    kwargs[field_name] = su_data[field_name]
+            try:
+                spec = cls(**kwargs)
+                spec.id = su_data.get("id", spec.id)
+                doc.semantic_units.append(spec)
+            except TypeError:
+                pass
+
         return doc
 
-    # Persistent document store (L1 Local Disk per RFC 0013)
-    docs_store: Dict[str, KnowledgeDocument] = {}
-    graphs_store: Dict[str, Dict[str, Any]] = {}
-    progress_store: Dict[str, Dict[str, Any]] = {}
     _docs_dir = os.path.join(os.environ.get("KAE_DATA_DIR", ".kae"), "docs")
     os.makedirs(_docs_dir, exist_ok=True)
+
+    # RFC 0013 §2: L0 is an in-memory LRU, not "every document ever processed".
+    docs_store = DocStore(
+        _docs_dir,
+        _rebuild_document,
+        int(os.environ.get("KAE_DOCS_CACHE_SIZE", "48")),
+    )
+    graphs_store: Any = BoundedLRU(int(os.environ.get("KAE_GRAPHS_CACHE_SIZE", "24")))
+    progress_store: Any = BoundedLRU(int(os.environ.get("KAE_PROGRESS_CACHE_SIZE", "512")))
 
     def _persist_doc(job_id: str, doc: KnowledgeDocument) -> None:
         path = os.path.join(_docs_dir, f"{job_id}.json")
         data = _serialize_document(doc)
         data["_source_uri"] = doc.source_uri
         data["_source_type"] = doc.source_type
+        job = job_manager.get_job(job_id)
+        if job:
+            data["_created_at"] = job.created_at
         with open(path, "w") as f:
             json.dump(data, f)
 
     def _load_persisted_docs() -> None:
+        """Restore job *records* for every persisted document so /jobs listings
+        work after a restart. The KRM trees themselves are loaded lazily by
+        DocStore on first access — bulk-loading every document a server has ever
+        seen is exactly the unbounded growth the L0 LRU is meant to avoid."""
         for fname in os.listdir(_docs_dir):
             if not fname.endswith(".json"):
                 continue
             job_id = fname[:-5]
-            if job_id in docs_store:
+            if job_manager.get_job(job_id):
                 continue
             try:
                 with open(os.path.join(_docs_dir, fname)) as f:
                     data = json.load(f)
-                doc = _rebuild_document(data)
-                docs_store[job_id] = doc
-                job = job_manager.get_job(job_id)
-                if not job:
-                    job_manager.restore_job(job_id, data.get("_source_uri", ""), "COMPLETED")
+                job_manager.restore_job(
+                    job_id, data.get("_source_uri", ""), "COMPLETED",
+                    created_at=data.get("_created_at", ""),
+                )
             except Exception:
-                pass
+                logging.getLogger(__name__).exception(
+                    "Failed to restore job record for '%s'; skipping", job_id
+                )
 
     @app.post(
         "/api/v1/documents/upload",
@@ -690,14 +1048,13 @@ def create_app() -> FastAPI:
         docs_store[job.job_id] = doc
         _persist_doc(job.job_id, doc)
 
-        # Run analyzer pipeline
         rg = ReadingGraph()
         kg = KnowledgeGraph()
         pipeline = PipelineRunner(create_default_pipeline())
         pipeline.execute(doc, rg, kg)
         graphs_store[job.job_id] = {"rg": rg, "kg": kg}
-
         hitl_manager.flag_low_confidence_nodes(doc, threshold=0.80)
+        job_manager.update_status(job.job_id, JobStatus.COMPLETED)
 
         return DocumentUploadResponse(
             job_id=job.job_id,
@@ -826,7 +1183,7 @@ def create_app() -> FastAPI:
                     rg = ReadingGraph()
                     kg = KnowledgeGraph()
                     pipeline = PipelineRunner(create_default_pipeline())
-                    await asyncio.get_event_loop().run_in_executor(
+                    await asyncio.get_running_loop().run_in_executor(
                         None, lambda: pipeline.execute(doc, rg, kg)
                     )
                     graphs = {"rg": rg, "kg": kg}
@@ -933,13 +1290,12 @@ def create_app() -> FastAPI:
             for item in items
         ]
 
-    async def _process_import_background(
+    async def _run_pipeline_background(
         job: Any,
-        provider_id: str,
-        file_id: str,
+        file_stream: BinaryIO,
         ext: str,
     ) -> None:
-        """Background task: parse PDF and run analyzer pipeline."""
+        """Background task: parse file via adapter and run analyzer pipeline."""
         job_id = job.job_id
         adapter = adapter_registry.get_adapter_for_extension(ext)
         if not adapter:
@@ -957,17 +1313,24 @@ def create_app() -> FastAPI:
             return
 
         try:
+            # RFC 0019 §3: hold new heavy work when the host is over 85% RAM
+            # (parsing + pipeline + LLM can OOM a 3 GB box). Bounded wait, then
+            # proceed rather than fail the job.
+            if not ResourceGuard.check_memory_available():
+                progress_store[job_id] = {
+                    "step": 0, "total": 10, "stage": "Ожидание памяти...",
+                }
+                await ResourceGuard.wait_for_memory()
+
             progress_store[job_id] = {"step": 0, "total": 10, "stage": "Чтение файла..."}
             await pyjobkit_bridge.publish_event({
                 "event": "job_started", "job_id": job_id,
                 "job_type": "import", "progress": 0.0, "status": "RUNNING",
                 "stage": "Чтение файла...",
             })
-            sep_provider = sep_manager.get_provider(provider_id)
-            file_stream = await sep_provider.get_file_stream(file_id)
 
             progress_store[job_id] = {"step": 1, "total": 10, "stage": "Парсинг PDF..."}
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             doc = await loop.run_in_executor(
                 None, adapter.parse, file_stream, job.source_uri
             )
@@ -1038,6 +1401,22 @@ def create_app() -> FastAPI:
                 "job_type": "import", "progress": 0.0, "status": "FAILED",
                 "error": str(parse_err),
             })
+
+    async def _process_import_background(
+        job: Any,
+        provider_id: str,
+        file_id: str,
+        ext: str,
+    ) -> None:
+        """Background task: fetch file from SEP provider and process."""
+        job_id = job.job_id
+        try:
+            sep_provider = _resolve_sep_provider(provider_id)
+            file_stream = await sep_provider.get_file_stream(file_id)
+        except Exception as e:
+            job_manager.update_status(job_id, JobStatus.FAILED, error=str(e))
+            return
+        await _run_pipeline_background(job, file_stream, ext)
 
     @app.post(
         "/api/v1/sep/providers/{provider_id}/import",
@@ -1155,33 +1534,196 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
         return _serialize_document(doc)
 
+    @app.get("/api/v1/jobs/{job_id}/pages")
+    async def get_page_layout(job_id: str) -> Dict[str, Any]:
+        """Per-page render strategy for the editor (RFC 0021 §3).
+
+        The positional-vs-reflow rule lives in the assembler; the editor reads
+        the decision from here instead of holding a second implementation that
+        could drift out of step with the one that builds the PDF.
+        """
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        from src.assembler.page_assembler import page_layout_map
+        return {"job_id": job_id, "pages": page_layout_map(doc)}
+
+    async def _open_source_pdf(job_id: str, doc: KnowledgeDocument) -> Any:
+        """Open the source PDF for a job, supporting both upload:// and sep:// URIs."""
+        import pymupdf as fitz
+        source_uri = doc.source_uri or ""
+
+        if source_uri.startswith("upload://"):
+            # The stored uri keeps the raw client filename. basename() it and
+            # confirm the resolved path stays under the SSD root — otherwise a
+            # file uploaded as "../../etc/whatever" would let this endpoint
+            # open any PDF on the host.
+            filename = os.path.basename(source_uri[len("upload://"):])
+            ssd_root = os.path.realpath(kae_ssd_path)
+            pdf_path = os.path.realpath(os.path.join(kae_ssd_path, job_id, filename))
+            if (os.path.commonpath([ssd_root, pdf_path]) != ssd_root
+                    or not os.path.isfile(pdf_path)):
+                raise HTTPException(status_code=404, detail="Uploaded PDF not found on disk")
+            return fitz.open(pdf_path)
+
+        if source_uri.startswith("sep://"):
+            parts = source_uri.replace("sep://", "").split("/", 1)
+            if len(parts) != 2:
+                raise HTTPException(status_code=400, detail="Invalid source_uri")
+            provider_id, file_id = parts
+            try:
+                sep_provider = _resolve_sep_provider(provider_id)
+                file_stream = await sep_provider.get_file_stream(file_id)
+            except Exception:
+                raise HTTPException(status_code=404, detail="Cannot access source file")
+            pdf_bytes = file_stream.read()
+            return fitz.open(stream=pdf_bytes, filetype="pdf")
+
+        raise HTTPException(status_code=400, detail="Unsupported source URI scheme")
+
     @app.get("/api/v1/jobs/{job_id}/page-image/{page_num}")
     async def get_page_image(job_id: str, page_num: int) -> Response:
         doc = docs_store.get(job_id)
         if doc is None:
             raise HTTPException(status_code=404, detail="Document not found")
-        source_uri = doc.source_uri or ""
-        if not source_uri.startswith("sep://"):
-            raise HTTPException(status_code=400, detail="Only SEP documents supported")
-        parts = source_uri.replace("sep://", "").split("/", 1)
-        if len(parts) != 2:
-            raise HTTPException(status_code=400, detail="Invalid source_uri")
-        provider_id, file_id = parts
-        try:
-            sep_provider = sep_manager.get_provider(provider_id)
-            file_stream = await sep_provider.get_file_stream(file_id)
-        except Exception:
-            raise HTTPException(status_code=404, detail="Cannot access source file")
-        import pymupdf as fitz
-        pdf_bytes = file_stream.read()
-        pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        pdf_doc = await _open_source_pdf(job_id, doc)
         if page_num < 0 or page_num >= len(pdf_doc):
+            pdf_doc.close()
             raise HTTPException(status_code=400, detail=f"Page {page_num} out of range")
-        page = pdf_doc[page_num]
-        pix = page.get_pixmap(dpi=100)
-        img_bytes = pix.tobytes("jpeg")
-        pdf_doc.close()
+
+        def _render() -> bytes:
+            try:
+                return pdf_doc[page_num].get_pixmap(dpi=100).tobytes("jpeg")
+            finally:
+                pdf_doc.close()
+
+        img_bytes = await asyncio.to_thread(_render)
         return Response(content=img_bytes, media_type="image/jpeg")
+
+    def _resolve_sep_provider(provider_id: str) -> Any:
+        """Provider by id. Ids are regenerated on restart, so if the exact id is
+        gone but exactly one provider is registered, use it — with more than one
+        there is no safe guess, so fail rather than pick the wrong source."""
+        try:
+            return sep_manager.get_provider(provider_id)
+        except KeyError:
+            providers = list(getattr(sep_manager, "_providers", {}).values())
+            if len(providers) == 1:
+                logging.getLogger(__name__).info(
+                    "SEP provider '%s' not found; using the only registered provider",
+                    provider_id,
+                )
+                return providers[0]
+            raise
+
+    def _find_node(doc_obj: KnowledgeDocument, node_id: str) -> Optional[Any]:
+        stack: list = list(doc_obj.root_containers)
+        while stack:
+            n = stack.pop()
+            if getattr(n, "id", None) == node_id:
+                return n
+            stack.extend(getattr(n, "children", []) or [])
+        return None
+
+    @app.get("/api/v1/jobs/{job_id}/diagram/{block_id}")
+    async def get_diagram_image(job_id: str, block_id: str) -> Response:
+        """Render a DiagramBlock's source page region as an image (scan crop)."""
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail="Document not found")
+        node = _find_node(doc, block_id)
+        if node is None or not isinstance(node, DiagramBlock):
+            raise HTTPException(status_code=404, detail="Diagram not found")
+        vl = node.visual_layout
+        if vl is None or vl.bounding_box is None:
+            raise HTTPException(status_code=400, detail="Diagram has no region")
+        import pymupdf as fitz
+        pdf_doc = await _open_source_pdf(job_id, doc)
+        pg = vl.page_or_screen_index
+        if pg < 0 or pg >= len(pdf_doc):
+            pdf_doc.close()
+            raise HTTPException(status_code=400, detail="Page out of range")
+        def _render() -> bytes:
+            try:
+                page = pdf_doc[pg]
+                pw, ph = page.rect.width, page.rect.height
+                bb = vl.bounding_box
+                clip = fitz.Rect(bb.x0 * pw, bb.y0 * ph, bb.x1 * pw, bb.y1 * ph)
+                return page.get_pixmap(clip=clip, dpi=72).tobytes("jpeg", jpg_quality=85)
+            finally:
+                pdf_doc.close()
+
+        img_bytes = await asyncio.to_thread(_render)
+        return Response(content=img_bytes, media_type="image/jpeg")
+
+    async def _render_block_png(job_id: str, doc: KnowledgeDocument, node: Any) -> bytes:
+        """Render a block's source page region to PNG bytes (for /infer agents)."""
+        vl = getattr(node, "visual_layout", None)
+        if vl is None or vl.bounding_box is None:
+            raise HTTPException(400, "Block has no region")
+        import pymupdf as fitz
+        pdf_doc = await _open_source_pdf(job_id, doc)
+        pg = vl.page_or_screen_index
+
+        def _render() -> bytes:
+            try:
+                page = pdf_doc[pg]
+                pw, ph = page.rect.width, page.rect.height
+                bb = vl.bounding_box
+                clip = fitz.Rect(bb.x0 * pw, bb.y0 * ph, bb.x1 * pw, bb.y1 * ph)
+                return page.get_pixmap(clip=clip, dpi=100).tobytes("png")
+            finally:
+                pdf_doc.close()
+
+        return await asyncio.to_thread(_render)
+
+    def _call_infer(host: str, task: str, image_b64: str) -> Optional[str]:
+        """POST an image region to a multimodel/got-ocr agent → recognized text."""
+        import urllib.request
+        endpoint = "/infer"
+        body = json.dumps({"image_b64": image_b64, "task": task}).encode()
+        try:
+            req = urllib.request.Request(f"{host}{endpoint}", data=body,
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=180) as r:
+                return json.loads(r.read()).get("text", "")
+        except Exception:
+            # Backwards-compat: old GOT-OCR agents expose /ocr instead of /infer.
+            try:
+                req = urllib.request.Request(f"{host}/ocr", data=body,
+                                             headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=180) as r:
+                    return json.loads(r.read()).get("text", "")
+            except Exception:
+                logging.getLogger(__name__).exception("infer call failed")
+                return None
+
+    @app.post("/api/v1/jobs/{job_id}/table/{block_id}/recognize")
+    async def recognize_table(job_id: str, block_id: str) -> Dict[str, Any]:
+        """Send a table region to the `table`-role agent (GOT-OCR/MinerU) and store
+        the returned LaTeX on the TableBlock (used as-is at book assembly)."""
+        import base64
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(404, "Document not found")
+        node = _find_node(doc, block_id)
+        if node is None or not isinstance(node, TableBlock):
+            raise HTTPException(404, "Table not found")
+        host, _model, _kind = _pick_agent_for_role("table")
+        if not host:
+            raise HTTPException(503, "No agent with role 'table' available")
+        png = await _render_block_png(job_id, doc, node)
+        latex = await asyncio.to_thread(_call_infer, host, "table", base64.b64encode(png).decode())
+        if not latex:
+            raise HTTPException(503, "Table agent failed")
+        if not node.metadata:
+            node.metadata = {}
+        node.metadata["latex"] = latex.strip()
+        node.classification_confidence = 0.95
+        node.update_confidence()
+        _persist_doc(job_id, doc)
+        audit_logger.log("TABLE_RECOGNIZED", "agent", {"job_id": job_id, "block_id": block_id})
+        return {"status": "recognized", "block_id": block_id, "latex": latex.strip()}
 
     # --- SemanticChunker & Translation Endpoints ---
 
@@ -1212,6 +1754,53 @@ def create_app() -> FastAPI:
         chunks = chunker.build_chunks(doc, rg, kg)
         return AIKnowledgeExporter.export_chunks_manifest(chunks)
 
+    @app.get("/api/v1/jobs/{job_id}/dataset")
+    async def get_job_dataset(job_id: str, kind: str = "instruction") -> Dict[str, Any]:
+        """Instruction/QA fine-tuning dataset built from the job's chunks (RFC 0018 §3)."""
+        if kind not in ("instruction", "qa"):
+            raise HTTPException(status_code=400, detail="kind must be 'instruction' or 'qa'")
+
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+
+        graphs = graphs_store.get(job_id, {})
+        chunks = SemanticChunker().build_chunks(
+            doc, graphs.get("rg", ReadingGraph()), graphs.get("kg", KnowledgeGraph())
+        )
+        items = (
+            DatasetGenerator.generate_instruction_dataset(chunks)
+            if kind == "instruction"
+            else DatasetGenerator.generate_qa_dataset(chunks)
+        )
+        return {"job_id": job_id, "kind": kind, "count": len(items), "items": items}
+
+    class RetrievalEvalRequest(BaseModel):
+        retrieved_ids: List[str]
+        relevant_ids: Union[List[str], Dict[str, float]]
+        k: int = 10
+
+    @app.post("/api/v1/eval/retrieval")
+    async def evaluate_retrieval(body: RetrievalEvalRequest) -> Dict[str, Any]:
+        """Recall@K / MRR / nDCG@K for one query (RFC 0018 §2)."""
+        relevant_for_rank = (
+            list(body.relevant_ids)
+            if isinstance(body.relevant_ids, dict)
+            else body.relevant_ids
+        )
+        return {
+            "recall_at_k": RetrievalEvaluator.compute_recall_at_k(
+                body.retrieved_ids, relevant_for_rank, body.k
+            ),
+            "mrr_score": RetrievalEvaluator.compute_mrr(
+                body.retrieved_ids, relevant_for_rank
+            ),
+            "ndcg_score": RetrievalEvaluator.compute_ndcg(
+                body.retrieved_ids, body.relevant_ids, body.k
+            ),
+            "k": body.k,
+        }
+
     class TranslateRequest(BaseModel):
         source_text: str
         target_lang: str = "Russian"
@@ -1222,13 +1811,27 @@ def create_app() -> FastAPI:
         doc = docs_store.get(job_id)
         if doc is None:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
-        from src.analyzers.llm_refinement import _call_ollama
+        from src.analyzers.llm_refinement.rules import _call_ollama
         prompt = (
             f"Translate the following text to {body.target_lang}. "
             f"Output ONLY the translation, nothing else.\n\n"
             f"{body.source_text}"
         )
-        translated = _call_ollama(prompt)
+        # Route to the first reachable agent configured in the agent manager,
+        # using its active model. Lets the user pick a fast host/model in the UI.
+        # The probe loop and the LLM call are blocking (seconds to minutes), so
+        # run the whole thing off the event loop.
+        def _translate_sync() -> Optional[str]:
+            host, model = None, None
+            for a in _load_agents_config():
+                available, models = _probe_ollama(a["host"])
+                if available:
+                    host = a["host"]
+                    model = a.get("active_model") or (models[0] if models else None)
+                    break
+            return _call_ollama(prompt, host=host, model=model)
+
+        translated = await asyncio.to_thread(_translate_sync)
         if not translated:
             raise HTTPException(status_code=503, detail="LLM unavailable or timed out")
         audit_logger.log("TRANSLATION_REQUESTED", "api", {
@@ -1239,6 +1842,35 @@ def create_app() -> FastAPI:
 
     class AssembleRequest(BaseModel):
         target_lang: str = "Russian"
+        page_aware: bool = True
+
+    @app.post("/api/v1/jobs/{job_id}/assemble/preview")
+    async def assemble_preview(job_id: str) -> Dict[str, Any]:
+        """Assemble document from KRM without translation (page-aware layout)."""
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        from src.assembler.translator import _generate_pdf
+        output_path = os.path.join(kae_ssd_path, job_id, "preview_pages.pdf")
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        def _run():
+            return _generate_pdf(doc, "", output_path, job_id, page_aware=True)
+
+        await asyncio.to_thread(_run)
+        audit_logger.log("BOOK_ASSEMBLED", "api", {
+            "job_id": job_id, "target_lang": "", "mode": "preview",
+            "output": output_path,
+        })
+        return {"status": "completed", "download_url": f"/api/v1/jobs/{job_id}/download/preview"}
+
+    @app.get("/api/v1/jobs/{job_id}/download/preview")
+    async def download_preview(job_id: str):
+        path = os.path.join(kae_ssd_path, job_id, "preview_pages.pdf")
+        if not os.path.exists(path):
+            raise HTTPException(status_code=404, detail="No preview PDF found")
+        return FileResponse(path, filename=os.path.basename(path),
+                            media_type="application/pdf")
 
     @app.post("/api/v1/jobs/{job_id}/assemble")
     async def assemble_translated_book(job_id: str, body: AssembleRequest) -> Dict[str, Any]:
@@ -1246,7 +1878,7 @@ def create_app() -> FastAPI:
         if doc is None:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
         from src.assembler.translator import translate_and_assemble
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         output_path = os.path.join(kae_ssd_path, job_id, f"translated_{body.target_lang.lower()}.pdf")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -1254,10 +1886,100 @@ def create_app() -> FastAPI:
             return translate_and_assemble(doc, body.target_lang, output_path, job_id, pyjobkit_bridge, loop)
 
         await asyncio.to_thread(_run)
+        desynced = hitl_manager.flag_desynchronized_nodes(doc)
         audit_logger.log("BOOK_ASSEMBLED", "api", {
             "job_id": job_id, "target_lang": body.target_lang, "output": output_path,
+            "desynced_segments": len(desynced),
         })
         return {"status": "completed", "download_url": f"/api/v1/jobs/{job_id}/download/translated"}
+
+    def _pick_agent() -> tuple:
+        """First reachable agent + its active model, from the agent manager config."""
+        for a in _load_agents_config():
+            available, models = _probe_ollama(a["host"])
+            if available:
+                return a["host"], (a.get("active_model") or (models[0] if models else None))
+        return None, None
+
+    class TranslateAllRequest(BaseModel):
+        target_lang: str = "Russian"
+
+    @app.post("/api/v1/jobs/{job_id}/translate/start")
+    async def translate_all_start(job_id: str, body: TranslateAllRequest) -> Dict[str, Any]:
+        """
+        Start a background page-by-page translation job. Progress is published to
+        the task stream (visible in the task queue); translated segments are stored
+        on each block's metadata without mutating the source (RFC 0021 §5.1).
+        """
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+
+        from src.assembler.translator import _collect_translatable, _get_block_text, _record_translation
+        from src.analyzers.llm_refinement.rules import _call_ollama
+
+        blocks: list = []
+        for container in doc.root_containers:
+            _collect_translatable(container, blocks)
+
+        # Group blocks by physical page for page-by-page progress.
+        pages: Dict[int, list] = {}
+        for kind, block in blocks:
+            vl = getattr(block, "visual_layout", None)
+            pg = getattr(vl, "page_or_screen_index", 0) if vl else 0
+            pages.setdefault(pg, []).append((kind, block))
+        ordered_pages = sorted(pages.keys())
+        total_pages = len(ordered_pages)
+
+        host, model, _ = _pick_agent_for_role("translate")
+        loop = asyncio.get_running_loop()
+
+        async def _emit(stage: str, step: int) -> None:
+            progress_store[job_id] = {"step": step, "total": total_pages, "stage": stage}
+            await pyjobkit_bridge.publish_event({
+                "event": "job_progress", "job_id": job_id, "job_type": "translate",
+                "stage": stage, "progress": (step / total_pages) if total_pages else 1.0,
+                "status": "RUNNING",
+            })
+
+        def _translate_page(page_blocks: list) -> None:
+            for kind, block in page_blocks:
+                if kind == "title":
+                    original = block.title
+                elif kind == "caption":
+                    original = block.caption_text
+                else:
+                    original = _get_block_text(block)
+                if not original or len(original.strip()) < 3:
+                    continue
+                prompt = (
+                    f"Translate the following text to {body.target_lang}. "
+                    f"Output ONLY the translation, nothing else.\n\n{original}"
+                )
+                translated = _call_ollama(prompt, host=host, model=model)
+                if translated:
+                    _record_translation(block, original, translated.strip(), body.target_lang)
+
+        async def _run_job() -> None:
+            try:
+                for i, pg in enumerate(ordered_pages):
+                    await _emit(f"Перевод страницы {i + 1}/{total_pages}", i)
+                    await asyncio.to_thread(_translate_page, pages[pg])
+                _persist_doc(job_id, doc)
+                progress_store[job_id] = {"step": total_pages, "total": total_pages, "stage": "done"}
+                await pyjobkit_bridge.publish_event({
+                    "event": "job_completed", "job_id": job_id, "job_type": "translate",
+                    "progress": 1.0, "status": "COMPLETED",
+                })
+                audit_logger.log("TRANSLATION_REQUESTED", "api", {
+                    "job_id": job_id, "target_lang": body.target_lang, "pages": total_pages,
+                })
+            except Exception as e:
+                logging.getLogger(__name__).exception("Translation job failed for %s", job_id)
+                progress_store[job_id] = {"step": 0, "total": total_pages, "stage": "error", "error": str(e)}
+
+        loop.create_task(_run_job())
+        return {"status": "started", "total_pages": total_pages, "agent": host, "model": model}
 
     @app.get("/api/v1/jobs/{job_id}/download/translated")
     async def download_translated(job_id: str):
@@ -1277,9 +1999,13 @@ def create_app() -> FastAPI:
             with open(AGENTS_CONFIG_PATH) as f:
                 return json.load(f)
         from src.analyzers.llm_refinement import OLLAMA_URL, OLLAMA_MODEL
+        # RPi5 + small fast model first (default translation agent); OrangePi 7B
+        # is slower on CPU. Users can reorder/retarget via the agent manager.
         defaults = [
-            {"name": "OrangePi", "host": OLLAMA_URL, "active_model": OLLAMA_MODEL},
-            {"name": "RPi5", "host": os.environ.get("LLM_AGENT_URL_2", "http://192.168.88.71:11434"), "active_model": ""},
+            {"name": "RPi5", "host": os.environ.get("LLM_AGENT_URL_2", "http://192.168.88.71:11434"),
+             "active_model": "llama3.1:8b", "kind": "ollama", "roles": ["translate", "refine"]},
+            {"name": "OrangePi", "host": OLLAMA_URL, "active_model": OLLAMA_MODEL,
+             "kind": "ollama", "roles": []},
         ]
         _save_agents_config(defaults)
         return defaults
@@ -1298,155 +2024,82 @@ def create_app() -> FastAPI:
         except Exception:
             return False, []
 
-    @app.get("/api/v1/agents/config")
-    async def get_agents_config() -> Dict[str, Any]:
-        saved = _load_agents_config()
+    def _probe_agent(host: str, kind: str) -> tuple:
+        """Health-check an agent.
+        Returns (available, models, extra) where extra is any additional health
+        payload (for kind=managed: {runner, runner_url, queue_depth}).
+        """
+        if kind in ("got-ocr", "multimodel", "managed"):
+            import urllib.request
+            try:
+                req = urllib.request.Request(f"{host}/health")
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read())
+                    tasks = data.get("tasks") or [data.get("model", kind)]
+                    extra = {}
+                    if kind == "managed":
+                        # Surface RFC 0022 §4.1 fields for UI (Stage 6).
+                        extra = {
+                            "runner": data.get("runner"),
+                            "runner_url": data.get("runner_url"),
+                            "queue_depth": data.get("queue_depth"),
+                        }
+                    return True, tasks, extra
+            except Exception:
+                return False, [], {}
+        ok, models = _probe_ollama(host)
+        return ok, models, {}
+
+    # --- Skills API (RFC 0006) ---
+
+    _skills_runner_instance: Optional[Any] = None
+
+    def _get_skills_runner() -> Any:
+        nonlocal _skills_runner_instance
+        if _skills_runner_instance is None:
+            from src.skills.runner import SkillsRunner
+            from pathlib import Path
+            runner = SkillsRunner()
+            skills_dir = Path("skills")
+            if skills_dir.exists():
+                runner.load_directory(skills_dir)
+            _skills_runner_instance = runner
+        return _skills_runner_instance
+
+    @app.get("/api/v1/skills")
+    async def list_skills() -> List[Dict[str, Any]]:
+        runner = _get_skills_runner()
         result = []
-        for h in saved:
-            available, models = _probe_ollama(h["host"])
-            active = h.get("active_model", "")
-            if available and active and active not in models:
-                active = models[0] if models else ""
+        for name, pack in runner.packs.items():
             result.append({
-                "name": h["name"],
-                "host": h["host"],
-                "models": models,
-                "active_model": active,
-                "available": available,
+                "name": pack.name,
+                "version": pack.version,
+                "description": pack.metadata.get("description", ""),
+                "apply_when": pack.apply_when,
+                "steps": pack.steps,
+                "disabled": pack.disabled,
             })
-        return {"agents": result}
+        return result
 
-    class AgentCreateRequest(BaseModel):
-        name: str
-        host: str
-        active_model: str = ""
-
-    @app.post("/api/v1/agents/config")
-    async def add_agent(body: AgentCreateRequest) -> Dict[str, Any]:
-        agents = _load_agents_config()
-        if any(a["host"] == body.host for a in agents):
-            raise HTTPException(400, "Agent with this host already exists")
-        agents.append({"name": body.name, "host": body.host, "active_model": body.active_model})
-        _save_agents_config(agents)
-        return {"status": "added", "name": body.name}
-
-    @app.put("/api/v1/agents/config")
-    async def update_agent(body: AgentCreateRequest) -> Dict[str, Any]:
-        agents = _load_agents_config()
-        for a in agents:
-            if a["host"] == body.host:
-                a["name"] = body.name
-                a["active_model"] = body.active_model
-                _save_agents_config(agents)
-                return {"status": "updated", "name": body.name}
-        raise HTTPException(404, "Agent not found")
-
-    @app.delete("/api/v1/agents/{host:path}")
-    async def delete_agent(host: str) -> Dict[str, Any]:
-        agents = _load_agents_config()
-        new = [a for a in agents if a["host"] != host]
-        if len(new) == len(agents):
-            raise HTTPException(404, "Agent not found")
-        _save_agents_config(new)
-        return {"status": "deleted"}
-
-    # --- Node Refinement (HITL / LLM Agent) ---
-
-    class RefineRequest(BaseModel):
-        node_id: str
-        mode: str  # 'agent' | 'manual'
-        patch: Optional[Dict[str, Any]] = None
-
-    @app.post("/api/v1/jobs/{job_id}/refine")
-    async def refine_node(job_id: str, body: RefineRequest) -> Dict[str, Any]:
+    @app.post("/api/v1/skills/{skill_name}/activate")
+    async def activate_skill(skill_name: str, job_id: str) -> Dict[str, Any]:
+        runner = _get_skills_runner()
+        pack = runner.packs.get(skill_name)
+        if pack is None:
+            return {"error": f"Skill pack '{skill_name}' not found"}
         doc = docs_store.get(job_id)
         if doc is None:
-            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
-
-        def find_node(containers, node_id):
-            for c in containers:
-                if getattr(c, 'id', None) == node_id:
-                    return c
-                for child in getattr(c, 'children', []):
-                    if getattr(child, 'id', None) == node_id:
-                        return child
-                found = find_node(getattr(c, 'children', []), node_id)
-                if found:
-                    return found
-            return None
-
-        target = find_node(doc.root_containers, body.node_id)
-        if target is None:
-            raise HTTPException(status_code=404, detail="Node not found")
-
-        if body.mode == 'manual' and body.patch:
-            if 'type' in body.patch and hasattr(target, 'block_type'):
-                target.block_type = body.patch['type']
-            if 'text' in body.patch:
-                if hasattr(target, 'title'):
-                    target.title = body.patch['text']
-            target.classification_confidence = 1.0
-            target.extraction_confidence = 1.0
-            _persist_doc(job_id, doc)
-            audit_logger.log("HITL_CORRECTION", "user", {
-                "job_id": job_id, "node_id": body.node_id, "mode": "manual",
-            })
-            return {"status": "updated", "node_id": body.node_id}
-
-        if body.mode == 'agent':
-            from src.analyzers.llm_refinement import _call_ollama, VALID_TYPES, OLLAMA_MODEL
-            import re as _re
-            text_parts = []
-            if hasattr(target, 'inlines'):
-                for inline in (target.inlines or []):
-                    for span in getattr(inline, 'spans', []):
-                        if hasattr(span, 'text'):
-                            text_parts.append(span.text)
-            elif hasattr(target, 'title'):
-                text_parts.append(target.title or '')
-            node_text = " ".join(text_parts).strip()
-            if not node_text:
-                return {"status": "error", "detail": "Node has no text"}
-
-            snippet = node_text[:200]
-            prompt = (
-                f'Classify this text block from a book. Reply with ONLY one word from: '
-                f'paragraph, toc_entry, caption, heading, code, formula, list_item, table_cell.\n\n'
-                f'Text: "{snippet}"\n\nType:'
-            )
-            response = _call_ollama(prompt)
-            if not response:
-                return {"status": "error", "detail": "LLM unavailable or timed out"}
-
-            block_type = response.strip().lower().replace('"', '').replace("'", "").split()[0] if response.strip() else ""
-            block_type = block_type.rstrip(".,;:")
-            if block_type not in VALID_TYPES:
-                for vt in VALID_TYPES:
-                    if vt in response.lower():
-                        block_type = vt
-                        break
-
-            if block_type in VALID_TYPES:
-                target.classification_confidence = 0.85
-                target.update_confidence()
-                if not target.metadata:
-                    target.metadata = {}
-                target.metadata["llm_suggested_type"] = block_type
-                target.metadata["llm_model"] = OLLAMA_MODEL
-                _persist_doc(job_id, doc)
-
-            audit_logger.log("HITL_CORRECTION", "llm_agent", {
-                "job_id": job_id, "node_id": body.node_id, "mode": "agent",
-                "llm_type": block_type, "raw": response.strip()[:100],
-            })
-            return {
-                "status": "refined",
-                "node_id": body.node_id,
-                "llm_result": {"type": block_type, "confidence": target.confidence_score},
-                "confidence": target.confidence_score,
-            }
-
-        raise HTTPException(status_code=400, detail=f"Unknown mode: {body.mode}")
+            return {"error": f"Job '{job_id}' not found"}
+        active = doc.metadata.setdefault("active_skills", [])
+        if skill_name not in active:
+            active.append(skill_name)
+        _persist_doc(job_id, doc)
+        return {
+            "status": "activated",
+            "skill": skill_name,
+            "job_id": job_id,
+            "pipeline_steps": len(runner.build_pipeline(pack)),
+        }
 
     @app.get("/api/v1/agents/config")
     async def get_agents_config() -> Dict[str, Any]:

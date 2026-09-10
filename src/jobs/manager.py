@@ -100,12 +100,21 @@ class JobManager:
         """
         return self._jobs.get(job_id)
 
-    def restore_job(self, job_id: str, source_uri: str, status_str: str) -> JobRecord:
+    def restore_job(
+        self,
+        job_id: str,
+        source_uri: str,
+        status_str: str,
+        created_at: str = "",
+    ) -> JobRecord:
         """
-        Restores a persisted job record into the in-memory store.
+        Restores a persisted job record into the in-memory store, preserving the
+        original creation timestamp when provided.
         """
         job = JobRecord(source_uri=source_uri, status=JobStatus(status_str))
         job.job_id = job_id
+        if created_at:
+            job.created_at = created_at
         self._jobs[job_id] = job
         return job
 
