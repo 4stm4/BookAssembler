@@ -55,6 +55,21 @@ def compute_wer(reference_text: str, hypothesis_text: str) -> float:
     return float(edit_dist) / float(len(ref_words))
 
 
+def compute_cer(reference_text: str, hypothesis_text: str) -> float:
+    """
+    Computes Character Error Rate (CER) between reference and hypothesis texts
+    (RFC 0015 §3.3). Catches OCR drift that leaves word counts intact.
+    """
+    reference = reference_text.strip()
+    hypothesis = hypothesis_text.strip()
+
+    if not reference:
+        return 0.0 if not hypothesis else 1.0
+
+    edit_dist = compute_edit_distance(list(reference), list(hypothesis))
+    return float(edit_dist) / float(len(reference))
+
+
 def _dict_to_structure_tokens(obj: Any) -> List[str]:
     """
     Flattens a table JSON structure into canonical structural tokens for edit distance.

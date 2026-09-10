@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Set, Tuple
 
 from src.analyzers.base import KGPermission, KRMPermission, RGPermission
 from src.analyzers.pipeline import GuardedKnowledgeGraph, GuardedReadingGraph
+from src.errors import ErrorCategory, KAEError
 from src.graph.knowledge_graph import EntityType, KGEntityNode, KnowledgeGraph, RelationType
 from src.graph.reading_graph import ReadingGraph, ReadingTrack
 from src.krm.models import KnowledgeDocument
@@ -19,8 +20,10 @@ from src.plugins.api import _KG_PERM_MAP, _KRM_PERM_MAP, _RG_PERM_MAP
 from src.plugins.manifest import PluginPermissions
 
 
-class MutationRejectedError(Exception):
+class MutationRejectedError(KAEError):
     """Raised when a plugin's Mutation Delta violates permissions or is malformed."""
+
+    category = ErrorCategory.SECURITY_VIOLATION
 
 
 _OP_PERMISSIONS: Dict[str, Tuple[str, Any]] = {

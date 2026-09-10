@@ -18,6 +18,8 @@ from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import KnowledgeDocument
 
+from src.errors import ErrorCategory, KAEError
+
 class KRMPermission(Enum):
     """
     Permissions required to access or mutate Knowledge Representation Model (KRM) nodes.
@@ -43,11 +45,11 @@ class KGPermission(Enum):
     MUTATE_ENTITIES = auto()    # Adding and updating external domain entities
     MUTATE_EDGES = auto()       # Adding and updating semantic relation edges
 
-class SecurityViolationError(Exception):
+class SecurityViolationError(KAEError):
     """
     Raised when an analyzer attempts an operation not authorized by its manifest permissions.
     """
-    pass
+    category = ErrorCategory.SECURITY_VIOLATION
 
 @dataclass(frozen=True)
 class AnalyzerManifest:
