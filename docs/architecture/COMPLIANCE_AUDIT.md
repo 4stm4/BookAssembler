@@ -21,7 +21,7 @@
 | 0005 | Analyzer API, матрица прав, Failure Isolation | ✅ | Guarded-прокси + post-hoc diff мутаций |
 | 0006 | Skills: декларативный DSL без Python | 🔧 | движок и 3 пакета работают; `ProfileResolver` не подключён к entry point |
 | 0007 | Chunking: breadcrumbs, атомарные блоки | ✅ | |
-| 0008 | Адаптеры без бизнес-логики | 🔧 | PDF/Markdown/Text/DOCX/HTML есть; Notebook/CodeRepo (§3.4) — нет |
+| 0008 | Адаптеры без бизнес-логики | ✅ | PDF/Markdown/Text/DOCX/HTML/Notebook; выводы ячеек связаны через CONCRETIZES. Обход файлового дерева репозитория (§3.4) — вне слоя адаптеров |
 | 0009 | Бенчмарк, блокирующий CI | ✅ | CLI `python -m src.benchmark.runner` + `.github/workflows/ci.yml` |
 | 0010 | Plugin API, out-of-process sandbox, Mutation Delta | 🔧 | песочница, дельта и SemVer-гейт есть; загрузчик не подключён к рантайму анализаторов |
 | 0011 | Lineage, sha256 источника | ✅ | Merkle-деревья глав (§3.2) не реализованы |
@@ -41,7 +41,6 @@
 
 | Пробел | RFC | Почему не закрыт |
 |---|---|---|
-| Notebook / CodeRepo адаптеры | 0008 §3.4 | нужна привязка выводов ячеек к CodeBlock через KG (CONCRETIZES) |
 | Загрузчик плагинов в рантайме анализаторов | 0010 | песочница готова; нужна точка расширения в пайплайне и решение о доверии |
 | Пиннинг TeX Live и replay `kae rebuild` | 0012 §3.3, §4 | решение уровня деплоя (digest образа / snapshot.debian.org) |
 | Merkle-деревья глав | 0011 §3.2 | нет потребителя |
