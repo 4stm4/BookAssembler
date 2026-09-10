@@ -13,7 +13,7 @@ Guarantees:
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.benchmark.metrics import compute_link_f1, compute_teds, compute_wer
 from src.graph.knowledge_graph import KnowledgeGraph
@@ -320,3 +320,84 @@ class BenchmarkRunner:
                 )
 
         return reports
+
+
+def build_sample(sample_dir: Path) -> Tuple[KnowledgeDocument, KnowledgeGraph]:
+    """
+    Runs the default pipeline over a corpus sample's input file (RFC 0009 §4).
+    """
+    from src.adapters import create_default_registry
+    from src.analyzers import create_default_pipeline
+    from src.analyzers.pipeline import PipelineRunner
+    from src.graph.reading_graph import ReadingGraph
+
+    inputs = sorted(p for p in sample_dir.glob("input.*") if p.is_file())
+    if not inputs:
+        raise FileNotFoundError(f"No input.* file in corpus sample {sample_dir}")
+
+    source = inputs[0]
+    adapter = create_default_registry().get_adapter_for_extension(source.suffix)
+    if adapter is None:
+        raise ValueError(f"No adapter registered for {source.name}")
+
+    with open(source, "rb") as handle:
+        doc = adapter.parse(handle, f"file://{source}")
+
+    rg, kg = ReadingGraph(), KnowledgeGraph()
+    PipelineRunner(create_default_pipeline()).execute(doc, rg, kg)
+    return doc, kg
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    """
+    CLI entry point: `python -m src.benchmark.runner --corpus-dir ... --strict-regression-check`
+    (RFC 0009 §4). Returns a non-zero exit code on regression so CI can block a merge.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="KAE quality benchmark suite (RFC 0009)")
+    parser.add_argument("--corpus-dir", required=True, help="Directory of corpus samples")
+    parser.add_argument("--report-out", help="Write the JSON report here")
+    parser.add_argument(
+        "--strict-regression-check",
+        action="store_true",
+        help="Exit non-zero when a sample misses the RFC 0009 §5 thresholds",
+    )
+    args = parser.parse_args(argv)
+
+    corpus_dir = Path(args.corpus_dir)
+    samples = sorted(p for p in corpus_dir.iterdir() if p.is_dir()) if corpus_dir.is_dir() else []
+    if not samples:
+        print(f"No corpus samples under {corpus_dir}")
+        return 1
+
+    runner = BenchmarkRunner(corpus_dir)
+    reports: List[BenchmarkReport] = []
+    for sample in samples:
+        doc, kg = build_sample(sample)
+        reports.append(runner.evaluate_sample(sample, doc, kg))
+
+    payload = [
+        {
+            "document_name": r.document_name,
+            "teds_score": r.teds_score,
+            "wer_score": r.wer_score,
+            "link_f1_score": r.link_f1_score,
+            "passed": r.passed,
+        }
+        for r in reports
+    ]
+    rendered = json.dumps(payload, indent=2, sort_keys=True)
+    if args.report_out:
+        Path(args.report_out).write_text(rendered, encoding="utf-8")
+    print(rendered)
+
+    failed = [r for r in reports if not r.passed]
+    if failed and args.strict_regression_check:
+        print(f"REGRESSION: {len(failed)} sample(s) below threshold")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
