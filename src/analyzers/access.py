@@ -24,6 +24,20 @@ def spans(node: Any) -> Iterator[Any]:
         for span in getattr(inline, "spans", None) or []:
             yield span
 
+def lines(node: Any) -> Iterator[str]:
+    """Each source line's text, in order — one string per inline.
+
+    The adapter keeps one TextLineInline per PDF line (RFC 0021 §5.4), so this
+    is the granularity a TOC or a title page reasons at: `block_text` joins
+    them and loses the boundaries.
+    """
+    for inline in getattr(node, "inlines", None) or []:
+        parts = [str(t) for s in getattr(inline, "spans", None) or []
+                 if (t := getattr(s, "text", ""))]
+        if parts:
+            yield " ".join(parts)
+
+
 def block_text(node: Any, sep: str = " ") -> str:
     """The block's full text, across every inline.
 

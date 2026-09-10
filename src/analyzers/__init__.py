@@ -16,6 +16,7 @@ from src.analyzers.base import (
 from src.analyzers.algorithm import AlgorithmDetectorAnalyzer
 from src.analyzers.bibliography import BibliographyDetectorAnalyzer
 from src.analyzers.block_classifier import BlockClassifierAnalyzer
+from src.analyzers.toc import TocAnalyzer
 from src.analyzers.callout import CalloutDetectorAnalyzer
 from src.analyzers.caption import CaptionAnalyzer
 from src.analyzers.citation import CitationLinkerAnalyzer
@@ -69,6 +70,10 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         # (calls the "table"-role agent; no-op if none is reachable).
         PageAgentAnalyzer(),
         CaptionAnalyzer(),
+        # Owns TOC detection (was inside BlockClassifier): a "CONTENTS"
+        # heading over a section list is a TOC too, not only the
+        # dotted-leader form.
+        TocAnalyzer(),
         BlockClassifierAnalyzer(),
         LLMRefinementAnalyzer(),
         VisionFallbackAnalyzer(),
@@ -90,6 +95,7 @@ __all__ = [
     "BaseAnalyzer",
     "BibliographyDetectorAnalyzer",
     "BlockClassifierAnalyzer",
+    "TocAnalyzer",
     "CalloutDetectorAnalyzer",
     "CaptionAnalyzer",
     "CitationLinkerAnalyzer",
