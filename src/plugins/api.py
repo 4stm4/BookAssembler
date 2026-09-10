@@ -14,6 +14,12 @@ _KRM_PERM_MAP = {
     "INSERT": KRMPermission.INSERT,
     "TRANSFORM_NODE": KRMPermission.TRANSFORM_NODE,
     "MUTATE_ATTRIBUTES": KRMPermission.MUTATE_ATTRIBUTES,
+    "TOMBSTONE": KRMPermission.TOMBSTONE,
+}
+
+_RG_PERM_MAP = {
+    "READ": RGPermission.READ,
+    "MUTATE_EDGES": RGPermission.MUTATE_EDGES,
 }
 
 _KG_PERM_MAP = {
