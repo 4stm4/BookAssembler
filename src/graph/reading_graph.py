@@ -213,10 +213,14 @@ class ReadingGraph:
                     member_id for member_id in participating
                     if not self.get_incoming_edges(member_id, track)
                 }
-                if len(heads) != 1:
+                # More than one start means the container's blocks form disjoint
+                # chains and the reading order is ambiguous. Zero is normal: the
+                # main flow is one chain across the document, so every container
+                # after the first is entered from the one before it.
+                if len(heads) > 1:
                     violations.append(
-                        f"container '{container_id}' has {len(heads)} heads on track "
-                        f"'{track.value}' (expected exactly 1)"
+                        f"container '{container_id}' has {len(heads)} disjoint starts "
+                        f"on track '{track.value}' (expected at most 1)"
                     )
 
         linked_ids = set(self._adjacency_out) | set(self._adjacency_in)
