@@ -55,7 +55,7 @@ def _cache_write(key: str, tikz: str) -> None:
 
 def _backend_id() -> str:
     """Which reconstruction path the current environment selects."""
-    if os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"):
+    if os.environ.get("OPENAI_API_KEY"):
         return "cloud_vision"
     if os.environ.get("VISION_OLLAMA_MODEL"):
         return f"ollama_vision:{os.environ['VISION_OLLAMA_MODEL']}"
@@ -222,7 +222,7 @@ def vectorize_diagram(
         # Preferred (RFC 0011): a cloud vision model reconstructs the diagram image
         # into TikZ directly — the only path that reaches ~99% on complex schematics.
         # Enabled when an API key is present; the CV facts are passed as a strong hint.
-        if os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY"):
+        if os.environ.get("OPENAI_API_KEY"):
             vt = _vision_tikz(img, boxes, inside, header, iw, ih)
             if vt:
                 _cache_write(cache_key, vt)
@@ -449,8 +449,8 @@ def _ollama_vision_tikz(img, inside, header, boxes) -> str:
 def _vision_tikz(img, boxes, inside, header, iw, ih) -> str:
     """Send the diagram image to a cloud vision model and get TikZ back.
 
-    RFC 0011 tikz_vectorization with a strong model. Requires OPENAI_API_KEY or
-    ANTHROPIC_API_KEY. The CV facts are appended as a hint to anchor the layout.
+    RFC 0011 tikz_vectorization with a strong model. Requires OPENAI_API_KEY.
+    The CV facts are appended as a hint to anchor the layout.
     """
     import json as _json
     import os
@@ -463,28 +463,6 @@ def _vision_tikz(img, boxes, inside, header, iw, ih) -> str:
         f"{i}: {inside.get(i, '')!r}/{header.get(i, '')!r}" for i in range(len(boxes))
     )
     prompt = _VISION_PROMPT + hint
-
-    anth = os.environ.get("ANTHROPIC_API_KEY")
-    if anth:
-        body = _json.dumps({
-            "model": os.environ.get("VISION_MODEL", "claude-sonnet-5"),
-            "max_tokens": 4096,
-            "messages": [{"role": "user", "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
-                {"type": "text", "text": prompt},
-            ]}],
-        }).encode()
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages", data=body,
-            headers={"content-type": "application/json", "x-api-key": anth,
-                     "anthropic-version": "2023-06-01"})
-        try:
-            with urllib.request.urlopen(req, timeout=120) as r:
-                data = _json.loads(r.read())
-                return _extract_tikz("".join(c.get("text", "") for c in data.get("content", [])))
-        except Exception:
-            log.exception("Anthropic vision call failed")
-            return ""
 
     openai = os.environ.get("OPENAI_API_KEY")
     if openai:

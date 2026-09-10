@@ -38,7 +38,7 @@ def test_round_trip_through_the_cache(tmp_path, monkeypatch) -> None:
 
 
 def test_backend_id_follows_the_environment(monkeypatch) -> None:
-    for var in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "VISION_OLLAMA_MODEL", "LLM_TIKZ_MODEL"):
+    for var in ("OPENAI_API_KEY", "VISION_OLLAMA_MODEL", "LLM_TIKZ_MODEL"):
         monkeypatch.delenv(var, raising=False)
     assert dv._backend_id() == "cv_fallback"
 
