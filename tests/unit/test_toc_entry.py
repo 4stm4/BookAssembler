@@ -601,6 +601,24 @@ def test_a_shift_that_falls_where_the_scan_missed_a_page():
     assert pm.resolve("2-39") == 46 and pm.resolve("2-49") == 56 and pm.resolve("2-63") == 69
 
 
+def test_one_folio_can_carry_the_shift_across_pages_without_folios():
+    """Intel 3000, chapter 3: shift 72 up to "3-15", then two plates without
+    folios, "3·19" alone at 71, then 70 from "3-21" on (3-20 is not in the
+    scan)."""
+    from src.analyzers.toc.folios import PageMap
+    folios = [(p, f"3-{p - 72}") for p in range(80, 88)] + [(90, "3·19")] + \
+             [(p, f"3-{p - 70}") for p in range(91, 99)]
+    assert PageMap(folios).resolve("3-19") == 90
+
+
+def test_a_two_page_chapter_is_numbered_by_its_two_folios():
+    """MCS-40, chapter 6: "6-1" and "6-2" on facing pages — a pair in step
+    counts; two unrelated numbers do not."""
+    from src.analyzers.toc.folios import PageMap
+    assert PageMap([(102, "6-1"), (103, "6-2")]).resolve("6-1") == 102
+    assert PageMap([(40, "6-1"), (97, "6-9")]).resolve("6-1") is None
+
+
 def test_a_folio_absorbed_into_a_diagram_still_counts():
     """MCS-40, chapter 3: the folio line went into a DiagramBlock's labels
     and was tombstoned; it still says which page it is."""

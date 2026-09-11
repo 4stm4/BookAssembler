@@ -83,6 +83,16 @@ def folio_candidates(text: str) -> List[str]:
     return [t for t in ends if parse_label(t)]
 
 
+def _adjacent_pair(chain: List[Tuple[int, int]]) -> bool:
+    """Two folios on facing pages, numbered in step (MCS-40, a two-page
+    chapter 6: "6-1", "6-2") — too short for a chain, too specific for
+    chance."""
+    if len(chain) != 2:
+        return False
+    (p1, n1), (p2, n2) = chain
+    return 0 < p2 - p1 <= 2 and p2 - p1 == n2 - n1
+
+
 def _longest_chain(points: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
     """The longest run of (page, number) — pages rising, numbers rising, the
     shift page − number moving by at most MAX_SHIFT_STEP from one point to
@@ -123,10 +133,21 @@ class PageMap:
             # A real change of shift inside a book (a page inserted without a
             # folio) holds for the pages after it; a stray number that merely
             # fits the chain holds for its own page only (MCS-40, page 50).
+            # One point may hold a shift of its own where the shift passes
+            # from one value to another across pages without folios (Intel
+            # 3000: 72 … "3·19" at 71 … 70) — its shift lies between its
+            # neighbours'. A stray number's does not.
             shifts = [p - n for p, n in chain]
-            held = [pt for pt, s in zip(chain, shifts) if shifts.count(s) >= 2]
+            held = [
+                pt for i, (pt, s) in enumerate(zip(chain, shifts))
+                if shifts.count(s) >= 2 or (
+                    0 < i < len(shifts) - 1
+                    and min(shifts[i - 1], shifts[i + 1]) <= s <= max(shifts[i - 1], shifts[i + 1])
+                    and shifts[i - 1] != shifts[i + 1]
+                )
+            ]
             chain = held or chain
-            if len(chain) >= MIN_CHAIN:
+            if len(chain) >= MIN_CHAIN or _adjacent_pair(chain):
                 self._points[kind] = sorted((n, p) for p, n in chain)
 
     def __bool__(self) -> bool:
