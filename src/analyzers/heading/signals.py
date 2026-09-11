@@ -7,9 +7,9 @@ that apply them live in rules.py; reading KRM nodes lives in access.py.
 import re
 
 # A real word: 3+ letters containing a vowel, not all the same letter. Same
-# shape as pdf_adapter._is_ocr_garbage's own check — kept as a separate
-# constant here rather than imported, because the two call sites judge text
-# for different purposes at different blast radii (see rules.py).
+# shape as scan_noise's own check — kept as a separate constant here rather
+# than imported, because the two call sites judge text for different
+# purposes at different blast radii (see rules.py).
 _WORD_RE = re.compile(r"[A-Za-z]{3,}")
 
 # A heading promoted from a scanned page can carry an embedded real word

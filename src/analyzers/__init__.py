@@ -38,6 +38,7 @@ from src.analyzers.page_agent import PageAgentAnalyzer
 from src.analyzers.pipeline import PipelineRunner
 from src.analyzers.proper_noun import ProperNounExtractorAnalyzer
 from src.analyzers.reading_order import ReadingOrderAnalyzer
+from src.analyzers.scan_noise import ScanNoiseAnalyzer
 from src.analyzers.table import TableDetectorAnalyzer
 from src.analyzers.theorem import TheoremDetectorAnalyzer
 from src.analyzers.title_page import TitlePageAnalyzer
@@ -46,6 +47,10 @@ from src.analyzers.vision_fallback import VisionFallbackAnalyzer
 def create_default_pipeline() -> List[BaseAnalyzer]:
     return [
         NormalizationAnalyzer(),
+        # Scan debris (a logo read as ", 1IIIIiK,8I") is judged here, not
+        # dropped by the adapter (RFC 0008 §5.2) — before headings or the
+        # title page can take it for text.
+        ScanNoiseAnalyzer(),
         # Recovers text on pages with no text layer before anything tries to
         # read it — every detector downstream works on text (RFC 0008 §75).
         OCRAnalyzer(),
@@ -117,6 +122,7 @@ __all__ = [
     "ProperNounExtractorAnalyzer",
     "RGPermission",
     "ReadingOrderAnalyzer",
+    "ScanNoiseAnalyzer",
     "SecurityViolationError",
     "TableDetectorAnalyzer",
     "TheoremDetectorAnalyzer",
