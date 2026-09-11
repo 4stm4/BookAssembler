@@ -25,3 +25,23 @@ _WORD_RE = re.compile(r"[A-Za-z]{3,}")
 # Text shape alone cannot separate that half from a real heading; this
 # threshold catches the unambiguous case without risking a real one.
 MIN_WORD_CHAR_RATIO = 0.5
+
+# The word-ratio threshold cannot reach the harder half — a code comment or
+# diagram label built around one genuine word scores in the same range as a
+# real heading. Those carry their own tells instead:
+#
+# A source-code comment mangled by OCR: "/*" misread as "'*", "1*", "!*";
+# its close "*/" misread as "*'", "*,". A real chapter heading does not open
+# or close this way.
+_COMMENT_OPEN_RE = re.compile(r"^['/1!]\*")
+_COMMENT_CLOSE_RE = re.compile(r"\*['/,]?\s*$")
+
+# An inline annotation, not a section title — a real TOC/heading essentially
+# never opens with the literal word "NOTE:".
+_NOTE_PREFIX_RE = re.compile(r"^\s*NOTES?\s*:", re.IGNORECASE)
+
+# A diagram label or pinout description trails off into scan noise once the
+# real words run out: "PIN SYMBOL NAME AND TYPE FUNCTION R=- = }--". Three or
+# more non-alphanumeric characters running up to the end of the line is not
+# how a heading ends.
+_TRAILING_JUNK_RE = re.compile(r"[^A-Za-z0-9\s]{3,}\s*$")

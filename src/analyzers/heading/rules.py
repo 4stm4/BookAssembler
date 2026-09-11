@@ -6,7 +6,14 @@ import re
 from typing import Any, Dict, List, Optional
 from src.krm.models import ContainerUnit, KnowledgeDocument, ParagraphBlock
 
-from src.analyzers.heading.signals import MIN_WORD_CHAR_RATIO, _WORD_RE
+from src.analyzers.heading.signals import (
+    MIN_WORD_CHAR_RATIO,
+    _COMMENT_CLOSE_RE,
+    _COMMENT_OPEN_RE,
+    _NOTE_PREFIX_RE,
+    _TRAILING_JUNK_RE,
+    _WORD_RE,
+)
 
 
 def _word_char_ratio(text: str) -> float:
@@ -24,6 +31,19 @@ def _word_char_ratio(text: str) -> float:
     if not total:
         return 0.0
     return sum(len(w) for w in words) / total
+
+
+def _looks_like_non_heading_noise(text: str) -> bool:
+    """Syntactic tells the word-ratio check cannot reach: a mangled code
+    comment, an inline "NOTE:" annotation, or a diagram/pinout label
+    trailing off into scan noise. See signals.py for what each pattern
+    was measured against."""
+    return bool(
+        _COMMENT_OPEN_RE.match(text)
+        or _COMMENT_CLOSE_RE.search(text)
+        or _NOTE_PREFIX_RE.match(text)
+        or _TRAILING_JUNK_RE.search(text)
+    )
 
 def _is_monospace(block: Any) -> bool:
     vl = getattr(block, "visual_layout", None)
@@ -57,6 +77,7 @@ def _is_heading(block: Any, threshold: float) -> bool:
         and 3 <= len(text) < 200
         and any(c.isalpha() for c in text)
         and _word_char_ratio(text) >= MIN_WORD_CHAR_RATIO
+        and not _looks_like_non_heading_noise(text)
     )
 
 def _collect_containers(
