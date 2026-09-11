@@ -44,10 +44,24 @@ class TitlePageAnalyzer(BaseAnalyzer):
 
     def _detect_blank_pages(self, doc: KnowledgeDocument) -> None:
         count = 0
+        self._text_pages: Set[int] = set()
+        for container in doc.root_containers:
+            self._pages_with_text(container, self._text_pages)
         for container in doc.root_containers:
             count += self._replace_blanks(container)
         if count:
             log.info("TitlePageAnalyzer: %d blank pages detected", count)
+
+    def _pages_with_text(self, container: ContainerUnit, out: set) -> set:
+        """Pages that carry a block of real text (more than a folio)."""
+        for child in container.children:
+            if isinstance(child, ContainerUnit):
+                self._pages_with_text(child, out)
+            elif not child.is_tombstoned and len(_get_text(child).strip()) > 2:
+                page = page_of(child)
+                if page is not None:
+                    out.add(page)
+        return out
 
     def _replace_blanks(self, container: ContainerUnit) -> int:
         count = 0
@@ -66,7 +80,11 @@ class TitlePageAnalyzer(BaseAnalyzer):
                 if (child.metadata or {}).get("needs_ocr"):
                     continue
                 text = _get_text(child).strip()
-                if len(text) <= 2:
+                # Blank is a property of the page, not of one block on it: a
+                # page number "2" or a footnote marker at the foot of a page of
+                # text was relabelled BlankPageBlock and its text discarded —
+                # MetaPost lost the folio of nearly every page that way.
+                if len(text) <= 2 and page_of(child) not in self._text_pages:
                     page = page_of(child)
                     if page == 0:
                         # First page with no extractable text = scanned cover image.
