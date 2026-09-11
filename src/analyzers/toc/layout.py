@@ -11,6 +11,7 @@ later line, or annotation under the entry above (Zaks lists each chapter's
 topics that way); either way their text is kept.
 """
 
+import re
 from dataclasses import dataclass, field
 from statistics import median
 from typing import Dict, List, Optional, Sequence, Set, Tuple
@@ -132,7 +133,8 @@ class Entry:
     description: List[str] = field(default_factory=list)
     description_rows: List[Row] = field(default_factory=list)
     level: int = 1
-    number_override: Optional[str] = None   # set by _repair_glued_numbers
+    number_override: Optional[str] = None   # set by the _repair_* passes
+    number_skip: int = 0                     # chars of text the override replaces
 
     @property
     def text(self) -> str:
@@ -147,7 +149,7 @@ class Entry:
 
     def number_and_title(self) -> Tuple[Optional[str], str]:
         if self.number_override:
-            return self.number_override, strip_leaders(self.text[len(self.number_override):])
+            return self.number_override, strip_leaders(self.text[self.number_skip:])
         first = self.rows[0].lines
         if len(first) > 1 and is_number_token(first[0].text):
             num = strip_leaders(first[0].text)
@@ -492,6 +494,7 @@ def _read_from(pages: Dict[int, List[Line]], start: int,
         page += 1
 
     _repair_glued_numbers(entries)
+    _repair_roman_numbers(entries)
     _assign_levels(entries)
     return TocRead(heading, entries, consumed, content, used)
 
@@ -506,6 +509,58 @@ def _next_numbers(prev: str) -> List[str]:
     return out
 
 
+_ROMAN_RE = re.compile(r"^M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$")
+_ROMAN_VALUES = (("M", 1000), ("CM", 900), ("D", 500), ("CD", 400), ("C", 100),
+                 ("XC", 90), ("L", 50), ("XL", 40), ("X", 10), ("IX", 9),
+                 ("V", 5), ("IV", 4), ("I", 1))
+# How OCR misreads the strokes of a roman numeral: "II" run together into
+# "H", a stroke taken for a lowercase l or a one.
+_ROMAN_OCR = (("H", "II"), ("l", "I"), ("1", "I"), ("|", "I"))
+_ROMAN_TOKEN_RE = re.compile(r"^([IVXLCDMHl1|]{1,8})\.$")
+
+
+def _roman_value(s: str) -> Optional[int]:
+    if not s or not _ROMAN_RE.match(s):
+        return None
+    total, i = 0, 0
+    for sym, val in _ROMAN_VALUES:
+        while s.startswith(sym, i):
+            total, i = total + val, i + len(sym)
+    return total
+
+
+def _to_roman(n: int) -> str:
+    out = ""
+    for sym, val in _ROMAN_VALUES:
+        while n >= val:
+            out, n = out + sym, n - val
+    return out
+
+
+def _repair_roman_numbers(entries: List[Entry]) -> None:
+    """OCR reads the chapter numbers of a scanned contents list off by a
+    stroke: Zaks' "I. II. III. IV." came out as "I. H. HI. IV.". A token
+    that is no roman numeral, but becomes exactly the one due next once the
+    known misreadings are undone, is that numeral — the sequence around it
+    says so. Anything else is left as printed."""
+    prev: Optional[int] = None
+    for e in entries:
+        m = _ROMAN_TOKEN_RE.match(e.text.split(" ", 1)[0])
+        if not m:
+            continue
+        token = m.group(1)
+        value = _roman_value(token)
+        if value is None and prev is not None:
+            fixed = token
+            for bad, good in _ROMAN_OCR:
+                fixed = fixed.replace(bad, good)
+            if _roman_value(fixed) == prev + 1:
+                e.number_override, e.number_skip = _to_roman(prev + 1) + ".", len(token) + 1
+                value = prev + 1
+        if value is not None:
+            prev = value
+
+
 def _repair_glued_numbers(entries: List[Entry]) -> None:
     """A TeX number box too narrow for its number runs it into the title,
     and the text layer has no space to split on: "10.1.102013" (TeX Live
@@ -517,7 +572,7 @@ def _repair_glued_numbers(entries: List[Entry]) -> None:
         if num is None and prev:
             for cand in _next_numbers(prev):
                 if e.text.startswith(cand) and e.text[len(cand):].strip():
-                    e.number_override = cand
+                    e.number_override, e.number_skip = cand, len(cand)
                     break
         num, _ = e.number_and_title()
         bare = (num or "").rstrip(".")

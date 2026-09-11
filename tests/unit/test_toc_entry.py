@@ -340,6 +340,29 @@ def test_a_number_run_into_its_title_is_split_by_the_sequence():
                                 ("10.2", "2014", "40")]
 
 
+def test_roman_numbers_misread_by_ocr_are_restored_by_the_sequence():
+    """Zaks: "I. H. HI. IV." in the text layer is "I. II. III. IV." in print."""
+    p = Page()
+    p.block(7, (0.3, 0.07, "TABLE OF CONTENTS"))
+    for i, (num, title, page) in enumerate((("I.", "BASIC CONCEPTS", "15"),
+                                            ("H.", "Z80 HARDWARE ORGANIZATION", "46"),
+                                            ("HI.", "BASIC PROGRAMMING TECHNIQUES", "94"),
+                                            ("IV.", "THE Z80 INSTRUCTION SET", "154"))):
+        p.block(7, dot(0.15, 0.10 + 0.03 * i, f"{num} {title}", page))
+    assert _texts(p.read()) == [("I.", "BASIC CONCEPTS", "15"),
+                                ("II.", "Z80 HARDWARE ORGANIZATION", "46"),
+                                ("III.", "BASIC PROGRAMMING TECHNIQUES", "94"),
+                                ("IV.", "THE Z80 INSTRUCTION SET", "154")]
+
+
+def test_a_misread_numeral_out_of_sequence_is_left_as_printed():
+    p = Page()
+    p.block(7, (0.3, 0.07, "TABLE OF CONTENTS"))
+    for i, (num, page) in enumerate((("I.", "15"), ("HI.", "46"), ("IV.", "94"))):
+        p.block(7, dot(0.15, 0.10 + 0.03 * i, f"{num} CHAPTER", page))
+    assert [n for n, _, _ in _texts(p.read())] == ["I.", None, "IV."]
+
+
 def test_a_page_after_a_plain_space_at_the_column_edge():
     """MetaPost: a justified column fills the line up to its page number."""
     p = Page()
