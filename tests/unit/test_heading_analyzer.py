@@ -119,6 +119,46 @@ class TestOcrGarbageIsNotPromoted:
         assert any(h.title == real_heading for h in headings)
 
 
+class TestSyntacticNoiseIsNotPromoted:
+    """The half of the garbage that word-ratio cannot reach: a real word
+    embedded in a mangled source-code comment or a diagram/pinout label —
+    both score in the same ratio range as a genuine heading. These carry
+    their own syntactic tells instead. Also found on the Intel Series 3000
+    manual."""
+
+    @pytest.mark.parametrize("garbage", [
+        "'* INITIALIZATION SEQUENCE",
+        "1* RESTORE INTE.R~UI'T STRUCTURE *'",
+        "VALUE-GROUP 1: GET (AC) IN AC *'",
+        "/* LOAD DISPLACEMENT AND TEST fOR ZERO USING Z FLAG *'",
+        "NOTE: ALTERNATIVE TEST LOAD _0 'R -< ~",
+        "PIN SYMBOL NAME AND TYPE FUNCTION R=- = }--",
+        "INTERRUPT STROBE ENABLE \" r----'",
+    ])
+    def test_mangled_comments_and_trailing_junk_are_rejected(self, garbage):
+        root = _run([
+            _para(garbage, size=18.0),
+            _para("Ordinary body text at normal size.", size=12.0),
+            _para("More ordinary body text at normal size.", size=12.0),
+        ])
+        headings = [c for c in root.children if isinstance(c, ContainerUnit)]
+        assert not any(h.title == garbage for h in headings)
+
+    @pytest.mark.parametrize("real_heading", [
+        "3216/3226 PARALLEL BIDIRECTIONAL BUS DRIVER",
+        "Central Processor Designs Using The Intel Series 3000",
+        "APPENDIX C CENTRAL PROCESSOR SCHEMATICS",
+    ])
+    def test_real_headings_are_not_caught_by_the_noise_patterns(self, real_heading):
+        root = _run([
+            _para(real_heading, size=18.0),
+            _para("Ordinary body text at normal size.", size=12.0),
+            _para("More ordinary body text at normal size.", size=12.0),
+        ])
+        headings = [c for c in root.children if isinstance(c, ContainerUnit)]
+        assert any(h.title == real_heading for h in headings)
+
+
 class TestOrdinaryPromotion:
     def test_a_normal_large_font_block_still_becomes_a_heading(self):
         root = _run([
