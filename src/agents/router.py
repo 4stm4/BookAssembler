@@ -45,14 +45,36 @@ def _probe_ollama(host: str) -> Tuple[bool, List[str]]:
         return False, []
 
 
+# A GPU agent sits behind a tunnel. One slow answer to one probe used to
+# count as "no agent", and the analyzer that asked skipped its whole step in
+# silence: OCR left 5 pages of "Programming the Z80" without text right after
+# a restart, with the runner answering /health in 0.4 s a minute later. A
+# second, longer look is cheap next to that; a dead tunnel fails at once on
+# DNS and costs nothing.
+_HEALTH_TIMEOUTS = (5, 15)
+
+
+def _health(host: str) -> Optional[dict]:
+    """The agent's /health body, or None once every look has failed."""
+    last: Optional[Exception] = None
+    for timeout in _HEALTH_TIMEOUTS:
+        try:
+            req = urllib.request.Request(f"{host}/health")
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read())
+        except Exception as exc:  # noqa: BLE001 — any failure is "not reachable"
+            last = exc
+            if not _is_timeout(exc):
+                break
+    log.warning("agent %s not reachable: %s", host, last)
+    return None
+
+
 def _probe_health(host: str) -> Tuple[bool, List[str]]:
-    try:
-        req = urllib.request.Request(f"{host}/health")
-        with urllib.request.urlopen(req, timeout=5) as r:
-            data = json.loads(r.read())
-            return True, data.get("tasks") or [data.get("model", "")]
-    except Exception:
+    data = _health(host)
+    if data is None:
         return False, []
+    return True, data.get("tasks") or [data.get("model", "")]
 
 
 def probe_managed(host: str) -> Tuple[bool, dict]:
@@ -61,12 +83,8 @@ def probe_managed(host: str) -> Tuple[bool, dict]:
     Health body carries tasks, runner state, runner_url, queue_depth so the KAE
     agent-manager UI can render a live indicator (Stage 6).
     """
-    try:
-        req = urllib.request.Request(f"{host}/health")
-        with urllib.request.urlopen(req, timeout=5) as r:
-            return True, json.loads(r.read())
-    except Exception:
-        return False, {}
+    data = _health(host)
+    return (data is not None), (data or {})
 
 
 _VISION_ROLES = {"table", "formula", "vision"}
