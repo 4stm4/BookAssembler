@@ -168,6 +168,25 @@ def test_section_list_in_the_middle_of_the_book_is_not_a_toc():
     assert _toc_of(root) is None
 
 
+def test_running_header_inside_a_toc_page_is_dropped():
+    """A per-line-split block on a real contents page can expose the page's
+    own running header/footer alongside the entries — EphemeraDetector works
+    on whole paragraphs, so a header sharing a block with real content is
+    invisible to it. Found on the Zilog Z80 manual: "Z80 CPU" / "User Manual"
+    / "UM008011-0816" repeated on every contents page, and a bare folio
+    number ("vii") that isn't caught by exact-repeat matching either."""
+    root = _run([
+        _para("Table of Contents", 4),
+        _para("Introduction", 4, lines=["Z80 CPU", "User Manual", "Introduction", "vii"]),
+        _para("Registers", 5, lines=["Z80 CPU", "User Manual", "Registers", "viii"]),
+        _para("Instruction Set", 6, lines=["Z80 CPU", "User Manual", "Instruction Set", "ix"]),
+    ])
+    toc = _toc_of(root)
+    assert toc is not None
+    texts = [e.entry_text for e in toc.children if isinstance(e, TocEntryBlock)]
+    assert set(texts) == {"Introduction", "Registers", "Instruction Set"}
+
+
 def test_anchor_link_matches_headings():
     ch1 = ContainerUnit(title="1.  Introduction", level=1,
                         children=[_para("body", 3)])

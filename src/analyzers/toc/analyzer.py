@@ -32,8 +32,13 @@ from src.krm.models import (
     VisualLayout,
 )
 
-from src.analyzers.toc.signals import MIN_TOC_RUN, TOC_PAGE_FRACTION
+from src.analyzers.toc.signals import (
+    MIN_TOC_RUN,
+    TOC_HEADING_MAX_PAGE,
+    TOC_PAGE_FRACTION,
+)
 from src.analyzers.toc.rules import (
+    is_bare_page_number,
     is_toc_entry,
     is_toc_heading,
     parse_entry,
@@ -143,7 +148,8 @@ class TocAnalyzer(BaseAnalyzer):
                 last_page = None
                 continue
 
-            if not seen_heading and is_toc_heading(text):
+            heading_page_ok = page is None or page <= TOC_HEADING_MAX_PAGE
+            if not seen_heading and heading_page_ok and is_toc_heading(text):
                 seen_heading = True
                 heading_row = (idx, block, text)
                 anchor_page = page
@@ -169,6 +175,10 @@ class TocAnalyzer(BaseAnalyzer):
                 if page_ok and is_toc_entry(text, anchored=True):
                     anchored.append((idx, block, text))
                     continue
+                if page_ok and is_bare_page_number(text):
+                    # A folio number beside a real entry — noise to skip,
+                    # not a signal that the contents list has ended.
+                    continue
                 # First non-entry (or too-far) line after the anchored run
                 # ends it.
                 if anchored:
@@ -189,6 +199,7 @@ class TocAnalyzer(BaseAnalyzer):
                 last_page = None
 
         flush()
+        anchored = _drop_repeated_lines(anchored)
         # The heading line ("CONTENTS") is folded into the TOC container it
         # names, so it is tombstoned with the run it introduced.
         if anchored and heading_row is not None:
@@ -322,3 +333,26 @@ def _line_layout(block: ParagraphBlock) -> Optional[VisualLayout]:
     """The block's own layout — a TOC entry has no separate box of its own,
     it inherits the source line's page."""
     return getattr(block, "visual_layout", None)
+
+
+def _drop_repeated_lines(
+    rows: List[Tuple[int, ParagraphBlock, str]],
+) -> List[Tuple[int, ParagraphBlock, str]]:
+    """Remove lines whose exact (normalised) text recurs within the run.
+
+    A real contents list names each chapter once; a running header/footer
+    caught by the per-line split ("Z80 CPU", "User Manual", the manual's own
+    part number) repeats verbatim on every page of the run instead. Left in,
+    it shows up as duplicate entries beside the real ones — found on the
+    Zilog Z80 manual, where the header sharing a block with "Table of
+    Contents" was not something EphemeraDetector could see (it works on
+    whole paragraphs, not the lines inside one).
+    """
+    counts: Dict[str, int] = {}
+    for _, _, text in rows:
+        key = re.sub(r"\s+", " ", text.strip().lower())
+        counts[key] = counts.get(key, 0) + 1
+    return [
+        r for r in rows
+        if counts[re.sub(r"\s+", " ", r[2].strip().lower())] == 1
+    ]
