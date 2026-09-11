@@ -157,14 +157,17 @@ class TocAnalyzer(BaseAnalyzer):
                 # extending the run — seen on the Zilog Z80 manual, where
                 # unrelated prose from pages 33/42 was swept into the TOC
                 # that started near the front.
+                # Distance from the heading itself, not from the last
+                # accepted line — a moving reference lets the run drift a
+                # page at a time arbitrarily far (that is exactly how
+                # pages 33 and 42 got in: each was within 2 of the one
+                # before it).
                 page_ok = (
                     anchor_page is None or page is None
                     or abs(page - anchor_page) <= 2
                 )
                 if page_ok and is_toc_entry(text, anchored=True):
                     anchored.append((idx, block, text))
-                    if page is not None:
-                        anchor_page = page
                     continue
                 # First non-entry (or too-far) line after the anchored run
                 # ends it.

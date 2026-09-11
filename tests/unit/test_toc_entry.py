@@ -210,3 +210,23 @@ def test_anchored_run_does_not_reach_across_pages():
     texts = [e.entry_text for e in toc.children if isinstance(e, TocEntryBlock)]
     assert "Introduction" in texts
     assert not any("Seven Bits" in t or "temporary storage" in t for t in texts)
+
+
+def test_anchored_run_does_not_drift_a_page_at_a_time():
+    """A moving reference point (last accepted page, not the heading's own
+    fixed page) let the run walk arbitrarily far as long as each step stayed
+    within 2 pages of the one before it — exactly how pages 33 and 42 crept
+    in one paragraph at a time on the real manual, each step small even
+    though the total drift was not."""
+    children = [_para("CONTENTS", 1), _para("Introduction", 1)]
+    for page in range(2, 20):
+        children.append(_para(f"Stray short line {page}", page))
+    root = _run(children, page_count=200)
+    toc = _toc_of(root)
+    assert toc is not None
+    texts = [e.entry_text for e in toc.children if isinstance(e, TocEntryBlock)]
+    assert "Introduction" in texts
+    # Within 2 pages of the heading a short line is indistinguishable from a
+    # real entry — that is by design. What the fix rules out is reaching
+    # page 10+ by walking there one page at a time.
+    assert not any(f"Stray short line {p}" in texts for p in range(6, 20))
