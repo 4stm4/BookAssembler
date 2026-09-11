@@ -357,7 +357,9 @@ def _block_text(block: Any, target_lang: str) -> str:
     if isinstance(block, TocEntryBlock):
         num = block.chapter_number or ""
         text = _translated(block, block.entry_text, target_lang)
-        page = str(block.target_page + 1) if isinstance(block.target_page, int) else ""
+        page = block.page_label or (
+            str(block.target_page + 1) if isinstance(block.target_page, int) else ""
+        )
         return f"{num} {text} {'.' * 3} {page}".strip() if page else f"{num} {text}".strip()
     if isinstance(block, FootnoteBlock):
         return _translated(block, block.text, target_lang)

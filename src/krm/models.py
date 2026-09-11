@@ -393,10 +393,17 @@ class TocEntryBlock(StructuralUnit):
     """
     Single entry in a table of contents.
 
-    Fields (all optional except entry_text):
-      * entry_text     — full displayed line ("1.2  Registers ..... 45")
-      * chapter_number — parsed leader ("1.2", "Глава 5", "A")
-      * target_page    — 0-based physical page index the entry points to
+    Fields (all optional except entry_text). The printed line
+    "1.2  Registers ..... 45" is chapter_number + entry_text + page_label:
+      * entry_text     — the title as printed, without number or page
+                         ("Registers"; a wrapped title joined into one)
+      * chapter_number — the number as printed ("1.2", "IV.", "Chapter 5")
+      * page_label     — the page reference as printed ("45", "xiii",
+                         "2-15"); not an index — front matter and per-chapter
+                         numbering make it differ from one
+      * level          — nesting depth in the contents list, 1 = top
+      * target_page    — 0-based page index in the file the entry points
+                         to, once resolved against the headings
       * anchor_id      — id of the ContainerUnit this entry navigates to
                          (populated once the heading tree is available)
 
@@ -405,6 +412,8 @@ class TocEntryBlock(StructuralUnit):
     """
     entry_text: str = ""
     chapter_number: Optional[str] = None
+    page_label: Optional[str] = None
+    level: Optional[int] = None
     target_page: Optional[int] = None
     anchor_id: Optional[str] = None
 

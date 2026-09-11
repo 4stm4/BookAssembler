@@ -288,7 +288,9 @@ def render_node(
     elif isinstance(node, TocEntryBlock):
         num = _esc(node.chapter_number or "")
         title = _esc(_translated(node, node.entry_text, target_lang))
-        page = str(node.target_page + 1) if isinstance(node.target_page, int) else ""
+        page = _esc(node.page_label) if node.page_label else (
+            str(node.target_page + 1) if isinstance(node.target_page, int) else ""
+        )
         left = f"{num}~{title}" if num else title
         if page:
             body.append(
