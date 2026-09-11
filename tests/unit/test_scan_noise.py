@@ -49,6 +49,14 @@ def test_debris_is_noise(text):
     "$5.00",
     # a broken font encoding is damaged text, not a smudge: never judged
     "Íå î÷åíü êðàòêîå ââåäåíèå",
+    # instruction mnemonics have no real word and clean tokens (Zilog Z80
+    # contents: seven entries were lost to the first version of the rule)
+    "LD r, r' . . . . . . . . . . . . . . . . . . 71",
+    "LD r,n . . . . . . . . . . . . . . . . . . . 72",
+    "LD r, (IX+d) . . . . . . . . . . . . . . . . 75",
+    "SBC HL, ss",
+    "EX AF, AF′",
+    "JP (IX)",
 ])
 def test_real_text_is_not_noise(text):
     assert not is_scan_noise(text)
