@@ -535,6 +535,8 @@ def create_app() -> FastAPI:
                     "type": "TocEntryBlock",
                     "text": node.entry_text,
                     "chapter_number": node.chapter_number,
+                    "page_label": node.page_label,
+                    "level": node.level,
                     "target_page": node.target_page,
                     "anchor_id": node.anchor_id,
                     "confidence_score": node.confidence_score,
@@ -853,6 +855,8 @@ def create_app() -> FastAPI:
                 te = TocEntryBlock(
                     entry_text=n.get("text", ""),
                     chapter_number=n.get("chapter_number"),
+                    page_label=n.get("page_label"),
+                    level=n.get("level"),
                     target_page=n.get("target_page"),
                     anchor_id=n.get("anchor_id"),
                     confidence_score=n.get("confidence_score", 1.0),

@@ -115,7 +115,10 @@ def _extract_text_from_node(node: BaseKRMNode) -> str:
             if node.chapter_number
             else node.entry_text
         )
-        right = f" … p.{node.target_page + 1}" if isinstance(node.target_page, int) else ""
+        page = node.page_label or (
+            str(node.target_page + 1) if isinstance(node.target_page, int) else ""
+        )
+        right = f" … p.{page}" if page else ""
         return (left + right).strip()
 
     elif isinstance(node, FootnoteBlock):
