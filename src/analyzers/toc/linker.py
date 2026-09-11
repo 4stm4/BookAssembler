@@ -119,8 +119,9 @@ def _page_map(containers: List[ContainerUnit]) -> PageMap:
             if isinstance(n, ContainerUnit):
                 walk(n.children)
                 continue
-            if getattr(n, "is_tombstoned", False):
-                continue
+            # Tombstoned blocks are read too — as evidence, not content: on a
+            # diagram page the folio line is absorbed with the diagram's
+            # labels (MCS-40, chapter 3), and it still says what page it is.
             if isinstance(n, EphemeraBlock):
                 consider(n.visual_layout, n.repeated_text)
             elif type(n) is ParagraphBlock:
