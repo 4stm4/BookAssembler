@@ -117,7 +117,14 @@ def _token_for_host(host: str) -> Optional[str]:
 
 # A classification answers in ~1.7s; the ceiling is for a page that turns out
 # heavier than expected. OCR needs its own, far larger budget — see OCR_TIMEOUT.
-INFER_TIMEOUT = 45
+# The Runner serializes inference (one generation at a time, pool.py) and
+# may generate up to 2048 tokens — ~100 s on a T4. At 45 s a long answer
+# timed out, the retry queued behind the generation the Runner was still
+# running for nobody, and the next requests timed out behind both: PageAgent
+# on "Programming the Z80" got 1 answer per minute and 6 timeouts per 5.
+# The wait has to cover the queue (PageAgent keeps 2 in flight) and the
+# longest answer.
+INFER_TIMEOUT = int(os.environ.get("KAE_INFER_TIMEOUT", "240"))
 INFER_ATTEMPTS = 3
 INFER_BACKOFF = 2.0     # seconds, linear
 

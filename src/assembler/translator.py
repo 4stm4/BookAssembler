@@ -417,8 +417,11 @@ def _call_target(target: Target, prompt: str) -> Optional[str]:
     if target.gpu:
         from src.agents.router import call_infer
         from src.agents.tasks import Priority
+        # One attempt: a timed-out generation goes on running on the Runner,
+        # and a retry would queue a copy behind it. The job puts the unit back
+        # in the queue itself.
         return call_infer(target.host, "translate", prompt=prompt, kind=target.kind,
-                          model=target.model, timeout=GPU_TIMEOUT,
+                          model=target.model, timeout=GPU_TIMEOUT, attempts=1,
                           priority=int(Priority.BULK))
     # An explicit host goes straight to that ollama and takes no GPU slot.
     return generate_text(prompt, task="translate", host=target.host,
