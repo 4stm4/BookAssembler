@@ -71,6 +71,8 @@ def probe_managed(host: str) -> Tuple[bool, dict]:
 
 _VISION_ROLES = {"table", "formula", "vision"}
 
+_OLLAMA_TEXT_NUM_PREDICT = int(os.environ.get("LLM_AGENT_NUM_PREDICT", "1024"))
+
 
 def pick(role: str) -> Tuple[Optional[str], Optional[str], str]:
     """Return (host, model, kind) of the first reachable agent with `role`.
@@ -180,11 +182,16 @@ def call_infer(
     b64 = base64.b64encode(image_png).decode() if image_png is not None else None
 
     if kind == "ollama":
+        options: dict = {"temperature": 0.0, "seed": 42}
+        if b64 is None:
+            # A text reply: a translated paragraph runs past ollama's default
+            # cap and came back cut mid-sentence (see agents/text.py).
+            options["num_predict"] = _OLLAMA_TEXT_NUM_PREDICT
         body = {
             "model": model or "llava:7b",
             "prompt": prompt or f"Describe this image for {task}.",
             "stream": False,
-            "options": {"temperature": 0.0, "seed": 42},
+            "options": options,
         }
         if b64 is not None:
             body["images"] = [b64]
@@ -194,7 +201,8 @@ def call_infer(
                 f"{host}/api/generate", data=payload,
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=120) as r:
+            # On an ARM CPU a long text reply takes minutes, not seconds.
+            with urllib.request.urlopen(req, timeout=timeout or 120) as r:
                 return json.loads(r.read()).get("response", "")
         except Exception as exc:
             log.warning("ollama vision %s failed: %s", host, exc)

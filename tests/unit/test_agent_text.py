@@ -43,13 +43,13 @@ class TestRouting:
                             lambda role: ("http://gpu", "m", "managed"))
         monkeypatch.setattr(agent_text, "call_infer", lambda *a, **k: None)
         monkeypatch.setattr(agent_text, "_edge_generate",
-                            lambda prompt, host=None, model=None: "с edge")
+                            lambda prompt, host=None, model=None, timeout=None: "с edge")
         assert agent_text.generate_text("t", task="refine") == "с edge"
 
     def test_no_agent_at_all_goes_straight_to_the_edge(self, monkeypatch):
         monkeypatch.setattr(agent_text, "pick", lambda role: (None, None, ""))
         monkeypatch.setattr(agent_text, "_edge_generate",
-                            lambda prompt, host=None, model=None: "с edge")
+                            lambda prompt, host=None, model=None, timeout=None: "с edge")
         assert agent_text.generate_text("t") == "с edge"
 
     def test_an_explicit_host_takes_no_gpu_slot(self, monkeypatch):
@@ -57,7 +57,7 @@ class TestRouting:
         monkeypatch.setattr(agent_text, "pick",
                             lambda role: pytest.fail("discovery ran anyway"))
         monkeypatch.setattr(agent_text, "_edge_generate",
-                            lambda prompt, host=None, model=None: f"на {host}")
+                            lambda prompt, host=None, model=None, timeout=None: f"на {host}")
         assert agent_text.generate_text("t", host="http://edge") == "на http://edge"
 
 
