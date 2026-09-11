@@ -48,7 +48,7 @@
 | `CaptionBlock` | ✅ | `CaptionAnalyzer` |
 | `FormulaBlock` | ✅ | `FormulaDetectorAnalyzer` (эвристика: math-font или ≥15% math-символов; заглушку заменит vision-OCR) |
 | `ListBlock` / `ListItemBlock` | ✅ | `ListDetectorAnalyzer` (маркеры •/-/1./a)/iv.) |
-| `TocEntryBlock` | ✅ | `BlockClassifierAnalyzer` + PageAgent (парсит номер главы и целевую страницу; `_link_toc_anchors` привязывает к контейнерам заголовков) |
+| `TocEntryBlock` | ✅ | `TocAnalyzer` читает оглавление по геометрии строк (номер, заголовок, печатная страница `page_label`, уровень `level`); `TocLinkAnalyzer` привязывает к контейнерам заголовков (`anchor_id`) и переводит печатную страницу в индекс `target_page`; ручная пересборка страницы — PageAgent |
 | `InstructionSpec` | ⚠️ | `EntityExtractor` даёт KG-ноду `INSTRUCTION`, но не структурный блок |
 | `DefinitionSpec` | ✅ | `DefinitionDetectorAnalyzer` — prefix + pattern heuristics |
 | `WarningSpec` | ⚠️ | то же самое |
@@ -69,7 +69,7 @@
 | Тип | Статус | Комментарий |
 |---|---|---|
 | `ContainerUnit` (part/chapter/section/…) | ✅ | `HeadingAnalyzer` строит дерево |
-| `ContainerUnit(semantic_type='toc')` | ✅ | `BlockClassifier`, `PageAgent` (`block_classifier.py:228`) |
+| `ContainerUnit(semantic_type='toc')` | ✅ | `TocAnalyzer` (`src/analyzers/toc/`, до `HeadingAnalyzer`), `PageAgent` (ручная пересборка страницы) |
 | `ContainerUnit(semantic_type='example')` | ✅ | `CaptionAnalyzer` (`caption_analyzer.py:112`) |
 | `KnowledgeDocument` (root) | ✅ | адаптер |
 
