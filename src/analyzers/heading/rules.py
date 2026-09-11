@@ -2,8 +2,28 @@
 
 from src.analyzers.access import block_text, font_size
 from collections import Counter
+import re
 from typing import Any, Dict, List, Optional
 from src.krm.models import ContainerUnit, KnowledgeDocument, ParagraphBlock
+
+from src.analyzers.heading.signals import MIN_WORD_CHAR_RATIO, _WORD_RE
+
+
+def _word_char_ratio(text: str) -> float:
+    """Share of the text's (non-space) characters that belong to a real word.
+
+    A diagram label or code comment mangled by OCR can embed one genuine
+    word inside a run of symbol noise; this measures how much of the text
+    that word actually accounts for, rather than just whether one exists.
+    """
+    words = [
+        w for w in _WORD_RE.findall(text)
+        if re.search(r"[aeiouAEIOUyY]", w) and len(set(w.lower())) >= 2
+    ]
+    total = len(re.sub(r"\s+", "", text))
+    if not total:
+        return 0.0
+    return sum(len(w) for w in words) / total
 
 def _is_monospace(block: Any) -> bool:
     vl = getattr(block, "visual_layout", None)
@@ -36,6 +56,7 @@ def _is_heading(block: Any, threshold: float) -> bool:
         font_size(block, default=12.0) >= threshold
         and 3 <= len(text) < 200
         and any(c.isalpha() for c in text)
+        and _word_char_ratio(text) >= MIN_WORD_CHAR_RATIO
     )
 
 def _collect_containers(

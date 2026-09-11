@@ -78,6 +78,47 @@ class TestTombstoneIsRespected:
         )
 
 
+class TestOcrGarbageIsNotPromoted:
+    """A scanned page's diagram labels and code comments can be large-font
+    and still contain an embedded real word — found on the Intel Series 3000
+    manual (1976), where OCR noise like "MICRO-{;;O-i II" and "MAO.
+    ~IIIIIIIII t t ," was promoted to fake L1 chapter headings alongside the
+    real ones."""
+
+    @pytest.mark.parametrize("garbage", [
+        "MICRO-{;;O-i II",
+        "IS' AC, lllI_~_~ACO",
+        "-~l",
+        "MAO. ~IIIIIIIII t t ,",
+        "MIP I I: D",
+        "~:Y",
+    ])
+    def test_symbol_heavy_noise_is_rejected(self, garbage):
+        root = _run([
+            _para(garbage, size=18.0),
+            _para("Ordinary body text at normal size.", size=12.0),
+            _para("More ordinary body text at normal size.", size=12.0),
+        ])
+        headings = [c for c in root.children if isinstance(c, ContainerUnit)]
+        assert not any(h.title == garbage for h in headings)
+
+    @pytest.mark.parametrize("real_heading", [
+        "3216/3226 PARALLEL BIDIRECTIONAL BUS DRIVER",
+        "APPENDIX C CENTRAL PROCESSOR SCHEMATICS",
+        "SCHOTTKY BIPOLAR LSI MICROCOMPUTER SET",
+    ])
+    def test_real_headings_with_digits_and_punctuation_still_promote(self, real_heading):
+        """The filter must not reject a real heading for containing numbers
+        or an acronym-like run alongside its words."""
+        root = _run([
+            _para(real_heading, size=18.0),
+            _para("Ordinary body text at normal size.", size=12.0),
+            _para("More ordinary body text at normal size.", size=12.0),
+        ])
+        headings = [c for c in root.children if isinstance(c, ContainerUnit)]
+        assert any(h.title == real_heading for h in headings)
+
+
 class TestOrdinaryPromotion:
     def test_a_normal_large_font_block_still_becomes_a_heading(self):
         root = _run([
