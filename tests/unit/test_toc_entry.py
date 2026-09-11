@@ -553,6 +553,72 @@ def test_linker_measures_chapter_page_numbering_per_chapter():
     assert [x.target_page for x in toc.children] == [20, 34]
 
 
+def test_page_map_reads_the_books_own_folios():
+    from src.analyzers.toc.folios import PageMap, folio_candidates
+    assert set(folio_candidates("1 ВВЕДЕНИЕ 3")) == {"1", "3"}
+    assert folio_candidates("Page 12") == ["12"]
+    # front matter in roman, body in arabic shifted by 14; a stray "15"
+    # (a diagram label at the edge of page 50) agrees with nothing
+    pm = PageMap([(2, "iii"), (4, "v"), (5, "vi"), (14, "1"), (15, "2"), (17, "4"), (50, "15"),
+                  (60, "2-1"), (61, "2-2"), (64, "2-5")])
+    assert pm.resolve("iv") == 3
+    assert pm.resolve("3") == 16          # no folio read on its page: neighbours
+    assert pm.resolve("30") == 43
+    assert pm.resolve("2-4") == 63        # chapter-page numbering
+    assert pm.resolve("7-1") is None      # a chapter whose folios were never read
+
+
+def test_folio_formats_met_on_scans_and_running_heads():
+    from src.analyzers.toc.folios import PageMap, folio_candidates, parse_label
+    assert parse_label("2·39") == parse_label("2-39") == ("c2", 39)   # OCR'd hyphen
+    assert parse_label("3-9·") == ("c3", 9) and parse_label("12'") == ("", 12)
+    assert parse_label("3.1") is None                               # a section heading
+    assert folio_candidates("The Buildroot user manual 58 / 139") == ["58"]
+    pm = PageMap([(45, "2-38"), (46, "2·39"), (47, "2-40"), (40, "2-30"), (41, "2-31")])
+    assert pm.resolve("2-39") == 46
+
+
+def test_edge_numbers_that_are_not_folios_do_not_form_the_chain():
+    """Signetics: table cells and sales-office telephone numbers at page
+    edges; MetaPost: a footnote marker "2:" at the foot of page 5."""
+    from src.analyzers.toc.folios import PageMap, folio_candidates
+    assert folio_candidates("2:") == []
+    folios = [(p, str(p)) for p in (3, 7, 8, 10, 11, 12, 13, 14, 15, 40, 60)]
+    noise = [(1, "20"), (1, "86"), (3, "49"), (4, "66"), (6, "50"), (102, "5"),
+             (102, "21"), (101, "1"), (12, "1"), (12, "4")]
+    pm = PageMap(folios + noise)
+    assert pm.resolve("5") == 5 and pm.resolve("21") == 21 and pm.resolve("12") == 12
+
+
+def test_a_section_number_in_the_running_head_is_not_the_folio():
+    """MetaPost: "3 УПРАВЛЕНИЕ ВЫВОДОМ METAPOST … 5" — section 3 on pages
+    whose own numbers are 5 and 6; neighbouring sections agree on a shift
+    by chance, the page numbers agree on every page."""
+    from src.analyzers.toc.folios import PageMap, folio_candidates
+    heads = {4: "2 БАЗОВЫЕ КОМАНДЫ 4", 5: "3 УПРАВЛЕНИЕ ВЫВОДОМ 5", 6: "3 УПРАВЛЕНИЕ ВЫВОДОМ 6",
+             7: "4 КРИВЫЕ 7", 8: "4 КРИВЫЕ 8", 9: "5 ЛИНЕЙНЫЕ УРАВНЕНИЯ 9", 10: "6 ВЫРАЖЕНИЯ 10"}
+    pm = PageMap([(p, t) for p, h in heads.items() for t in folio_candidates(h)])
+    assert pm.resolve("5") == 5 and pm.resolve("9") == 9 and pm.resolve("2") == 2
+
+
+def test_linker_takes_the_target_from_folios_over_a_wrong_anchor():
+    """Buildroot: "The .mk file" is the title of 16.2 and of 18.3 — the
+    heading link picks the first; the folio says where page 69 is."""
+    def edge(page, text):
+        return _para(page, (0.1, 0.03, text))
+    wrong = ContainerUnit(title="The .mk file", level=2,
+                          visual_layout=VisualLayout(NormalizedRect(0, 0, 1, 1), 66))
+    toc = ContainerUnit(title="Contents", semantic_type="toc",
+                        visual_layout=VisualLayout(NormalizedRect(0, 0, 1, 1), 2), children=[
+        TocEntryBlock(entry_text="The .mk file", chapter_number="18.3", page_label="69"),
+    ])
+    pages = [edge(p, f"The Buildroot user manual {p - 8}") for p in range(70, 80)]
+    doc = KnowledgeDocument(title="t", source_uri="test://", root_containers=[
+        ContainerUnit(title="book", children=[toc, wrong] + pages)])
+    TocLinkAnalyzer().run(doc, ReadingGraph(), KnowledgeGraph())
+    assert toc.children[0].target_page == 77
+
+
 def test_pipeline_reads_contents_before_headings_and_links_after():
     names = [a.manifest.name for a in create_default_pipeline()]
     assert names.index("EphemeraDetectorAnalyzer") < names.index("TocAnalyzer") \
