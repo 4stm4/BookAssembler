@@ -398,6 +398,12 @@ def translation_targets() -> List[Target]:
             if ok:
                 t = target(a, models)
                 out.extend([t] * (GPU_WORKERS if t.gpu else 1))
+    gpu = [t for t in out if t.gpu]
+    if gpu:
+        # The edge cluster is the degradation path for bulk work (RFC 0022
+        # §7.2), not the GPU's partner: at 0.6-1.9 tokens/s it adds next to
+        # nothing, and would put a second model's wording into the book.
+        return gpu
     if not out:
         for a in agents:
             if a.get("kind", "ollama") == "ollama":

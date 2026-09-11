@@ -2008,8 +2008,25 @@ def create_app() -> FastAPI:
 
         def _run() -> None:
             try:
-                stats = translate_document(doc, body.target_lang, targets, lock=doc_lock,
+                current = targets
+                stats = translate_document(doc, body.target_lang, current, lock=doc_lock,
                                            on_progress=_on_progress, stop=stop)
+                # A GPU session can end mid-book (Kaggle's time limit, idle
+                # shutdown): its workers leave the job, and whoever is
+                # reachable now — the edge cluster — carries on. Another pass
+                # takes every unit still untranslated, the ones a dead agent
+                # gave up on included; it is worth it when the agents changed
+                # or the last pass got something done, and two idle passes in
+                # a row end the job.
+                idle = 0 if stats.done else 1
+                while (stats.left or stats.failed) and not stop.is_set() and idle < 2:
+                    fresh = translation_targets()
+                    if not fresh or (fresh == current and not stats.done):
+                        break
+                    current = fresh
+                    stats = translate_document(doc, body.target_lang, current, lock=doc_lock,
+                                               on_progress=_on_progress, stop=stop)
+                    idle = 0 if stats.done else idle + 1
                 _save()
                 finished = not stats.left
                 progress_store[job_id] = {"step": stats.processed, "total": stats.total,
