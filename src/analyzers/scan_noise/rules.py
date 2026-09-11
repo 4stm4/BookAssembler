@@ -5,10 +5,12 @@ from collections import Counter
 from src.analyzers.scan_noise.signals import (
     MAX_DOMINANT_LETTER_SHARE,
     MIN_LETTERS,
+    _BROKEN_TOKEN_RE,
     _CYRILLIC_VOWELS,
     _JUDGEABLE_RE,
     _LATIN_VOWELS,
     _LEADER_RE,
+    _REPEAT_RE,
     _WORD_RE,
 )
 
@@ -29,8 +31,9 @@ def is_scan_noise(text: str) -> bool:
 
     Only text that has letters can be letter debris: a row of numbers, a
     date or a price is content, not noise. Among the rest, noise is text
-    whose punctuation outweighs its letters, or whose letters form no real
-    word.
+    whose punctuation outweighs its letters — or whose letters form no real
+    word and show debris in their tokens. A mnemonic has no real word but
+    clean tokens ("LD r, (IX+d)").
     """
     core = _LEADER_RE.sub(" ", text or "")
     chars = [c for c in core if not c.isspace()]
@@ -41,4 +44,6 @@ def is_scan_noise(text: str) -> bool:
     symbols = len(chars) - letters - digits
     if symbols > letters:
         return True
-    return not any(is_real_word(w) for w in _WORD_RE.findall(core))
+    if any(is_real_word(w) for w in _WORD_RE.findall(core)):
+        return False
+    return any(_REPEAT_RE.search(t) or _BROKEN_TOKEN_RE.search(t) for t in core.split())

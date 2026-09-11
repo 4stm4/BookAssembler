@@ -36,3 +36,11 @@ MIN_LETTERS = 3
 # edge reads as "IIIIiK". Measured on the Intel Series 3000 cover; real words
 # in the test books peak at 0.5 ("Sussex", "Mississippi" 0.36).
 MAX_DOMINANT_LETTER_SHARE = 0.6
+
+# Having no real word is not enough to be debris: an instruction mnemonic
+# has none either ("LD r, (IX+d)", "SBC HL, ss" — the Zilog Z80 contents
+# lost seven entries that way). Debris also shows it in its tokens: the same
+# letter three times running ("1IIIIiK"), or letters broken up by digits and
+# punctuation inside one token ("K,8I").
+_REPEAT_RE = re.compile(r"([^\W\d_])\1\1", re.IGNORECASE)
+_BROKEN_TOKEN_RE = re.compile(r"[^\W\d_][^\w\s]*\d[^\w\s]*[^\W\d_]|[^\W\d_][^\w\s]+\d|\d[^\w\s]+[^\W\d_]")
