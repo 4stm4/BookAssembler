@@ -694,37 +694,54 @@ def create_app() -> FastAPI:
         }
 
     def _rebuild_document(data: Dict[str, Any]) -> KnowledgeDocument:
+        def _layout_from(n: Dict[str, Any], pg: int) -> Any:
+            """A VisualLayout from a serialized bbox/style pair on page `pg`."""
+            from src.krm.models import VisualLayout, NormalizedRect, StyleDescriptor
+            bb = n.get("bbox")
+            if isinstance(bb, list) and len(bb) == 4:
+                # Clamp to KRM invariant #3: coords in [0,1], x0<=x1, y0<=y1.
+                x0, y0, x1, y1 = (max(0.0, min(1.0, float(v))) for v in bb)
+                if x0 > x1:
+                    x0, x1 = x1, x0
+                if y0 > y1:
+                    y0, y1 = y1, y0
+                rect = NormalizedRect(x0, y0, x1, y1)
+            else:
+                rect = NormalizedRect(0.0, 0.0, 1.0, 1.0)
+            style = None
+            sd = n.get("style")
+            if isinstance(sd, dict):
+                style = StyleDescriptor(
+                    font_family=sd.get("font_family", "sans-serif"),
+                    font_size_pt=float(sd.get("font_size_pt", 12.0)),
+                    is_bold=bool(sd.get("is_bold", False)),
+                    is_italic=bool(sd.get("is_italic", False)),
+                    is_monospace=bool(sd.get("is_monospace", False)),
+                    text_color_rgb=tuple(sd.get("text_color_rgb", [0, 0, 0])),
+                )
+            return VisualLayout(bounding_box=rect, page_or_screen_index=pg, style=style)
+
+        def _restore_lines(n: Dict[str, Any]) -> Optional[List[Any]]:
+            """One inline per serialized line, each with its own box (RFC 0021
+            §5.4). Rebuilding a paragraph from its joined text alone put every
+            line of it in one box: after a restart the editor could no longer
+            lay a scanned page's lines over the scan."""
+            lines = n.get("lines")
+            pg = n.get("page_index")
+            if not isinstance(lines, list) or not lines or pg is None:
+                return None
+            out = []
+            for ln in lines:
+                vl = _layout_from(ln, pg)
+                inline = TextLineInline(spans=[StyledTextSpan(text=ln.get("text", ""), visual_layout=vl)])
+                inline.visual_layout = vl
+                out.append(inline)
+            return out
+
         def _restore_layout(node: Any, n: Dict[str, Any]) -> None:
             pg = n.get("page_index")
             if pg is not None:
-                from src.krm.models import VisualLayout, NormalizedRect, StyleDescriptor
-                bb = n.get("bbox")
-                if isinstance(bb, list) and len(bb) == 4:
-                    # Clamp to KRM invariant #3: coords in [0,1], x0<=x1, y0<=y1.
-                    x0, y0, x1, y1 = (max(0.0, min(1.0, float(v))) for v in bb)
-                    if x0 > x1:
-                        x0, x1 = x1, x0
-                    if y0 > y1:
-                        y0, y1 = y1, y0
-                    rect = NormalizedRect(x0, y0, x1, y1)
-                else:
-                    rect = NormalizedRect(0.0, 0.0, 1.0, 1.0)
-                style = None
-                sd = n.get("style")
-                if isinstance(sd, dict):
-                    style = StyleDescriptor(
-                        font_family=sd.get("font_family", "sans-serif"),
-                        font_size_pt=float(sd.get("font_size_pt", 12.0)),
-                        is_bold=bool(sd.get("is_bold", False)),
-                        is_italic=bool(sd.get("is_italic", False)),
-                        is_monospace=bool(sd.get("is_monospace", False)),
-                        text_color_rgb=tuple(sd.get("text_color_rgb", [0, 0, 0])),
-                    )
-                node.visual_layout = VisualLayout(
-                    bounding_box=rect,
-                    page_or_screen_index=pg,
-                    style=style,
-                )
+                node.visual_layout = _layout_from(n, pg)
             ec = n.get("extraction_confidence")
             if ec is not None:
                 node.extraction_confidence = ec
@@ -750,7 +767,8 @@ def create_app() -> FastAPI:
             elif t == "ParagraphBlock":
                 p = ParagraphBlock(
                     confidence_score=n.get("confidence_score", 1.0),
-                    inlines=[TextLineInline(spans=[StyledTextSpan(text=n.get("text", ""))])],
+                    inlines=_restore_lines(n)
+                    or [TextLineInline(spans=[StyledTextSpan(text=n.get("text", ""))])],
                 )
                 p.id = n.get("id", p.id)
                 _restore_layout(p, n)
@@ -778,7 +796,12 @@ def create_app() -> FastAPI:
                 )
                 tp.id = n.get("id", tp.id)
                 text = n.get("text", "")
-                if text:
+                # A title page is drawn line by line — its arrangement is what
+                # makes it one (RFC 0021 §5.4); keep the lines' boxes.
+                restored = _restore_lines(n)
+                if restored:
+                    tp.inlines = restored
+                elif text:
                     tp.inlines = [TextLineInline(spans=[StyledTextSpan(text=text)])]
                 _restore_layout(tp, n)
                 return tp
