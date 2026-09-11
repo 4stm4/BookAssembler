@@ -1,6 +1,7 @@
 """vision_fallback: Pure decision logic — no KRM writes, no I/O."""
 
 from src.analyzers.vision_fallback.signals import _TYPE_MAP, log
+from src.analyzers.source_io import pixmap_to_jpeg, resolve_source_path
 import base64
 import logging
 import os
@@ -34,8 +35,11 @@ def _page_crop_b64(doc: KnowledgeDocument, block: Any) -> Optional[str]:
     if bb is None or page_idx is None:
         return None
 
-    source = doc.source_uri or ""
-    if not source or not os.path.isfile(source):
+    # The URI is not a path: an uploaded book is "upload://name.pdf". Opened
+    # as one it never existed, and every uploaded book got no vision fallback
+    # at all ("4456 low-confidence blocks … 0 calls", Programming the Z80).
+    source = resolve_source_path(doc)
+    if not source:
         return None
 
     try:
@@ -54,7 +58,10 @@ def _page_crop_b64(doc: KnowledgeDocument, block: Any) -> Optional[str]:
             min(1, bb.y1 + margin) * ph,
         )
         pix = page.get_pixmap(clip=clip, dpi=150)
-        img_bytes = pix.tobytes("png")
+        # The size every vision request is held to (source_io): a full-width
+        # paragraph at 150 dpi is ~840 px, and past ~900 px Qwen2.5-VL did not
+        # answer in 180 s — this call waits 30.
+        img_bytes = pixmap_to_jpeg(pix)
         pdf.close()
         return base64.b64encode(img_bytes).decode()
     except Exception as e:
