@@ -1,49 +1,37 @@
-"""toc: detects the table of contents and types its entries.
+"""toc: The analyzer itself: orchestration and KRM writes.
 
-Was a ~140-line block inside BlockClassifierAnalyzer, whose stated job is
-adjusting classification confidence. It only recognised the dotted-leader form
-("Registers .......... 45") — a contents page that is a plain section list
-under a "CONTENTS" heading (the PDP-11 lab report, most old manuals) produced
-nothing, and the editor showed the entries as ordinary paragraphs.
+Reads the contents list from line geometry (layout.py) and replaces its
+source blocks with one ContainerUnit(semantic_type="toc") of TocEntryBlocks.
 
-This owns all of it now:
-  * find a "CONTENTS" / "Оглавление" heading near the front (or a dense run of
-    page-numbered lines with no heading);
-  * collect the entry lines that follow, at line granularity — a column
-    layout mashes several entries into one text block, so a block is split;
-  * build one ContainerUnit(semantic_type="toc") of TocEntryBlocks, tombstone
-    the originals in place (RFC 0001 §2.4);
-  * link each entry to its heading once the tree exists.
+Runs on the flat block list, before HeadingAnalyzer. A contents line set in
+a chapter-heading size ("1 Command Line Editing", 14pt in texinfo; Intel
+Series 3000 section lines) was promoted to a heading first, and a promoted
+block keeps no line geometry to read an entry from. Linking the entries to
+the headings they name needs the heading tree: TocLinkAnalyzer (linker.py).
 """
 
-import re
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.analyzers.access import lines, page_of
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
+from src.analyzers.toc.layout import Entry, Line, TocRead, read_toc
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.identity import derive_composite_id
 from src.krm.models import (
     ContainerUnit,
     KnowledgeDocument,
+    NormalizedRect,
     ParagraphBlock,
+    StyleDescriptor,
     TocEntryBlock,
     VisualLayout,
 )
 
-from src.analyzers.toc.signals import (
-    MIN_TOC_RUN,
-    TOC_HEADING_MAX_PAGE,
-    TOC_PAGE_FRACTION,
-)
-from src.analyzers.toc.rules import (
-    is_bare_page_number,
-    is_toc_entry,
-    is_toc_heading,
-    parse_entry,
-    split_merged_entries,
-)
+# A contents list found under its own heading is surer than one recognised
+# by its shape alone.
+_CONF_HEADING = 0.9
+_CONF_SHAPE = 0.8
+_DEFAULT_TITLE = "Оглавление"
 
 
 class TocAnalyzer(BaseAnalyzer):
@@ -51,8 +39,8 @@ class TocAnalyzer(BaseAnalyzer):
         super().__init__(
             AnalyzerManifest(
                 name="TocAnalyzer",
-                version="1.0.0",
-                description="Detects the table of contents and types its entries",
+                version="2.0.0",
+                description="Detects the table of contents and reads its entries from line geometry",
                 krm_permissions={
                     KRMPermission.READ,
                     KRMPermission.INSERT,
@@ -60,7 +48,9 @@ class TocAnalyzer(BaseAnalyzer):
                 },
                 rg_permissions=set(),
                 kg_permissions=set(),
-                depends_on=["HeadingAnalyzer", "TitlePageAnalyzer"],
+                # Running headers and folios on the contents pages are
+                # EphemeraBlocks by now, not lines to read.
+                depends_on=["EphemeraDetectorAnalyzer"],
             )
         )
 
@@ -71,288 +61,144 @@ class TocAnalyzer(BaseAnalyzer):
         kg: KnowledgeGraph,
         context: Optional[Dict[str, Any]] = None,
     ) -> None:
-        self._total_pages = (
-            doc.metadata.get("page_count", 100) if doc.metadata else 100
-        )
+        blocks: List[Tuple[ParagraphBlock, ContainerUnit]] = []
         for container in doc.root_containers:
-            self._process_container(container)
-        self._link_anchors(doc.root_containers)
-
-    # -- detection --------------------------------------------------------
-
-    def _process_container(self, container: ContainerUnit) -> None:
-        for child in list(container.children):
-            if isinstance(child, ContainerUnit):
-                self._process_container(child)
-
-        if any(
-            isinstance(c, ContainerUnit)
-            and getattr(c, "semantic_type", None) == "toc"
-            for c in container.children
-        ):
-            return
-
-        # Per-line candidates: (child_index, source_block, entry_text, page).
-        # A block contributes several rows when its lines split into entries.
-        rows: List[Tuple[int, ParagraphBlock, str, Optional[int]]] = []
-        for idx, child in enumerate(container.children):
-            if not isinstance(child, ParagraphBlock) or child.is_tombstoned:
-                rows.append((idx, child, "\x00non-para", None))  # a hard break
-                continue
-            page = page_of(child)
-            block_lines = list(lines(child)) or [""]
-            for ln in block_lines:
-                for seg in split_merged_entries(ln):
-                    rows.append((idx, child, seg, page))
-
-        anchored_run, plain_runs = self._collect_runs(rows)
-
-        runs: List[Tuple[List[Tuple[int, ParagraphBlock, str]], bool]] = []
-        if anchored_run:
-            runs.append((anchored_run, True))
-        for r in plain_runs:
-            if self._run_is_positioned_like_a_toc(r):
-                runs.append((r, False))
-
-        if not runs:
-            return
-
-        self._materialise(container, runs)
-
-    def _collect_runs(
-        self,
-        rows: List[Tuple[int, ParagraphBlock, str, Optional[int]]],
-    ) -> Tuple[
-        List[Tuple[int, ParagraphBlock, str]],
-        List[List[Tuple[int, ParagraphBlock, str]]],
-    ]:
-        """One anchored run (right after a CONTENTS heading) plus any dense
-        page-numbered runs found without a heading."""
-        anchored: List[Tuple[int, ParagraphBlock, str]] = []
-        plain: List[List[Tuple[int, ParagraphBlock, str]]] = []
-        current: List[Tuple[int, ParagraphBlock, str]] = []
-        last_page: Optional[int] = None
-        seen_heading = False
-        heading_row: Optional[Tuple[int, ParagraphBlock, str]] = None
-        anchor_page: Optional[int] = None
-
-        def flush() -> None:
-            nonlocal current
-            if len(current) >= MIN_TOC_RUN:
-                plain.append(current)
-            current = []
-
-        for idx, block, text, page in rows:
-            if text == "\x00non-para":
-                flush()
-                last_page = None
-                continue
-
-            heading_page_ok = page is None or page <= TOC_HEADING_MAX_PAGE
-            if not seen_heading and heading_page_ok and is_toc_heading(text):
-                seen_heading = True
-                heading_row = (idx, block, text)
-                anchor_page = page
-                last_page = page
-                continue
-
-            if seen_heading and len(anchored) < 400:
-                # A real contents list sits on one or two pages. Without this
-                # check, a stray short line pages later (a caption, a code
-                # label) that merely matches "no sentence, has a word" keeps
-                # extending the run — seen on the Zilog Z80 manual, where
-                # unrelated prose from pages 33/42 was swept into the TOC
-                # that started near the front.
-                # Distance from the heading itself, not from the last
-                # accepted line — a moving reference lets the run drift a
-                # page at a time arbitrarily far (that is exactly how
-                # pages 33 and 42 got in: each was within 2 of the one
-                # before it).
-                page_ok = (
-                    anchor_page is None or page is None
-                    or abs(page - anchor_page) <= 2
-                )
-                if page_ok and is_toc_entry(text, anchored=True):
-                    anchored.append((idx, block, text))
-                    continue
-                if page_ok and is_bare_page_number(text):
-                    # A folio number beside a real entry — noise to skip,
-                    # not a signal that the contents list has ended.
-                    continue
-                # First non-entry (or too-far) line after the anchored run
-                # ends it.
-                if anchored:
-                    seen_heading = False
-
-            if is_toc_entry(text):
-                if (
-                    last_page is not None
-                    and page is not None
-                    and abs(page - last_page) > 2
-                ):
-                    flush()
-                current.append((idx, block, text))
-                if page is not None:
-                    last_page = page
-            else:
-                flush()
-                last_page = None
-
-        flush()
-        anchored = _drop_repeated_lines(anchored)
-        # The heading line ("CONTENTS") is folded into the TOC container it
-        # names, so it is tombstoned with the run it introduced.
-        if anchored and heading_row is not None:
-            anchored.insert(0, heading_row)
-        return anchored, plain
-
-    def _run_is_positioned_like_a_toc(
-        self, run: List[Tuple[int, ParagraphBlock, str]]
-    ) -> bool:
-        pages = [page_of(b) for _, b, _ in run if page_of(b) is not None]
+            _collect(container, blocks)
+        pages, block_lines, styles = _lines(blocks)
         if not pages:
-            return len(run) >= MIN_TOC_RUN
-        avg = sum(pages) / len(pages)
-        front = max(3, int(self._total_pages * TOC_PAGE_FRACTION))
-        back = self._total_pages - front
-        return avg <= front or avg >= back
+            return
+        toc = read_toc(pages)
+        if toc.entries:
+            _materialise(toc, blocks, block_lines, styles)
 
-    # -- materialisation -------------------------------------------------
 
-    def _materialise(
-        self,
-        container: ContainerUnit,
-        runs: List[Tuple[List[Tuple[int, ParagraphBlock, str]], bool]],
-    ) -> None:
-        insertions: Dict[int, ContainerUnit] = {}
-        tombstone: set = set()
+def _collect(container: ContainerUnit, out: List[Tuple[ParagraphBlock, ContainerUnit]]) -> None:
+    for child in container.children:
+        if isinstance(child, ContainerUnit):
+            if child.semantic_type != "toc":
+                _collect(child, out)
+        elif type(child) is ParagraphBlock and not child.is_tombstoned:
+            out.append((child, container))
 
-        for run, anchored in runs:
-            conf = 0.88 if anchored else min(0.85, 0.55 + len(run) * 0.02)
-            block_ids = sorted({b.id for _, b, _ in run})
-            toc = ContainerUnit(
-                id=derive_composite_id("toc-container", *block_ids),
-                title="Оглавление",
-                level=container.level + 1,
-                semantic_type="toc",
-                classification_confidence=conf,
-                extraction_confidence=0.85,
-                confidence_score=min(0.85, conf),
-            )
-            # How many entries each source block yields — a block split into
-            # several lines cannot give all of them its own id.
-            per_block: Dict[str, int] = {}
-            for _, block, text in run:
-                if text.strip() and not is_toc_heading(text):
-                    per_block[block.id] = per_block.get(block.id, 0) + 1
 
-            for orig_idx, block, text in run:
-                if not text.strip() or is_toc_heading(text):
-                    # The "CONTENTS" line is folded into the container, not
-                    # turned into an entry — but still tombstoned.
-                    tombstone.add(orig_idx)
-                    continue
-                entry_text, chapter_number, target_page = parse_entry(text)
-                # RFC 0001 §2.3: a 1:1 reclassification keeps the source id; a
-                # block that split into several entries derives per line.
-                entry_id = (
-                    block.id if per_block.get(block.id) == 1
-                    else derive_composite_id("toc-entry", block.id, entry_text)
-                )
-                entry = TocEntryBlock(
-                    id=entry_id,
-                    entry_text=entry_text,
-                    chapter_number=chapter_number,
-                    target_page=target_page,
-                    visual_layout=_line_layout(block),
-                    extraction_confidence=0.85,
-                    classification_confidence=conf,
-                    confidence_score=min(0.85, conf),
-                )
-                toc.children.append(entry)
-                tombstone.add(orig_idx)
-
-            first_idx = run[0][0]
-            insertions[first_idx] = toc
-
-        # RFC 0001 §2.4: originals stay, tombstoned; the merged container is
-        # inserted before the first line of its run.
-        new_children: List[Any] = []
-        for idx, child in enumerate(container.children):
-            if idx in insertions:
-                new_children.append(insertions[idx])
-            if idx in tombstone and isinstance(child, ParagraphBlock):
-                child.is_tombstoned = True
-                if not child.metadata:
-                    child.metadata = {}
-                child.metadata["tombstone_reason"] = "merged_into_toc"
-            new_children.append(child)
-        container.children = new_children
-
-    # -- anchor linking -------------------------------------------------
-
-    def _link_anchors(self, containers: list) -> None:
-        headings: Dict[str, str] = {}
-        entries: List[TocEntryBlock] = []
-
-        def walk(nodes: list) -> None:
-            for n in nodes:
-                if isinstance(n, ContainerUnit):
-                    if n.semantic_type != "toc" and n.title:
-                        norm = re.sub(r"\s+", " ", n.title.strip().lower())
-                        headings[norm] = n.id
-                        m = re.match(
-                            r"^\s*([\d.]+|[A-Za-zА-Яа-я]\.)\s+", n.title
-                        )
-                        if m:
-                            headings[m.group(1).strip().rstrip(".")] = n.id
-                    for ch in n.children:
-                        walk([ch])
-                elif isinstance(n, TocEntryBlock):
-                    entries.append(n)
-
-        walk(containers)
-
-        for e in entries:
-            if e.anchor_id:
+def _lines(
+    blocks: List[Tuple[ParagraphBlock, ContainerUnit]],
+) -> Tuple[Dict[int, List[Line]], Dict[int, List[int]], Dict[int, Optional[StyleDescriptor]]]:
+    """Every source line with its own box — one TextLineInline per PDF line
+    (RFC 0021 §5.4). A block with several lines but no per-line geometry
+    cannot be read this way and is left out."""
+    pages: Dict[int, List[Line]] = {}
+    block_lines: Dict[int, List[int]] = {}
+    styles: Dict[int, Optional[StyleDescriptor]] = {}
+    idx = 0
+    for b, (block, _) in enumerate(blocks):
+        bvl = block.visual_layout
+        if bvl is None:
+            continue
+        inlines = block.inlines or []
+        for il in inlines:
+            text = " ".join(
+                s.text for s in (il.spans or []) if getattr(s, "text", "")
+            ).strip()
+            if not text:
                 continue
-            if e.chapter_number:
-                key = e.chapter_number.strip().rstrip(".")
-                if key in headings:
-                    e.anchor_id = headings[key]
+            vl = getattr(il, "visual_layout", None)
+            if vl is None:
+                if len(inlines) != 1:
                     continue
-            body = re.sub(
-                r"^\s*([\d.]+|[A-Za-zА-Яа-я]\.)\s+", "", e.entry_text or ""
+                vl = bvl
+            style = vl.style or bvl.style
+            size = float(getattr(style, "font_size_pt", 0.0) or 0.0) if style else 0.0
+            r = vl.bounding_box
+            page = vl.page_or_screen_index
+            pages.setdefault(page, []).append(
+                Line(idx, text, r.x0, r.y0, r.x1, r.y1, size, page, b)
             )
-            body_norm = re.sub(r"\s+", " ", body.strip().lower())
-            if body_norm and body_norm in headings:
-                e.anchor_id = headings[body_norm]
+            block_lines.setdefault(b, []).append(idx)
+            styles[idx] = style
+            idx += 1
+    return pages, block_lines, styles
 
 
-def _line_layout(block: ParagraphBlock) -> Optional[VisualLayout]:
-    """The block's own layout — a TOC entry has no separate box of its own,
-    it inherits the source line's page."""
-    return getattr(block, "visual_layout", None)
+def _entry_layout(e: Entry, styles: Dict[int, Optional[StyleDescriptor]]) -> VisualLayout:
+    lines = [l for l in e.lines if l.page == e.lines[0].page]
+    return VisualLayout(
+        bounding_box=NormalizedRect(
+            min(l.x0 for l in lines), min(l.y0 for l in lines),
+            max(l.x1 for l in lines), max(l.y1 for l in lines),
+        ),
+        page_or_screen_index=lines[0].page,
+        style=styles.get(e.rows[0].lines[0].idx),
+    )
 
 
-def _drop_repeated_lines(
-    rows: List[Tuple[int, ParagraphBlock, str]],
-) -> List[Tuple[int, ParagraphBlock, str]]:
-    """Remove lines whose exact (normalised) text recurs within the run.
+def _materialise(
+    toc: TocRead,
+    blocks: List[Tuple[ParagraphBlock, ContainerUnit]],
+    block_lines: Dict[int, List[int]],
+    styles: Dict[int, Optional[StyleDescriptor]],
+) -> None:
+    content_blocks = {
+        l.block for e in toc.entries
+        for l in e.lines + [x for r in e.description_rows for x in r.all_lines]
+    }
+    # A block is folded into the contents only when all of it was read as
+    # contents — a block that also holds the first lines of the book proper
+    # (TeX Live guide: the list ends mid-page) stays live.
+    folded = {b for b in content_blocks
+              if all(i in toc.consumed for i in block_lines.get(b, []))}
+    if toc.heading is not None and all(
+        i in toc.consumed for i in block_lines.get(toc.heading.block, [])
+    ):
+        folded.add(toc.heading.block)
 
-    A real contents list names each chapter once; a running header/footer
-    caught by the per-line split ("Z80 CPU", "User Manual", the manual's own
-    part number) repeats verbatim on every page of the run instead. Left in,
-    it shows up as duplicate entries beside the real ones — found on the
-    Zilog Z80 manual, where the header sharing a block with "Table of
-    Contents" was not something EphemeraDetector could see (it works on
-    whole paragraphs, not the lines inside one).
-    """
-    counts: Dict[str, int] = {}
-    for _, _, text in rows:
-        key = re.sub(r"\s+", " ", text.strip().lower())
-        counts[key] = counts.get(key, 0) + 1
-    return [
-        r for r in rows
-        if counts[re.sub(r"\s+", " ", r[2].strip().lower())] == 1
-    ]
+    first = min(content_blocks | ({toc.heading.block} if toc.heading else set()))
+    anchor, parent = blocks[first]
+    conf = _CONF_HEADING if toc.heading is not None else _CONF_SHAPE
+
+    container = ContainerUnit(
+        id=derive_composite_id("toc-container", *(blocks[b][0].id for b in content_blocks)),
+        title=toc.heading.text if toc.heading is not None else _DEFAULT_TITLE,
+        level=parent.level + 1,
+        semantic_type="toc",
+        visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(0.0, 0.0, 1.0, 1.0),
+            page_or_screen_index=toc.pages[0],
+        ),
+        classification_confidence=conf,
+        extraction_confidence=0.9,
+        confidence_score=min(0.9, conf),
+        provenance_info=anchor.provenance_info,
+    )
+    for k, e in enumerate(toc.entries):
+        number, title = e.number_and_title()
+        sources = sorted({blocks[l.block][0].id for l in e.lines})
+        entry = TocEntryBlock(
+            # The source blocks stay in the tree, tombstoned (RFC 0001 §2.4),
+            # so an entry never reuses one of their ids: two live-looking
+            # nodes under one id read to the pipeline's guard as an
+            # un-tombstoning.
+            id=derive_composite_id("toc-entry", *sources, f"#{k}", e.text),
+            entry_text=title,
+            chapter_number=number,
+            page_label=e.page_label,
+            level=e.level,
+            visual_layout=_entry_layout(e, styles),
+            parent_container_id=container.id,
+            provenance_info=anchor.provenance_info,
+            extraction_confidence=0.9,
+            classification_confidence=conf,
+            confidence_score=min(0.9, conf),
+        )
+        if e.description:
+            entry.metadata = {"toc_description": e.description}
+        container.children.append(entry)
+
+    at = next(i for i, c in enumerate(parent.children) if c is anchor)
+    parent.children.insert(at, container)
+    for b in sorted(folded):
+        block = blocks[b][0]
+        block.is_tombstoned = True
+        if not block.metadata:
+            block.metadata = {}
+        block.metadata["tombstone_reason"] = "merged_into_toc"

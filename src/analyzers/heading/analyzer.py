@@ -99,7 +99,9 @@ class HeadingAnalyzer(BaseAnalyzer):
         sources), it is left untouched.
         """
         flat = list(root.children)
-        if any(isinstance(c, ContainerUnit) for c in flat):
+        # The contents container TocAnalyzer builds on the flat list is a
+        # leaf here, not a sign the tree was already structured.
+        if any(isinstance(c, ContainerUnit) and c.semantic_type != "toc" for c in flat):
             return  # already structured
 
         root.children = []
