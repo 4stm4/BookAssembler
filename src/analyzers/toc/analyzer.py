@@ -129,6 +129,7 @@ class TocAnalyzer(BaseAnalyzer):
         last_page: Optional[int] = None
         seen_heading = False
         heading_row: Optional[Tuple[int, ParagraphBlock, str]] = None
+        anchor_page: Optional[int] = None
 
         def flush() -> None:
             nonlocal current
@@ -145,14 +146,28 @@ class TocAnalyzer(BaseAnalyzer):
             if not seen_heading and is_toc_heading(text):
                 seen_heading = True
                 heading_row = (idx, block, text)
+                anchor_page = page
                 last_page = page
                 continue
 
             if seen_heading and len(anchored) < 400:
-                if is_toc_entry(text, anchored=True):
+                # A real contents list sits on one or two pages. Without this
+                # check, a stray short line pages later (a caption, a code
+                # label) that merely matches "no sentence, has a word" keeps
+                # extending the run — seen on the Zilog Z80 manual, where
+                # unrelated prose from pages 33/42 was swept into the TOC
+                # that started near the front.
+                page_ok = (
+                    anchor_page is None or page is None
+                    or abs(page - anchor_page) <= 2
+                )
+                if page_ok and is_toc_entry(text, anchored=True):
                     anchored.append((idx, block, text))
+                    if page is not None:
+                        anchor_page = page
                     continue
-                # First non-entry line after the anchored run ends it.
+                # First non-entry (or too-far) line after the anchored run
+                # ends it.
                 if anchored:
                     seen_heading = False
 
