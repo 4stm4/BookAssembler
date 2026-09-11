@@ -1,0 +1,941 @@
+{
+"source": "buildroot: printed contents, pdftotext -layout draft checked against the PDF outline",
+"entries": [
+{
+"text": "I Getting started",
+"page": "1"
+},
+{
+"text": "1 About Buildroot",
+"page": "2"
+},
+{
+"text": "2 System requirements",
+"page": "3"
+},
+{
+"text": "2.1 Mandatory packages",
+"page": "3"
+},
+{
+"text": "2.2 Optional packages",
+"page": "4"
+},
+{
+"text": "3 Getting Buildroot",
+"page": "5"
+},
+{
+"text": "4 Buildroot quick start",
+"page": "6"
+},
+{
+"text": "5 Community resources",
+"page": "8"
+},
+{
+"text": "II User guide",
+"page": "9"
+},
+{
+"text": "6 Buildroot configuration",
+"page": "10"
+},
+{
+"text": "6.1 Cross-compilation toolchain",
+"page": "10"
+},
+{
+"text": "6.1.1 Internal toolchain backend",
+"page": "11"
+},
+{
+"text": "6.1.2 External toolchain backend",
+"page": "11"
+},
+{
+"text": "6.1.3 Build an external toolchain with Buildroot",
+"page": "12"
+},
+{
+"text": "6.1.3.1 External toolchain wrapper",
+"page": "13"
+},
+{
+"text": "6.2 /dev management",
+"page": "13"
+},
+{
+"text": "6.3 init system",
+"page": "14"
+},
+{
+"text": "7 Configuration of other components",
+"page": "16"
+},
+{
+"text": "8 General Buildroot usage",
+"page": "17"
+},
+{
+"text": "8.1 make tips",
+"page": "17"
+},
+{
+"text": "8.2 Understanding when a full rebuild is necessary",
+"page": "18"
+},
+{
+"text": "8.3 Understanding how to rebuild packages",
+"page": "19"
+},
+{
+"text": "8.4 Offline builds",
+"page": "20"
+},
+{
+"text": "8.5 Building out-of-tree",
+"page": "20"
+},
+{
+"text": "8.6 Environment variables",
+"page": "21"
+},
+{
+"text": "8.7 Dealing efficiently with filesystem images",
+"page": "21"
+},
+{
+"text": "8.8 Details about packages",
+"page": "22"
+},
+{
+"text": "8.9 Generating CycloneDX SBOM",
+"page": "22"
+},
+{
+"text": "8.10 Graphing the dependencies between packages",
+"page": "22"
+},
+{
+"text": "8.11 Graphing the build duration",
+"page": "23"
+},
+{
+"text": "8.12 Graphing the filesystem size contribution of packages",
+"page": "24"
+},
+{
+"text": "8.13 Top-level parallel build",
+"page": "25"
+},
+{
+"text": "8.14 Advanced usage",
+"page": "25"
+},
+{
+"text": "8.14.1 Using the generated toolchain outside Buildroot",
+"page": "25"
+},
+{
+"text": "8.14.2 Using gdb in Buildroot",
+"page": "26"
+},
+{
+"text": "8.14.3 Using ccache in Buildroot",
+"page": "26"
+},
+{
+"text": "8.14.4 Location of downloaded packages",
+"page": "27"
+},
+{
+"text": "8.14.5 Package-specific make targets",
+"page": "27"
+},
+{
+"text": "8.14.6 Using Buildroot during development",
+"page": "28"
+},
+{
+"text": "9 Project-specific customization",
+"page": "30"
+},
+{
+"text": "9.1 Recommended directory structure",
+"page": "30"
+},
+{
+"text": "9.1.1 Implementing layered customizations",
+"page": "31"
+},
+{
+"text": "9.1.2 Custom top Makefile",
+"page": "32"
+},
+{
+"text": "9.2 Keeping customizations outside of Buildroot",
+"page": "32"
+},
+{
+"text": "9.2.1 Layout of a br2-external tree",
+"page": "33"
+},
+{
+"text": "9.2.1.1 The external.desc file",
+"page": "34"
+},
+{
+"text": "9.2.1.2 The Config.in and external.mk files",
+"page": "34"
+},
+{
+"text": "9.2.1.3 The configs/ directory",
+"page": "35"
+},
+{
+"text": "9.2.1.4 The provides/ directory",
+"page": "35"
+},
+{
+"text": "9.2.1.5 Free-form content",
+"page": "35"
+},
+{
+"text": "9.2.1.6 Additional Linux kernel extensions",
+"page": "35"
+},
+{
+"text": "9.2.1.7 Example layout",
+"page": "35"
+},
+{
+"text": "9.3 Storing the Buildroot configuration",
+"page": "39"
+},
+{
+"text": "9.4 Storing the configuration of other components",
+"page": "39"
+},
+{
+"text": "9.5 Customizing the generated target filesystem",
+"page": "39"
+},
+{
+"text": "9.5.1 Setting file permissions and ownership and adding custom devices nodes",
+"page": "41"
+},
+{
+"text": "9.6 Adding custom user accounts",
+"page": "42"
+},
+{
+"text": "9.7 Customization after the images have been created",
+"page": "42"
+},
+{
+"text": "9.8 Adding project-specific patches and hashes",
+"page": "42"
+},
+{
+"text": "9.8.1 Providing extra patches",
+"page": "42"
+},
+{
+"text": "9.8.2 Providing extra hashes",
+"page": "43"
+},
+{
+"text": "9.9 Adding project-specific packages",
+"page": "43"
+},
+{
+"text": "9.10 Quick guide to storing your project-specific customizations",
+"page": "44"
+},
+{
+"text": "10 Integration topics",
+"page": "46"
+},
+{
+"text": "10.1 Configurable packages",
+"page": "46"
+},
+{
+"text": "10.2 Systemd",
+"page": "46"
+},
+{
+"text": "10.2.1 DBus daemon",
+"page": "46"
+},
+{
+"text": "10.3 Using SELinux in Buildroot",
+"page": "46"
+},
+{
+"text": "10.3.1 Enabling SELinux support",
+"page": "47"
+},
+{
+"text": "10.3.2 SELinux policy tweaking",
+"page": "47"
+},
+{
+"text": "11 Frequently Asked Questions & Troubleshooting",
+"page": "48"
+},
+{
+"text": "11.1 The boot hangs after Starting network",
+"page": "48"
+},
+{
+"text": "11.2 Why is there no compiler on the target?",
+"page": "48"
+},
+{
+"text": "11.3 Why are there no development files on the target?",
+"page": "49"
+},
+{
+"text": "11.4 Why is there no documentation on the target?",
+"page": "49"
+},
+{
+"text": "11.5 Why are some packages not visible in the Buildroot config menu?",
+"page": "49"
+},
+{
+"text": "11.6 Why not use the target directory as a chroot directory?",
+"page": "49"
+},
+{
+"text": "11.7 Why doesn’t Buildroot generate binary packages (.deb, .ipkg. . . )?",
+"page": "49"
+},
+{
+"text": "11.8 How to speed-up the build process?",
+"page": "50"
+},
+{
+"text": "11.9 How does Buildroot support Y2038?",
+"page": "51"
+},
+{
+"text": "12 Known issues",
+"page": "52"
+},
+{
+"text": "13 Legal notice and licensing",
+"page": "53"
+},
+{
+"text": "13.1 Complying with open source licenses",
+"page": "53"
+},
+{
+"text": "13.2 Complying with the Buildroot license",
+"page": "54"
+},
+{
+"text": "13.2.1 Patches to packages",
+"page": "54"
+},
+{
+"text": "14 Beyond Buildroot",
+"page": "55"
+},
+{
+"text": "14.1 Boot the generated images",
+"page": "55"
+},
+{
+"text": "14.1.1 NFS boot",
+"page": "55"
+},
+{
+"text": "14.1.2 Live CD",
+"page": "55"
+},
+{
+"text": "14.2 Chroot",
+"page": "55"
+},
+{
+"text": "III Developer guide",
+"page": "56"
+},
+{
+"text": "15 How Buildroot works",
+"page": "57"
+},
+{
+"text": "16 Coding style",
+"page": "58"
+},
+{
+"text": "16.1 Config.in file",
+"page": "58"
+},
+{
+"text": "16.2 The .mk file",
+"page": "58"
+},
+{
+"text": "16.3 The genimage.cfg file",
+"page": "60"
+},
+{
+"text": "16.4 The documentation",
+"page": "61"
+},
+{
+"text": "16.5 Support scripts",
+"page": "61"
+},
+{
+"text": "17 Adding support for a particular board",
+"page": "62"
+},
+{
+"text": "18 Adding new packages to Buildroot",
+"page": "63"
+},
+{
+"text": "18.1 Package directory",
+"page": "63"
+},
+{
+"text": "18.2 Config files",
+"page": "63"
+},
+{
+"text": "18.2.1 Config.in file",
+"page": "63"
+},
+{
+"text": "18.2.2 Config.in.host file",
+"page": "64"
+},
+{
+"text": "18.2.3 Choosing depends on or select",
+"page": "64"
+},
+{
+"text": "18.2.4 Dependencies on target and toolchain options",
+"page": "66"
+},
+{
+"text": "18.2.5 Dependencies on a Linux kernel built by buildroot",
+"page": "68"
+},
+{
+"text": "18.2.6 Dependencies on udev /dev management",
+"page": "68"
+},
+{
+"text": "18.2.7 Dependencies on features provided by virtual packages",
+"page": "68"
+},
+{
+"text": "18.3 The .mk file",
+"page": "69"
+},
+{
+"text": "18.4 The .hash file",
+"page": "69"
+},
+{
+"text": "18.5 The SNNfoo start script",
+"page": "71"
+},
+{
+"text": "18.5.1 Start script configuration",
+"page": "72"
+},
+{
+"text": "18.5.2 Handling the PID file",
+"page": "72"
+},
+{
+"text": "18.5.3 Stopping the service",
+"page": "73"
+},
+{
+"text": "18.5.4 Reloading service configuration",
+"page": "73"
+},
+{
+"text": "18.5.5 Return codes",
+"page": "73"
+},
+{
+"text": "18.5.6 Logging",
+"page": "73"
+},
+{
+"text": "18.6 Infrastructure for packages with specific build systems",
+"page": "73"
+},
+{
+"text": "18.6.1 generic-package tutorial",
+"page": "73"
+},
+{
+"text": "18.6.2 generic-package reference",
+"page": "75"
+},
+{
+"text": "18.7 Infrastructure for autotools-based packages",
+"page": "81"
+},
+{
+"text": "18.7.1 autotools-package tutorial",
+"page": "81"
+},
+{
+"text": "18.7.2 autotools-package reference",
+"page": "82"
+},
+{
+"text": "18.8 Infrastructure for CMake-based packages",
+"page": "83"
+},
+{
+"text": "18.8.1 cmake-package tutorial",
+"page": "83"
+},
+{
+"text": "18.8.2 cmake-package reference",
+"page": "83"
+},
+{
+"text": "18.9 Infrastructure for Python packages",
+"page": "84"
+},
+{
+"text": "18.9.1 python-package tutorial",
+"page": "85"
+},
+{
+"text": "18.9.2 python-package reference",
+"page": "85"
+},
+{
+"text": "18.9.3 Generating a python-package from a PyPI repository",
+"page": "86"
+},
+{
+"text": "18.9.4 python-package CFFI backend",
+"page": "87"
+},
+{
+"text": "18.10 Infrastructure for LuaRocks-based packages",
+"page": "87"
+},
+{
+"text": "18.10.1 luarocks-package tutorial",
+"page": "87"
+},
+{
+"text": "18.10.2 luarocks-package reference",
+"page": "88"
+},
+{
+"text": "18.11 Infrastructure for Perl/CPAN packages",
+"page": "89"
+},
+{
+"text": "18.11.1 perl-package tutorial",
+"page": "89"
+},
+{
+"text": "18.11.2 perl-package reference",
+"page": "89"
+},
+{
+"text": "18.12 Infrastructure for virtual packages",
+"page": "90"
+},
+{
+"text": "18.12.1 virtual-package tutorial",
+"page": "90"
+},
+{
+"text": "18.12.2 Virtual package’s Config.in file",
+"page": "90"
+},
+{
+"text": "18.12.3 Virtual package’s .mk file",
+"page": "91"
+},
+{
+"text": "18.12.4 Provider’s Config.in file",
+"page": "91"
+},
+{
+"text": "18.12.5 Provider’s .mk file",
+"page": "91"
+},
+{
+"text": "18.12.6 Notes on depending on a virtual package",
+"page": "91"
+},
+{
+"text": "18.12.7 Notes on depending on a specific provider",
+"page": "92"
+},
+{
+"text": "18.13 Infrastructure for packages using kconfig for configuration files",
+"page": "92"
+},
+{
+"text": "18.14 Infrastructure for rebar-based packages",
+"page": "93"
+},
+{
+"text": "18.14.1 rebar-package tutorial",
+"page": "93"
+},
+{
+"text": "18.14.2 rebar-package reference",
+"page": "94"
+},
+{
+"text": "18.15 Infrastructure for Waf-based packages",
+"page": "94"
+},
+{
+"text": "18.15.1 waf-package tutorial",
+"page": "94"
+},
+{
+"text": "18.15.2 waf-package reference",
+"page": "95"
+},
+{
+"text": "18.16 Infrastructure for Meson-based packages",
+"page": "96"
+},
+{
+"text": "18.16.1 meson-package tutorial",
+"page": "96"
+},
+{
+"text": "18.16.2 meson-package reference",
+"page": "96"
+},
+{
+"text": "18.17 Infrastructure for Cargo-based packages",
+"page": "97"
+},
+{
+"text": "18.17.1 cargo-package tutorial",
+"page": "97"
+},
+{
+"text": "18.17.2 cargo-package reference",
+"page": "98"
+},
+{
+"text": "18.18 Infrastructure for Go packages",
+"page": "98"
+},
+{
+"text": "18.18.1 golang-package tutorial",
+"page": "98"
+},
+{
+"text": "18.18.2 golang-package reference",
+"page": "99"
+},
+{
+"text": "18.19 Infrastructure for QMake-based packages",
+"page": "100"
+},
+{
+"text": "18.19.1 qmake-package tutorial",
+"page": "100"
+},
+{
+"text": "18.19.2 qmake-package reference",
+"page": "101"
+},
+{
+"text": "18.20 Infrastructure for packages building kernel modules",
+"page": "101"
+},
+{
+"text": "18.20.1 kernel-module tutorial",
+"page": "101"
+},
+{
+"text": "18.20.2 kernel-module reference",
+"page": "102"
+},
+{
+"text": "18.21 Infrastructure for asciidoc documents",
+"page": "103"
+},
+{
+"text": "18.21.1 asciidoc-document tutorial",
+"page": "103"
+},
+{
+"text": "18.21.2 asciidoc-document reference",
+"page": "104"
+},
+{
+"text": "18.22 Infrastructure specific to the Linux kernel package",
+"page": "105"
+},
+{
+"text": "18.22.1 linux-kernel-tools",
+"page": "105"
+},
+{
+"text": "18.22.2 linux-kernel-extensions",
+"page": "106"
+},
+{
+"text": "18.23 Hooks available in the various build steps",
+"page": "107"
+},
+{
+"text": "18.23.1 Using the POST_RSYNC hook",
+"page": "108"
+},
+{
+"text": "18.23.2 Target-finalize hook",
+"page": "108"
+},
+{
+"text": "18.24 Gettext integration and interaction with packages",
+"page": "108"
+},
+{
+"text": "18.25 Tips and tricks",
+"page": "109"
+},
+{
+"text": "18.25.1 Package name, config entry name and makefile variable relationship",
+"page": "109"
+},
+{
+"text": "18.25.2 How to check the coding style",
+"page": "109"
+},
+{
+"text": "18.25.3 How to test your package",
+"page": "110"
+},
+{
+"text": "18.25.4 How to add a package from GitHub",
+"page": "111"
+},
+{
+"text": "18.25.5 How to add a package from Gitlab",
+"page": "112"
+},
+{
+"text": "18.25.6 Accessing a private repository for a package",
+"page": "112"
+},
+{
+"text": "18.25.6.1 Using SSH and insteadOf",
+"page": "112"
+},
+{
+"text": "18.25.6.2 Use HTTPS and .netrc",
+"page": "112"
+},
+{
+"text": "18.26 Conclusion",
+"page": "113"
+},
+{
+"text": "19 Patching a package",
+"page": "114"
+},
+{
+"text": "19.1 Providing patches",
+"page": "114"
+},
+{
+"text": "19.1.1 Downloaded",
+"page": "114"
+},
+{
+"text": "19.1.2 Within Buildroot",
+"page": "114"
+},
+{
+"text": "19.1.3 Global patch directory",
+"page": "115"
+},
+{
+"text": "19.2 How patches are applied",
+"page": "115"
+},
+{
+"text": "19.3 Format and licensing of the package patches",
+"page": "115"
+},
+{
+"text": "19.4 Additional patch documentation",
+"page": "116"
+},
+{
+"text": "20 Download infrastructure",
+"page": "117"
+},
+{
+"text": "21 Debugging Buildroot",
+"page": "118"
+},
+{
+"text": "22 Contributing to Buildroot",
+"page": "119"
+},
+{
+"text": "22.1 Reproducing, analyzing and fixing bugs",
+"page": "119"
+},
+{
+"text": "22.2 Analyzing and fixing autobuild failures",
+"page": "119"
+},
+{
+"text": "22.3 Reviewing and testing patches",
+"page": "120"
+},
+{
+"text": "22.3.1 Applying Patches from Patchwork",
+"page": "121"
+},
+{
+"text": "22.4 Work on items from the TODO list",
+"page": "121"
+},
+{
+"text": "22.5 Submitting patches",
+"page": "121"
+},
+{
+"text": "22.5.1 The formatting of a patch",
+"page": "121"
+},
+{
+"text": "22.5.2 Preparing a patch series",
+"page": "122"
+},
+{
+"text": "22.5.3 Cover letter",
+"page": "123"
+},
+{
+"text": "22.5.4 Patches for maintenance branches",
+"page": "124"
+},
+{
+"text": "22.5.5 Patch revision changelog",
+"page": "124"
+},
+{
+"text": "22.6 Reporting issues/bugs or getting help",
+"page": "125"
+},
+{
+"text": "22.7 Using the runtime tests framework",
+"page": "126"
+},
+{
+"text": "22.7.1 Creating a test case",
+"page": "127"
+},
+{
+"text": "22.7.2 Debugging a test case",
+"page": "127"
+},
+{
+"text": "22.7.3 Runtime tests and Gitlab CI",
+"page": "128"
+},
+{
+"text": "23 DEVELOPERS file and get-developers",
+"page": "129"
+},
+{
+"text": "24 Release Engineering",
+"page": "130"
+},
+{
+"text": "24.1 Releases",
+"page": "130"
+},
+{
+"text": "24.2 Development",
+"page": "130"
+},
+{
+"text": "IV Appendix",
+"page": "131"
+},
+{
+"text": "25 Makedev syntax documentation",
+"page": "132"
+},
+{
+"text": "26 Makeusers syntax documentation",
+"page": "134"
+},
+{
+"text": "26.1 Caveat with automatic UIDs and GIDs",
+"page": "135"
+},
+{
+"text": "27 Migrating from older Buildroot versions",
+"page": "136"
+},
+{
+"text": "27.1 General approach",
+"page": "136"
+},
+{
+"text": "27.2 Migrating to 2016.11",
+"page": "136"
+},
+{
+"text": "27.3 Migrating to 2017.08",
+"page": "137"
+},
+{
+"text": "27.4 Migrating to 2023.11",
+"page": "137"
+},
+{
+"text": "27.5 Migrating to 2024.05",
+"page": "138"
+},
+{
+"text": "27.6 Migrating to 2025.02",
+"page": "138"
+},
+{
+"text": "27.7 Migrating to 2025.05",
+"page": "139"
+},
+{
+"text": "27.8 Migrating to 2025.08",
+"page": "139"
+},
+{
+"text": "27.9 Migrating to 2025.11",
+"page": "139"
+},
+{
+"text": "27.10 Migration to 2026.02",
+"page": "139"
+}
+]
+}

@@ -1,0 +1,18 @@
+{"source": "Intel Series 3000 Reference Manual (1976, scan with text layer), Contents, physical page 2",
+ "entries": [
+  {"text": "INTRODUCTION", "page": "1-1"},
+  {"text": "COMPONENT FAMILY", "page": "2-1"},
+  {"text": "3001 Microprogram Control Unit", "page": "2-1"},
+  {"text": "3002 Central Processing Element", "page": "2-15"},
+  {"text": "3003 Look-Ahead Carry Generator", "page": "2-31"},
+  {"text": "3212 Multi-Mode Latch Buffer", "page": "2-39"},
+  {"text": "3214 Interrupt Control Unit", "page": "2-49"},
+  {"text": "3216/3226 Parallel Bi-Directional Bus Driver", "page": "2-61"},
+  {"text": "APPLICATIONS", "page": "3-1"},
+  {"text": "3000 Family System Timing", "page": "3-1"},
+  {"text": "Disk Controller Designed With Series 3000 Computing Elements", "page": "3-9"},
+  {"text": "Central Processor Designs Using The Intel® Series 3000 Computing Elements", "page": "3-19"},
+  {"text": "ORDERING AND PACKAGING INFORMATION", "page": "4-1"},
+  {"text": "Ordering Information", "page": "4-1"},
+  {"text": "Package Outlines", "page": "4-2"}
+ ]}

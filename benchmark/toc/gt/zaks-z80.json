@@ -1,0 +1,23 @@
+{"source": "Rodnay Zaks, Programming the Z80, 3rd ed. (OmniPage OCR), TABLE OF CONTENTS, physical pages 7-9. Entries are the lines that point to a page; the topic lines under each chapter are its description. chapter numbers as printed (the text layer reads II. as H., III. as HI.)",
+ "entries": [
+  {"text": "PREFACE", "page": "13"},
+  {"text": "I. BASIC CONCEPTS", "page": "15"},
+  {"text": "II. Z80 HARDWARE ORGANIZATION", "page": "46"},
+  {"text": "III. BASIC PROGRAMMING TECHNIQUES", "page": "94"},
+  {"text": "IV. THE Z80 INSTRUCTION SET", "page": "154"},
+  {"text": "V. ADDRESSING TECHNIQUES", "page": "438"},
+  {"text": "VI. INPUT/OUTPUT TECHNIQUES", "page": "460"},
+  {"text": "VII. INPUT/OUTPUT DEVICES", "page": "511"},
+  {"text": "VIII. APPLICATION EXAMPLES", "page": "520"},
+  {"text": "IX. DATA STRUCTURES", "page": "539"},
+  {"text": "X. PROGRAM DEVELOPMENT", "page": "579"},
+  {"text": "XI. CONCLUSION", "page": "602"},
+  {"text": "APPENDIX A", "page": "604"},
+  {"text": "APPENDIX B", "page": "605"},
+  {"text": "APPENDIX C", "page": "606"},
+  {"text": "APPENDIX D", "page": "607"},
+  {"text": "APPENDIX E", "page": "608"},
+  {"text": "APPENDIX F", "page": "615"},
+  {"text": "APPENDIX G", "page": "616"},
+  {"text": "INDEX", "page": "617"}
+ ]}

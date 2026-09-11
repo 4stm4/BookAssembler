@@ -1,0 +1,877 @@
+{
+"source": "z80: printed contents, pdftotext -layout draft checked against the PDF outline",
+"entries": [
+{
+"text": "Revision History",
+"page": "iii"
+},
+{
+"text": "Table of Contents",
+"page": "v"
+},
+{
+"text": "List of Figures",
+"page": "xi"
+},
+{
+"text": "List of Tables",
+"page": "xiii"
+},
+{
+"text": "Architectural Overview",
+"page": "1"
+},
+{
+"text": "CPU Register",
+"page": "2"
+},
+{
+"text": "Special-Purpose Registers",
+"page": "2"
+},
+{
+"text": "General Purpose Registers",
+"page": "3"
+},
+{
+"text": "Arithmetic Logic Unit",
+"page": "4"
+},
+{
+"text": "Instruction Register and CPU Control",
+"page": "4"
+},
+{
+"text": "Pin Functions",
+"page": "5"
+},
+{
+"text": "Timing",
+"page": "7"
+},
+{
+"text": "Instruction Fetch",
+"page": "8"
+},
+{
+"text": "Memory Read Or Write",
+"page": "9"
+},
+{
+"text": "Input or Output Cycles",
+"page": "10"
+},
+{
+"text": "Bus Request/Acknowledge Cycle",
+"page": "11"
+},
+{
+"text": "Interrupt Request/Acknowledge Cycle",
+"page": "12"
+},
+{
+"text": "Nonmaskable Interrupt Response",
+"page": "13"
+},
+{
+"text": "HALT Exit",
+"page": "14"
+},
+{
+"text": "Power-Down Acknowledge Cycle",
+"page": "15"
+},
+{
+"text": "Power-Down Release Cycle",
+"page": "16"
+},
+{
+"text": "Interrupt Response",
+"page": "17"
+},
+{
+"text": "Interrupt Enable/Disable",
+"page": "17"
+},
+{
+"text": "CPU Response",
+"page": "19"
+},
+{
+"text": "Hardware and Software Implementation",
+"page": "21"
+},
+{
+"text": "Minimum System Hardware",
+"page": "21"
+},
+{
+"text": "Adding RAM",
+"page": "22"
+},
+{
+"text": "Memory Speed Control",
+"page": "23"
+},
+{
+"text": "Interfacing Dynamic Memories",
+"page": "25"
+},
+{
+"text": "Software Implementation Examples",
+"page": "26"
+},
+{
+"text": "Specific Z80 Instruction Examples",
+"page": "27"
+},
+{
+"text": "Programming Task Examples",
+"page": "29"
+},
+{
+"text": "Z80 CPU Instructions",
+"page": "32"
+},
+{
+"text": "Instruction Types",
+"page": "32"
+},
+{
+"text": "Addressing Modes",
+"page": "34"
+},
+{
+"text": "Immediate Addressing",
+"page": "34"
+},
+{
+"text": "Immediate Extended Addressing",
+"page": "34"
+},
+{
+"text": "Modified Page Zero Addressing",
+"page": "35"
+},
+{
+"text": "Relative Addressing",
+"page": "35"
+},
+{
+"text": "Extended Addressing",
+"page": "36"
+},
+{
+"text": "Indexed Addressing",
+"page": "36"
+},
+{
+"text": "Register Addressing",
+"page": "37"
+},
+{
+"text": "Implied Addressing",
+"page": "37"
+},
+{
+"text": "Register Indirect Addressing",
+"page": "37"
+},
+{
+"text": "Bit Addressing",
+"page": "38"
+},
+{
+"text": "Addressing Mode Combinations",
+"page": "38"
+},
+{
+"text": "Instruction Notation Summary",
+"page": "39"
+},
+{
+"text": "Instruction Op Codes",
+"page": "40"
+},
+{
+"text": "Load and Exchange",
+"page": "41"
+},
+{
+"text": "Block Transfer and Search",
+"page": "47"
+},
+{
+"text": "Arithmetic and Logical",
+"page": "49"
+},
+{
+"text": "Rotate and Shift",
+"page": "53"
+},
+{
+"text": "Bit Manipulation",
+"page": "55"
+},
+{
+"text": "Jump, Call, and Return",
+"page": "58"
+},
+{
+"text": "Input/Output",
+"page": "61"
+},
+{
+"text": "CPU Control Group",
+"page": "63"
+},
+{
+"text": "Z80 Instruction Set",
+"page": "65"
+},
+{
+"text": "Z80 Assembly Language",
+"page": "65"
+},
+{
+"text": "Z80 Status Indicator Flags",
+"page": "65"
+},
+{
+"text": "Carry Flag",
+"page": "66"
+},
+{
+"text": "Add/Subtract Flag",
+"page": "66"
+},
+{
+"text": "Decimal Adjust Accumulator Flag",
+"page": "67"
+},
+{
+"text": "Parity/Overflow Flag",
+"page": "67"
+},
+{
+"text": "Half Carry Flag",
+"page": "68"
+},
+{
+"text": "Zero Flag",
+"page": "68"
+},
+{
+"text": "Sign Flag",
+"page": "69"
+},
+{
+"text": "Z80 Instruction Description",
+"page": "69"
+},
+{
+"text": "LD r, r'",
+"page": "71"
+},
+{
+"text": "LD r,n",
+"page": "72"
+},
+{
+"text": "LD r, (HL)",
+"page": "74"
+},
+{
+"text": "LD r, (IX+d)",
+"page": "75"
+},
+{
+"text": "LD r, (IY+d)",
+"page": "77"
+},
+{
+"text": "LD (HL), r",
+"page": "79"
+},
+{
+"text": "LD (IX+d), r",
+"page": "81"
+},
+{
+"text": "LD (IY+d), r",
+"page": "83"
+},
+{
+"text": "LD (HL), n",
+"page": "85"
+},
+{
+"text": "LD (IX+d), n",
+"page": "86"
+},
+{
+"text": "LD (IY+d), n",
+"page": "87"
+},
+{
+"text": "LD A, (BC)",
+"page": "88"
+},
+{
+"text": "LD A, (DE)",
+"page": "89"
+},
+{
+"text": "LD A, (nn)",
+"page": "90"
+},
+{
+"text": "LD (BC), A",
+"page": "91"
+},
+{
+"text": "LD (DE), A",
+"page": "92"
+},
+{
+"text": "LD (nn), A",
+"page": "93"
+},
+{
+"text": "LD A, I",
+"page": "94"
+},
+{
+"text": "LD A, R",
+"page": "95"
+},
+{
+"text": "LD I,A",
+"page": "96"
+},
+{
+"text": "LD R, A",
+"page": "97"
+},
+{
+"text": "LD dd, nn",
+"page": "99"
+},
+{
+"text": "LD IX, nn",
+"page": "100"
+},
+{
+"text": "LD IY, nn",
+"page": "101"
+},
+{
+"text": "LD HL, (nn)",
+"page": "102"
+},
+{
+"text": "LD dd, (nn)",
+"page": "103"
+},
+{
+"text": "LD IX, (nn)",
+"page": "105"
+},
+{
+"text": "LD IY, (nn)",
+"page": "106"
+},
+{
+"text": "LD (nn), HL",
+"page": "107"
+},
+{
+"text": "LD (nn), dd",
+"page": "108"
+},
+{
+"text": "LD (nn), IX",
+"page": "110"
+},
+{
+"text": "LD (nn), IY",
+"page": "111"
+},
+{
+"text": "LD SP, HL",
+"page": "112"
+},
+{
+"text": "LD SP, IX",
+"page": "113"
+},
+{
+"text": "LD SP, IY",
+"page": "114"
+},
+{
+"text": "PUSH qq",
+"page": "115"
+},
+{
+"text": "PUSH IX",
+"page": "117"
+},
+{
+"text": "PUSH IY",
+"page": "118"
+},
+{
+"text": "POP qq",
+"page": "119"
+},
+{
+"text": "POP IX",
+"page": "121"
+},
+{
+"text": "POP IY",
+"page": "122"
+},
+{
+"text": "EX DE, HL",
+"page": "124"
+},
+{
+"text": "EX AF, AF′",
+"page": "125"
+},
+{
+"text": "EXX",
+"page": "126"
+},
+{
+"text": "EX (SP), HL",
+"page": "127"
+},
+{
+"text": "EX (SP), IX",
+"page": "128"
+},
+{
+"text": "EX (SP), IY",
+"page": "129"
+},
+{
+"text": "LDI",
+"page": "130"
+},
+{
+"text": "LDIR",
+"page": "132"
+},
+{
+"text": "LDD",
+"page": "134"
+},
+{
+"text": "LDDR",
+"page": "136"
+},
+{
+"text": "CPI",
+"page": "138"
+},
+{
+"text": "CPIR",
+"page": "139"
+},
+{
+"text": "CPD",
+"page": "141"
+},
+{
+"text": "CPDR",
+"page": "142"
+},
+{
+"text": "ADD A, r",
+"page": "145"
+},
+{
+"text": "ADD A, n",
+"page": "147"
+},
+{
+"text": "ADD A, (HL)",
+"page": "148"
+},
+{
+"text": "ADD A, (IX + d)",
+"page": "149"
+},
+{
+"text": "ADD A, (IY + d)",
+"page": "150"
+},
+{
+"text": "ADC A, s",
+"page": "151"
+},
+{
+"text": "SUB s",
+"page": "153"
+},
+{
+"text": "SBC A, s",
+"page": "155"
+},
+{
+"text": "AND s",
+"page": "157"
+},
+{
+"text": "OR s",
+"page": "159"
+},
+{
+"text": "XOR s",
+"page": "161"
+},
+{
+"text": "CP s",
+"page": "163"
+},
+{
+"text": "INC r",
+"page": "165"
+},
+{
+"text": "INC (HL)",
+"page": "167"
+},
+{
+"text": "INC (IX+d)",
+"page": "168"
+},
+{
+"text": "INC (IY+d)",
+"page": "169"
+},
+{
+"text": "DEC m",
+"page": "170"
+},
+{
+"text": "DAA",
+"page": "173"
+},
+{
+"text": "CPL",
+"page": "175"
+},
+{
+"text": "NEG",
+"page": "176"
+},
+{
+"text": "CCF",
+"page": "178"
+},
+{
+"text": "SCF",
+"page": "179"
+},
+{
+"text": "NOP",
+"page": "180"
+},
+{
+"text": "HALT",
+"page": "181"
+},
+{
+"text": "DI",
+"page": "182"
+},
+{
+"text": "EI",
+"page": "183"
+},
+{
+"text": "IM 0",
+"page": "184"
+},
+{
+"text": "IM 1",
+"page": "185"
+},
+{
+"text": "IM 2",
+"page": "186"
+},
+{
+"text": "ADD HL, ss",
+"page": "188"
+},
+{
+"text": "ADC HL, ss",
+"page": "190"
+},
+{
+"text": "SBC HL, ss",
+"page": "192"
+},
+{
+"text": "ADD IX, pp",
+"page": "194"
+},
+{
+"text": "ADD IY, rr",
+"page": "196"
+},
+{
+"text": "INC ss",
+"page": "198"
+},
+{
+"text": "INC IX",
+"page": "199"
+},
+{
+"text": "INC IY",
+"page": "200"
+},
+{
+"text": "DEC ss",
+"page": "201"
+},
+{
+"text": "DEC IX",
+"page": "202"
+},
+{
+"text": "DEC IY",
+"page": "203"
+},
+{
+"text": "RLCA",
+"page": "205"
+},
+{
+"text": "RLA",
+"page": "207"
+},
+{
+"text": "RRCA",
+"page": "209"
+},
+{
+"text": "RRA",
+"page": "211"
+},
+{
+"text": "RLC r",
+"page": "213"
+},
+{
+"text": "RLC (HL)",
+"page": "215"
+},
+{
+"text": "RLC (IX+d)",
+"page": "217"
+},
+{
+"text": "RLC (IY+d)",
+"page": "219"
+},
+{
+"text": "RL m",
+"page": "221"
+},
+{
+"text": "RRC m",
+"page": "224"
+},
+{
+"text": "RR m",
+"page": "227"
+},
+{
+"text": "SLA m",
+"page": "230"
+},
+{
+"text": "SRA m",
+"page": "233"
+},
+{
+"text": "SRL m",
+"page": "236"
+},
+{
+"text": "RLD",
+"page": "238"
+},
+{
+"text": "RRD",
+"page": "240"
+},
+{
+"text": "BIT b, r",
+"page": "243"
+},
+{
+"text": "BIT b, (HL)",
+"page": "245"
+},
+{
+"text": "BIT b, (IX+d)",
+"page": "247"
+},
+{
+"text": "BIT b, (IY+d)",
+"page": "249"
+},
+{
+"text": "SET b, r",
+"page": "251"
+},
+{
+"text": "SET b, (HL)",
+"page": "253"
+},
+{
+"text": "SET b, (IX+d)",
+"page": "255"
+},
+{
+"text": "SET b, (IY+d)",
+"page": "257"
+},
+{
+"text": "RES b, m",
+"page": "259"
+},
+{
+"text": "JP nn",
+"page": "262"
+},
+{
+"text": "JP cc, nn",
+"page": "263"
+},
+{
+"text": "JR e",
+"page": "265"
+},
+{
+"text": "JR C, e",
+"page": "267"
+},
+{
+"text": "JR NC, e",
+"page": "269"
+},
+{
+"text": "JR Z, e",
+"page": "271"
+},
+{
+"text": "JR NZ, e",
+"page": "273"
+},
+{
+"text": "JP (HL)",
+"page": "275"
+},
+{
+"text": "JP (IX)",
+"page": "276"
+},
+{
+"text": "JP (IY)",
+"page": "277"
+},
+{
+"text": "DJNZ, e",
+"page": "278"
+},
+{
+"text": "CALL nn",
+"page": "281"
+},
+{
+"text": "CALL cc, nn",
+"page": "283"
+},
+{
+"text": "RET",
+"page": "285"
+},
+{
+"text": "RET cc",
+"page": "286"
+},
+{
+"text": "RETI",
+"page": "288"
+},
+{
+"text": "RETN",
+"page": "290"
+},
+{
+"text": "RST p",
+"page": "292"
+},
+{
+"text": "IN A, (n)",
+"page": "295"
+},
+{
+"text": "IN r (C)",
+"page": "296"
+},
+{
+"text": "INI",
+"page": "298"
+},
+{
+"text": "INIR",
+"page": "300"
+},
+{
+"text": "IND",
+"page": "302"
+},
+{
+"text": "INDR",
+"page": "304"
+},
+{
+"text": "OUT (n), A",
+"page": "306"
+},
+{
+"text": "OUT (C), r",
+"page": "307"
+},
+{
+"text": "OUTI",
+"page": "309"
+},
+{
+"text": "OTIR",
+"page": "311"
+},
+{
+"text": "OUTD",
+"page": "313"
+},
+{
+"text": "OTDR",
+"page": "315"
+},
+{
+"text": "Customer Support",
+"page": "317"
+}
+]
+}

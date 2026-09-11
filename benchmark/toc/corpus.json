@@ -1,0 +1,62 @@
+{
+  "buildroot": {
+    "title": "The Buildroot user manual (2026.02.1)",
+    "origin": "rpi5:/home/alex/litainer-build/litainer/temp/buildroot-2026.02.1/docs/manual/manual.pdf",
+    "sha256": "d419850ee1c64fd009643891c3109da687f5f43391e384d6bc0a0b4550ab0523",
+    "outline": true
+  },
+  "intel3000": {
+    "title": "Intel Series 3000 Reference Manual (Feb 1976), scan with text layer",
+    "origin": "rpi5:/data/kae/books/Intel3000/Intel-Series-3000-Reference-Manual-Feb1976.pdf",
+    "sha256": "e1552d8315209c8365c9e2ff96c2c6b2a504d9eee5eb1626f077c41d6d1a4c35",
+    "outline": false
+  },
+  "mcs40": {
+    "title": "Intel MCS-40 User's Manual (Nov 1974), scan with text layer",
+    "origin": "rpi5:/data/kae/books/mcs-4/Intel-MCS40-Users-Manual-Nov74.pdf",
+    "sha256": "fe37193f3e0dcba6b176f29a67420d2ca7a0d4f548b6710d5705af0a6e00d63b",
+    "outline": false
+  },
+  "mpman-ru": {
+    "title": "MetaPost: руководство пользователя (русский перевод)",
+    "origin": "rpi5:/usr/share/doc/texlive-doc/metapost/mpman-ru/mpman-ru.pdf",
+    "sha256": "119f1e37b7fdc04c4b62bb38ae5a50a5abb8f9c329ac591a16fa29e892868baf",
+    "outline": true
+  },
+  "readline": {
+    "title": "GNU Readline Library (8.3)",
+    "origin": "rpi5:/home/alex/litainer-build/litainer/temp/buildroot-output-zero2w/build/readline-8.3/doc/readline.pdf",
+    "sha256": "b5ee43e692e9349ff47892f304bf1ae91cff6f80e50677718d486500ab6ec48f",
+    "outline": true
+  },
+  "sbc6120": {
+    "title": "SBC6120 User's Manual",
+    "origin": "rpi5:/data/kae/books/PDP-8/SBC6120-Users-Manual.pdf",
+    "sha256": "c1829a4f6b174b4177677371b68dbc191f7e6cb995991a125f85c9f6c3f579f7",
+    "outline": true
+  },
+  "signetics8080": {
+    "title": "Signetics 8080 Emulator Manual (Mar 1977), scan with OCR text layer",
+    "origin": "rpi5:/data/kae/books/Intel3000/Signetics-8080EmulatorManual-Mar1977.pdf",
+    "sha256": "2fd71e37a54499fc1ad805f9adfef733d9412b6f925b3dfaca9829513d339399",
+    "outline": false
+  },
+  "texlive-ru": {
+    "title": "TeX Live: руководство (texlive-ru)",
+    "origin": "rpi5:/usr/share/doc/texlive-doc/texlive/texlive-ru/texlive-ru.pdf",
+    "sha256": "cb063b7975e2aca4f8f6803614a1e71d25bae433f1ab10ef404080f0897ddb69",
+    "outline": true
+  },
+  "z80": {
+    "title": "Zilog Z80 CPU User Manual (UM0080)",
+    "origin": "rpi5:/data/kae/books/zilog-Z80/Zilog-Z80-UserManual-0080.pdf",
+    "sha256": "e3c83da5a5d8e372364c20fa53665e6fbb165ec6ac38c8c1eebc359603447b5e",
+    "outline": true
+  },
+  "zaks-z80": {
+    "title": "Rodnay Zaks, Programming the Z80, 3rd ed. (OmniPage OCR)",
+    "origin": "rpi5:/data/kae/books/zilog-Z80/programming_the_z80_3rd_edition.pdf",
+    "sha256": "773bdb5ef3a44bb251bd33fcaf26a8290ed2664365f0bfe59eff43d0eaac0d73",
+    "outline": false
+  }
+}
