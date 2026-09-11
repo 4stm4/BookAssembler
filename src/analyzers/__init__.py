@@ -16,7 +16,7 @@ from src.analyzers.base import (
 from src.analyzers.algorithm import AlgorithmDetectorAnalyzer
 from src.analyzers.bibliography import BibliographyDetectorAnalyzer
 from src.analyzers.block_classifier import BlockClassifierAnalyzer
-from src.analyzers.toc import TocAnalyzer
+from src.analyzers.toc import TocAnalyzer, TocLinkAnalyzer
 from src.analyzers.callout import CalloutDetectorAnalyzer
 from src.analyzers.caption import CaptionAnalyzer
 from src.analyzers.citation import CitationLinkerAnalyzer
@@ -58,6 +58,10 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         NotebookOutputAnalyzer(),
         FontStatsAnalyzer(),
         EphemeraDetectorAnalyzer(),
+        # Before headings: a contents line in a chapter-heading size was
+        # promoted to a heading first, and a heading keeps no line geometry
+        # to read the entry from. TocLinkAnalyzer links it up later.
+        TocAnalyzer(),
         DiagramDetectorAnalyzer(),
         HeadingAnalyzer(),
         ListDetectorAnalyzer(),
@@ -75,10 +79,9 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         # (calls the "table"-role agent; no-op if none is reachable).
         PageAgentAnalyzer(),
         CaptionAnalyzer(),
-        # Owns TOC detection (was inside BlockClassifier): a "CONTENTS"
-        # heading over a section list is a TOC too, not only the
-        # dotted-leader form.
-        TocAnalyzer(),
+        # Contents entries → the headings they name, and printed page
+        # numbers → page indices, once the heading tree exists.
+        TocLinkAnalyzer(),
         BlockClassifierAnalyzer(),
         LLMRefinementAnalyzer(),
         VisionFallbackAnalyzer(),
@@ -101,6 +104,7 @@ __all__ = [
     "BibliographyDetectorAnalyzer",
     "BlockClassifierAnalyzer",
     "TocAnalyzer",
+    "TocLinkAnalyzer",
     "CalloutDetectorAnalyzer",
     "CaptionAnalyzer",
     "CitationLinkerAnalyzer",
