@@ -186,6 +186,21 @@ def test_two_columns():
     assert _texts(toc) == [(n, t, pg) for n, t, pg in left + right]
 
 
+def test_heading_level_with_the_other_columns_first_entry():
+    """MetaPost: "Содержание" top-left, level with the right column's first
+    entry — which is contents, not part of the heading's band."""
+    p = Page()
+    p.block(2, (0.15, 0.080, "Содержание", 0.29))
+    p.block(2, (0.52, 0.085, "9"), (0.545, 0.085, "Продвинутая графика"), (0.84, 0.085, "33", RIGHT))
+    for i in range(3):
+        y = 0.11 + 0.02 * i
+        p.block(2, (0.15, y, str(i + 1)), (0.17, y, f"Раздел {i + 1}"), (0.47, y, str(i + 2), 0.48),
+                (0.545, y, f"9.{i + 1}"), (0.58, y, f"Пункт {i + 1}"), (0.84, y, str(35 + i), RIGHT))
+    toc = p.read()
+    assert [t for _, t, _ in _texts(toc)] == [
+        "Раздел 1", "Раздел 2", "Раздел 3", "Продвинутая графика", "Пункт 1", "Пункт 2", "Пункт 3"]
+
+
 def test_wrapped_title_gets_its_page_from_the_last_line():
     p = Page()
     p.block(2, (0.4, 0.05, "Contents"))

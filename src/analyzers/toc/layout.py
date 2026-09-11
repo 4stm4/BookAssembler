@@ -338,10 +338,23 @@ class PageRead:
         return sum(len(e.rows) + len(e.description_rows) for e in self.entries)
 
 
-def read_page(lines: Sequence[Line], after_y: float = -1.0,
+def _before(ln: Line, heading: Line) -> bool:
+    """Is `ln` the contents heading, above it, or beside it in its own
+    column? A line level with the heading but in another column is not:
+    MetaPost's "Содержание" sits top-left, level with the first entry of
+    the right column."""
+    if ln.idx == heading.idx or ln.y1 <= heading.y0 + 0.25 * heading.h:
+        return True
+    overlaps = ln.x0 < heading.x1 and ln.x1 > heading.x0
+    return overlaps and ln.y0 < heading.y1 - 0.25 * heading.h
+
+
+def read_page(lines: Sequence[Line], heading: Optional[Line] = None,
               max_size: float = 0.0) -> PageRead:
-    """Entries of one contents page, column by column."""
-    lines = [l for l in lines if l.y0 > after_y]
+    """Entries of one contents page, column by column — below its heading,
+    when the page has it."""
+    if heading is not None:
+        lines = [l for l in lines if not _before(l, heading)]
     # The next front-matter list ends the contents wherever it starts — and
     # its heading can sit left of the entries' column (Zilog Z80: "List of
     # Figures" at the page margin), where the column filter below would
@@ -444,17 +457,17 @@ def read_toc(pages: Dict[int, List[Line]]) -> TocRead:
     pages 11 and 18.
     """
     for heading in find_headings(pages):
-        toc = _read_from(pages, heading.page, heading.y1 - 0.25 * heading.h, heading)
+        toc = _read_from(pages, heading.page, heading)
         if toc.entries:
             return toc
     start = next((p for p in sorted(pages)
                   if p <= TOC_HEADING_MAX_PAGE and _starts_toc(read_page(pages[p]))), None)
     if start is None:
         return TocRead(None, [], set(), set(), [])
-    return _read_from(pages, start, -1.0, None)
+    return _read_from(pages, start, None)
 
 
-def _read_from(pages: Dict[int, List[Line]], start: int, after_y: float,
+def _read_from(pages: Dict[int, List[Line]], start: int,
                heading: Optional[Line]) -> TocRead:
     entries: List[Entry] = []
     consumed: Set[int] = {heading.idx} if heading else set()
@@ -463,7 +476,7 @@ def _read_from(pages: Dict[int, List[Line]], start: int, after_y: float,
     page = start
     max_size = 0.0
     while page in pages:
-        read = read_page(pages[page], after_y, max_size)
+        read = read_page(pages[page], heading if page == start else None, max_size)
         first = page == start
         if not first and not _is_toc_page(read, MIN_ENTRIES_PER_PAGE, MIN_ACCOUNTED_SHARE):
             break
@@ -476,7 +489,7 @@ def _read_from(pages: Dict[int, List[Line]], start: int, after_y: float,
         max_size = max([max_size] + [e.rows[0].size for e in read.entries])
         if read.stopped:
             break
-        page, after_y = page + 1, -1.0
+        page += 1
 
     _repair_glued_numbers(entries)
     _assign_levels(entries)
