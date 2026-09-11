@@ -190,3 +190,23 @@ def test_anchor_link_matches_headings():
     ids = {e.chapter_number: e.anchor_id
            for e in toc.children if isinstance(e, TocEntryBlock)}
     assert ids["1."] == ch1.id and ids["2."] == ch2.id
+
+
+def test_anchored_run_does_not_reach_across_pages():
+    """The bug this guards: on the Zilog Z80 manual, unrelated prose pages
+    after the real contents page got swept into the same TOC container
+    because the anchored branch had no page-distance check."""
+    root = _run([
+        _para("CONTENTS", 1),
+        _para("Introduction", 1),
+        _para("Registers", 1),
+        _para("Instruction Set", 1),
+        _para("Interrupts", 1),
+        _para("Seven Bits From Peripheral", 33),
+        _para("temporary storage for calculations", 42),
+    ])
+    toc = _toc_of(root)
+    assert toc is not None
+    texts = [e.entry_text for e in toc.children if isinstance(e, TocEntryBlock)]
+    assert "Introduction" in texts
+    assert not any("Seven Bits" in t or "temporary storage" in t for t in texts)
