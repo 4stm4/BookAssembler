@@ -50,7 +50,11 @@ class HeadingAnalyzer(BaseAnalyzer):
         sizes: List[float] = []
         for root in doc.root_containers:
             for blk in root.children:
-                if isinstance(blk, ParagraphBlock) and not _is_monospace(blk):
+                if (
+                    isinstance(blk, ParagraphBlock)
+                    and not blk.is_tombstoned
+                    and not _is_monospace(blk)
+                ):
                     sizes.append(font_size(blk, default=12.0))
         threshold = _detect_heading_threshold(sizes)
 
@@ -102,7 +106,14 @@ class HeadingAnalyzer(BaseAnalyzer):
         stack: List[ContainerUnit] = [root]
 
         for block in flat:
-            if _is_heading(block, threshold):
+            if block.is_tombstoned:
+                # Already removed by an earlier analyzer (a repeating
+                # running header, an absorbed table row, …). Promoting it
+                # to a heading here would create a fresh, non-tombstoned
+                # ContainerUnit at the same id — resurrecting the node and
+                # tripping the No Silent Deletions guard (RFC 0001 §2.4).
+                stack[-1].children.append(block)
+            elif _is_heading(block, threshold):
                 text = block_text(block)
                 level = _heading_level(font_size(block, default=12.0), threshold)
                 while len(stack) > 1 and stack[-1].level >= level:
