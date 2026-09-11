@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
+from src.krm.identity import derive_composite_id
 from src.krm.models import (
     ContainerUnit,
     DiagramBlock,
@@ -106,6 +107,9 @@ class DiagramDetectorAnalyzer(BaseAnalyzer):
         )
 
         diagram = DiagramBlock(
+            # Built from the labels it absorbs, so its identity is theirs
+            # (RFC 0009 §5.2) — the uuid4 default made two runs disagree.
+            id=derive_composite_id("diagram", *(b.id for b, _p, _t, _bb in labels)),
             caption_text=caption_text,
             labels=[{"text": t, "x0": bb[0], "y0": bb[1], "x1": bb[2], "y1": bb[3]}
                     for _b, _p, t, bb in labels],
