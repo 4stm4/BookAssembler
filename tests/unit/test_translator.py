@@ -226,21 +226,32 @@ class TestRejection:
 
 
 class TestTargets:
-    def test_gpu_agents_take_several_requests_and_each_ollama_one(self, monkeypatch):
+    AGENTS = [
+        {"name": "gpu", "host": "http://gpu", "kind": "managed", "roles": ["translate"]},
+        {"name": "orangepi", "host": "http://o", "active_model": "m", "roles": ["translate"]},
+        {"name": "rpi5", "host": "http://r", "active_model": "m", "roles": ["translate"]},
+        {"name": "down", "host": "http://down", "roles": ["translate"]},
+        {"name": "vision", "host": "http://v", "kind": "multimodel", "roles": ["vision"]},
+    ]
+
+    def test_a_reachable_gpu_takes_the_whole_book(self, monkeypatch):
+        """RFC 0022 §7.2: the edge cluster is the fallback, and one model
+        keeps one terminology through the book."""
         from src.agents import router
-        monkeypatch.setattr(router, "load_agents", lambda: [
-            {"name": "gpu", "host": "http://gpu", "kind": "managed", "roles": ["translate"]},
-            {"name": "orangepi", "host": "http://o", "active_model": "m", "roles": ["translate"]},
-            {"name": "rpi5", "host": "http://r", "active_model": "m", "roles": ["translate"]},
-            {"name": "down", "host": "http://down", "roles": ["translate"]},
-            {"name": "vision", "host": "http://v", "kind": "multimodel", "roles": ["vision"]},
-        ])
+        monkeypatch.setattr(router, "load_agents", lambda: self.AGENTS)
         monkeypatch.setattr(router, "probe_managed",
                             lambda host: (True, {"runner": "up", "tasks": ["qwen"]}))
         monkeypatch.setattr(router, "_probe_ollama",
                             lambda host: (host != "http://down", ["m"]))
-        names = [t.name for t in T.translation_targets()]
-        assert sorted(names) == sorted(["gpu"] * T.GPU_WORKERS + ["orangepi", "rpi5"])
+        assert [t.name for t in T.translation_targets()] == ["gpu"] * T.GPU_WORKERS
+
+    def test_without_a_gpu_each_reachable_ollama_is_one_worker(self, monkeypatch):
+        from src.agents import router
+        monkeypatch.setattr(router, "load_agents", lambda: self.AGENTS)
+        monkeypatch.setattr(router, "probe_managed", lambda host: (False, {}))
+        monkeypatch.setattr(router, "_probe_ollama",
+                            lambda host: (host != "http://down", ["m"]))
+        assert [t.name for t in T.translation_targets()] == ["orangepi", "rpi5"]
 
     def test_a_manager_without_a_running_runner_is_not_a_target(self, monkeypatch):
         from src.agents import router
@@ -322,6 +333,24 @@ class TestApi:
         finally:
             gate.set()
         self.wait_done(tc, job_id)
+
+    def test_when_the_gpu_session_ends_the_edge_carries_on(self, client, monkeypatch):
+        """Kaggle's session ends mid-book: the GPU's workers leave the job and
+        the edge cluster, reachable now, finishes it — nobody restarts it."""
+        tc, job_id, _ = client
+        gpu = T.Target("kaggle", "http://gpu", "qwen-vl", "multimodel")
+        plan = iter([[gpu], [EDGE]])
+        monkeypatch.setattr(T, "translation_targets", lambda: next(plan, [EDGE]))
+
+        def call(target, prompt):
+            return None if target.gpu else russian(source_of(prompt))
+
+        monkeypatch.setattr(T, "_call_target", call)
+        tc.post(f"/api/v1/jobs/{job_id}/translate/start", json={"target_lang": RU})
+        self.wait_done(tc, job_id)
+        assert tc.get(f"/api/v1/jobs/{job_id}/progress").json()["stage"] == "done"
+        [para] = tc.get(f"/api/v1/jobs/{job_id}/result").json()["containers"][0]["children"]
+        assert para["metadata"]["translations"][RU]["transformation"]["agent"] == "edge"
 
     def test_stop_without_a_running_job_is_404(self, client):
         tc, job_id, _ = client
