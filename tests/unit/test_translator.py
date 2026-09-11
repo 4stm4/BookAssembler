@@ -253,6 +253,16 @@ class TestTargets:
                             lambda host: (host != "http://down", ["m"]))
         assert [t.name for t in T.translation_targets()] == ["orangepi", "rpi5"]
 
+    def test_a_gpu_call_is_not_retried_on_timeout(self, monkeypatch):
+        """The Runner keeps generating a timed-out answer; a retry would queue
+        a copy behind it. The job puts the unit back itself."""
+        from src.agents import router
+        seen = {}
+        monkeypatch.setattr(router, "call_infer",
+                            lambda host, task, **kw: seen.update(kw, task=task) or "ok")
+        T._call_target(T.Target("kaggle", "http://gpu", "qwen", "multimodel"), "prompt")
+        assert (seen["task"], seen["attempts"]) == ("translate", 1)
+
     def test_a_manager_without_a_running_runner_is_not_a_target(self, monkeypatch):
         from src.agents import router
         monkeypatch.setattr(router, "load_agents", lambda: [

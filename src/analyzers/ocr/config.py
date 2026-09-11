@@ -15,9 +15,11 @@ OCR_DPI = int(os.environ.get("KAE_OCR_DPI", "72"))
 OCR_MAX_DIM = int(os.environ.get("KAE_OCR_MAX_DIM", "512"))
 
 # 24.6s observed for ~1100 characters. A denser page generates more tokens and
-# takes proportionally longer, so the classification timeout (45s) is too tight
-# here — it would abandon pages that were about to answer.
-OCR_TIMEOUT = int(os.environ.get("KAE_OCR_TIMEOUT", "150"))
+# takes proportionally longer, and the Runner answers one request at a time —
+# with OCR_CONCURRENCY in flight the second waits out the first. So this stays
+# above the general inference timeout (router.INFER_TIMEOUT, 240s), which is
+# sized for shorter answers.
+OCR_TIMEOUT = int(os.environ.get("KAE_OCR_TIMEOUT", "300"))
 
 # A timeout here means the page is too heavy for the model, not that the
 # request was unlucky: repeating it costs minutes and changes nothing.
