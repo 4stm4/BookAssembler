@@ -46,6 +46,25 @@ def _run(children, page_count=20):
     return root
 
 
+class TestBlankIsAPropertyOfThePage:
+    """MetaPost: the page number "2" at the foot of a page of text was
+    relabelled BlankPageBlock and its text discarded — every folio of the
+    book went that way, and with it where the contents entries point."""
+
+    def test_a_page_number_on_a_page_of_text_keeps_its_text(self):
+        body = _para("MetaPost — это язык программирования, очень похожий на METAFONT.", page=2)
+        folio = _para("2", page=2)
+        root = _run([body, folio])
+        kept = next(c for c in root.children if c.id == folio.id)
+        assert type(kept) is ParagraphBlock
+        assert kept.inlines[0].spans[0].text == "2"
+
+    def test_a_page_holding_only_a_number_is_still_blank(self):
+        folio = _para("7", page=7)
+        root = _run([_para("Text on another page.", page=6), folio])
+        assert isinstance(next(c for c in root.children if c.id == folio.id), BlankPageBlock)
+
+
 class TestBlankPageTombstoneIsRespected:
     def test_a_tombstoned_near_empty_block_is_not_replaced(self):
         """The bug: replacing it resurrects the node at the same id."""
