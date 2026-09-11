@@ -33,7 +33,8 @@ EDGE_NUM_PREDICT = int(os.environ.get("LLM_AGENT_NUM_PREDICT", "1024"))
 
 
 def _edge_generate(prompt: str, host: Optional[str] = None,
-                   model: Optional[str] = None) -> Optional[str]:
+                   model: Optional[str] = None,
+                   timeout: Optional[int] = None) -> Optional[str]:
     """Generate on the edge cluster's ollama."""
     payload = json.dumps({
         "model": model or EDGE_MODEL,
@@ -48,7 +49,7 @@ def _edge_generate(prompt: str, host: Optional[str] = None,
         headers={"Content-Type": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=EDGE_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=timeout or EDGE_TIMEOUT) as resp:
             return json.loads(resp.read()).get("response", "")
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
         log.warning("edge LLM call failed: %s", e)
@@ -77,4 +78,4 @@ def generate_text(prompt: str, task: str = "refine",
             # and a timeout alike. All three mean the same thing to us: this
             # work has to happen somewhere else.
             log.info("GPU declined %s; falling back to the edge cluster", task)
-    return _edge_generate(prompt, host=host, model=model)
+    return _edge_generate(prompt, host=host, model=model, timeout=timeout)

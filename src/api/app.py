@@ -22,6 +22,8 @@ import io
 import json
 import logging
 import os
+import threading
+import time
 from typing import Any, AsyncGenerator, BinaryIO, Dict, List, Optional, Union
 from uuid import uuid4
 
@@ -1847,6 +1849,9 @@ def create_app() -> FastAPI:
             "k": body.k,
         }
 
+    # Running whole-document translations: job id → the event that stops one.
+    translation_runs: Dict[str, threading.Event] = {}
+
     class TranslateRequest(BaseModel):
         source_text: str
         target_lang: str = "Russian"
@@ -1857,25 +1862,14 @@ def create_app() -> FastAPI:
         doc = docs_store.get(job_id)
         if doc is None:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
-        from src.analyzers.llm_refinement.rules import _call_ollama
-        prompt = (
-            f"Translate the following text to {body.target_lang}. "
-            f"Output ONLY the translation, nothing else.\n\n"
-            f"{body.source_text}"
-        )
-        # Route to the first reachable agent configured in the agent manager,
-        # using its active model. Lets the user pick a fast host/model in the UI.
-        # The probe loop and the LLM call are blocking (seconds to minutes), so
-        # run the whole thing off the event loop.
+        from src.assembler.translator import _build_translate_prompt, _call_target, translation_targets
+        prompt = _build_translate_prompt(body.source_text, body.target_lang)
+
+        # The agents and the prompt of the whole-document job. Probing and the
+        # LLM call block for seconds to minutes: off the event loop.
         def _translate_sync() -> Optional[str]:
-            host, model = None, None
-            for a in _load_agents_config():
-                available, models = _probe_ollama(a["host"])
-                if available:
-                    host = a["host"]
-                    model = a.get("active_model") or (models[0] if models else None)
-                    break
-            return _call_ollama(prompt, host=host, model=model)
+            targets = translation_targets()
+            return _call_target(targets[0], prompt) if targets else None
 
         translated = await asyncio.to_thread(_translate_sync)
         if not translated:
@@ -1920,24 +1914,27 @@ def create_app() -> FastAPI:
 
     @app.post("/api/v1/jobs/{job_id}/assemble")
     async def assemble_translated_book(job_id: str, body: AssembleRequest) -> Dict[str, Any]:
+        """Render the translated book from the segments the translation job
+        recorded (POST .../translate/start). Nothing is translated here: this
+        used to translate the whole book again inside the request, under a
+        one-hour budget, and whatever did not fit went out in English."""
         doc = docs_store.get(job_id)
         if doc is None:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
-        from src.assembler.translator import translate_and_assemble
-        loop = asyncio.get_running_loop()
+        if job_id in translation_runs:
+            raise HTTPException(status_code=409, detail="Translation is still running")
+        from src.assembler.translator import assemble_book
         output_path = os.path.join(kae_ssd_path, job_id, f"translated_{body.target_lang.lower()}.pdf")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-        def _run():
-            return translate_and_assemble(doc, body.target_lang, output_path, job_id, pyjobkit_bridge, loop)
-
-        await asyncio.to_thread(_run)
+        counts = await asyncio.to_thread(assemble_book, doc, body.target_lang, output_path, job_id)
         desynced = hitl_manager.flag_desynchronized_nodes(doc)
         audit_logger.log("BOOK_ASSEMBLED", "api", {
             "job_id": job_id, "target_lang": body.target_lang, "output": output_path,
-            "desynced_segments": len(desynced),
+            "desynced_segments": len(desynced), **counts,
         })
-        return {"status": "completed", "download_url": f"/api/v1/jobs/{job_id}/download/translated"}
+        return {"status": "completed", "download_url": f"/api/v1/jobs/{job_id}/download/translated",
+                **counts}
 
     def _pick_agent() -> tuple:
         """First reachable agent + its active model, from the agent manager config."""
@@ -1950,82 +1947,108 @@ def create_app() -> FastAPI:
     class TranslateAllRequest(BaseModel):
         target_lang: str = "Russian"
 
+    # Seconds between saves of a running translation. A unit is an LLM call of
+    # seconds to minutes and the document JSON is megabytes; a stop loses at
+    # most this much work.
+    TRANSLATION_SAVE_EVERY = 30.0
+
     @app.post("/api/v1/jobs/{job_id}/translate/start")
     async def translate_all_start(job_id: str, body: TranslateAllRequest) -> Dict[str, Any]:
         """
-        Start a background page-by-page translation job. Progress is published to
-        the task stream (visible in the task queue); translated segments are stored
-        on each block's metadata without mutating the source (RFC 0021 §5.1).
+        Start — or resume — the background translation of the whole document
+        (src/assembler/translator). Segments land on each block's metadata as
+        they come, without mutating the source (RFC 0021 §5.1); the document is
+        saved as the job goes, and starting again skips every unit already
+        translated from the same text with the same prompt (§2.2).
         """
         doc = docs_store.get(job_id)
         if doc is None:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        if job_id in translation_runs:
+            raise HTTPException(status_code=409, detail="Translation is already running")
 
-        from src.assembler.translator import _collect_translatable, _get_block_text, _record_translation
-        from src.analyzers.llm_refinement.rules import _call_ollama
+        from src.assembler.translator import (
+            collect_units, is_translated, translate_document, translation_targets,
+        )
 
-        blocks: list = []
-        for container in doc.root_containers:
-            _collect_translatable(container, blocks)
+        targets = await asyncio.to_thread(translation_targets)
+        if not targets:
+            raise HTTPException(status_code=503, detail="No reachable translation agent")
+        units = collect_units(doc)
+        cached = sum(1 for u in units if is_translated(u, body.target_lang))
 
-        # Group blocks by physical page for page-by-page progress.
-        pages: Dict[int, list] = {}
-        for kind, block in blocks:
-            vl = getattr(block, "visual_layout", None)
-            pg = getattr(vl, "page_or_screen_index", 0) if vl else 0
-            pages.setdefault(pg, []).append((kind, block))
-        ordered_pages = sorted(pages.keys())
-        total_pages = len(ordered_pages)
-
-        host, model, _ = _pick_agent_for_role("translate")
+        stop = threading.Event()
+        translation_runs[job_id] = stop
+        doc_lock = threading.Lock()
         loop = asyncio.get_running_loop()
+        saved_at = [time.monotonic()]
 
-        async def _emit(stage: str, step: int) -> None:
-            progress_store[job_id] = {"step": step, "total": total_pages, "stage": stage}
-            await pyjobkit_bridge.publish_event({
-                "event": "job_progress", "job_id": job_id, "job_type": "translate",
-                "stage": stage, "progress": (step / total_pages) if total_pages else 1.0,
-                "status": "RUNNING",
-            })
-
-        def _translate_page(page_blocks: list) -> None:
-            for kind, block in page_blocks:
-                if kind == "title":
-                    original = block.title
-                elif kind == "caption":
-                    original = block.caption_text
-                else:
-                    original = _get_block_text(block)
-                if not original or len(original.strip()) < 3:
-                    continue
-                prompt = (
-                    f"Translate the following text to {body.target_lang}. "
-                    f"Output ONLY the translation, nothing else.\n\n{original}"
-                )
-                translated = _call_ollama(prompt, host=host, model=model)
-                if translated:
-                    _record_translation(block, original, translated.strip(), body.target_lang)
-
-        async def _run_job() -> None:
+        def _publish(event: Dict[str, Any]) -> None:
+            coro = pyjobkit_bridge.publish_event(event)
             try:
-                for i, pg in enumerate(ordered_pages):
-                    await _emit(f"Перевод страницы {i + 1}/{total_pages}", i)
-                    await asyncio.to_thread(_translate_page, pages[pg])
+                asyncio.run_coroutine_threadsafe(coro, loop)
+            except RuntimeError:  # the loop is gone (shutdown): nobody left to tell
+                coro.close()
+
+        def _save() -> None:
+            with doc_lock:
                 _persist_doc(job_id, doc)
-                progress_store[job_id] = {"step": total_pages, "total": total_pages, "stage": "done"}
-                await pyjobkit_bridge.publish_event({
-                    "event": "job_completed", "job_id": job_id, "job_type": "translate",
-                    "progress": 1.0, "status": "COMPLETED",
+            saved_at[0] = time.monotonic()
+
+        def _on_progress(stats: Any) -> None:
+            stage = f"Перевод: {stats.processed}/{stats.total}"
+            progress_store[job_id] = {"step": stats.processed, "total": stats.total, "stage": stage}
+            _publish({
+                "event": "job_progress", "job_id": job_id, "job_type": "translate",
+                "stage": stage, "status": "RUNNING",
+                "progress": stats.processed / stats.total if stats.total else 1.0,
+            })
+            if time.monotonic() - saved_at[0] >= TRANSLATION_SAVE_EVERY:
+                _save()
+
+        def _run() -> None:
+            try:
+                stats = translate_document(doc, body.target_lang, targets, lock=doc_lock,
+                                           on_progress=_on_progress, stop=stop)
+                _save()
+                finished = not stats.left
+                progress_store[job_id] = {"step": stats.processed, "total": stats.total,
+                                          "stage": "done" if finished else "stopped"}
+                _publish({
+                    "event": "job_completed" if finished else "job_progress",
+                    "job_id": job_id, "job_type": "translate",
+                    "status": "COMPLETED" if finished else "STOPPED",
+                    "progress": stats.processed / stats.total if stats.total else 1.0,
+                    "stats": stats.as_dict(),
                 })
                 audit_logger.log("TRANSLATION_REQUESTED", "api", {
-                    "job_id": job_id, "target_lang": body.target_lang, "pages": total_pages,
+                    "job_id": job_id, "target_lang": body.target_lang, **stats.as_dict(),
                 })
             except Exception as e:
                 logging.getLogger(__name__).exception("Translation job failed for %s", job_id)
-                progress_store[job_id] = {"step": 0, "total": total_pages, "stage": "error", "error": str(e)}
+                _save()  # keep what was done
+                progress_store[job_id] = {"step": 0, "total": len(units), "stage": "error",
+                                          "error": str(e)}
+            finally:
+                translation_runs.pop(job_id, None)
 
-        loop.create_task(_run_job())
-        return {"status": "started", "total_pages": total_pages, "agent": host, "model": model}
+        threading.Thread(target=_run, name=f"translate-{job_id}", daemon=True).start()
+        return {
+            "status": "started", "total_units": len(units), "cached": cached,
+            "total_pages": (doc.metadata or {}).get("page_count", 0),
+            "agents": sorted({t.name for t in targets}),
+            "agent": targets[0].host, "model": targets[0].model,
+        }
+
+    @app.post("/api/v1/jobs/{job_id}/translate/stop")
+    async def translate_all_stop(job_id: str) -> Dict[str, Any]:
+        """Stop a running translation once the units in flight are back; what is
+        done is saved, and starting again goes on from there."""
+        stop = translation_runs.get(job_id)
+        if stop is None:
+            raise HTTPException(status_code=404, detail="No translation running")
+        stop.set()
+        return {"status": "stopping"}
 
     @app.get("/api/v1/jobs/{job_id}/download/translated")
     async def download_translated(job_id: str):

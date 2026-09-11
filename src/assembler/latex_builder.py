@@ -154,6 +154,10 @@ def _translated(node: Any, fallback: str, target_lang: str) -> str:
         return fallback
     md = getattr(node, "metadata", None) or {}
     seg = (md.get("translations") or {}).get(target_lang)
+    if seg and seg.get("merged_into"):
+        # The page break cut this block's sentence: its text went out, and
+        # came back, inside the translation of the block it continues.
+        return ""
     if seg and seg.get("target_text"):
         return seg["target_text"]
     return fallback
