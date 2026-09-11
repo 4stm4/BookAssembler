@@ -186,8 +186,13 @@ def call_infer(
     model: Optional[str] = None,
     timeout: Optional[int] = None, attempts: Optional[int] = None,
     priority: Optional[int] = None,
+    max_new_tokens: Optional[int] = None,
 ) -> Optional[str]:
     """Send a task to an agent for inference (RFC 0022 §4.2, §4.4).
+
+    `max_new_tokens` caps the answer at the longest a right one can be, so a
+    decode that starts repeating itself stops there instead of at the
+    agent's ceiling.
 
     `image_png` is required only by image tasks; `refine` and `translate`
     carry a prompt instead. `priority` is a proposal — the server caps it per
@@ -208,7 +213,9 @@ def call_infer(
 
     if kind == "ollama":
         options: dict = {"temperature": 0.0, "seed": 42}
-        if b64 is None:
+        if max_new_tokens:
+            options["num_predict"] = int(max_new_tokens)
+        elif b64 is None:
             # A text reply: a translated paragraph runs past ollama's default
             # cap and came back cut mid-sentence (see agents/text.py).
             options["num_predict"] = _OLLAMA_TEXT_NUM_PREDICT
@@ -238,6 +245,8 @@ def call_infer(
         body["image_b64"] = b64
     if prompt:
         body["prompt"] = prompt
+    if max_new_tokens:
+        body["max_new_tokens"] = int(max_new_tokens)
     payload = json.dumps(body).encode()
     headers: dict = {"Content-Type": "application/json"}
     token = _token_for_host(host)

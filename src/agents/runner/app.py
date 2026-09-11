@@ -17,11 +17,11 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, List, Optional
+from typing import Any, AsyncIterator, List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.agents.audit import AgentAudit
 from src.agents.tasks import validate_payload
@@ -30,7 +30,7 @@ from src.agents.runner.config import RunnerConfig
 from src.agents.runner.idle import run_watchdog
 from src.agents.runner.loaders.base import EchoLoader, ModelLoader
 from src.agents.runner.metrics import RunnerMetrics, render as render_metrics
-from src.agents.runner.pool import ModelPool
+from src.agents.runner.pool import Abandoned, ModelPool
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +45,8 @@ class InferRequest(BaseModel):
     task: str
     image_b64: Optional[str] = None
     prompt: Optional[str] = None
+    # Longest useful answer; the loader's own ceiling still applies.
+    max_new_tokens: Optional[int] = Field(default=None, ge=1)
 
 
 class OcrRequest(BaseModel):
@@ -147,25 +149,33 @@ def create_app(cfg: Optional[RunnerConfig] = None,
         return render_metrics(metrics, pool.loaded_names(), pool.vram_used_mb())
 
     async def _do_infer(task: str, png: Optional[bytes],
-                        prompt: Optional[str]) -> str:
+                        prompt: Optional[str],
+                        max_new_tokens: Optional[int] = None,
+                        wanted: Optional[Any] = None) -> str:
         state["in_flight"] += 1
         t0 = time.time()
         ok = False
+        abandoned = False
         try:
             _bump()
-            text = await pool.infer(task, png, prompt=prompt)
+            text = await pool.infer(task, png, prompt=prompt,
+                                    max_new_tokens=max_new_tokens, wanted=wanted)
             _bump()
             ok = True
             return text
         except KeyError as e:
             raise HTTPException(400, str(e)) from e
+        except Abandoned as e:
+            # Not an inference failure: nobody was left to answer.
+            abandoned = True
+            raise HTTPException(499, "client left before its turn") from e
         finally:
-            duration = time.time() - t0
-            metrics.record_infer(task, duration, ok)
+            if not abandoned:
+                metrics.record_infer(task, time.time() - t0, ok)
             state["in_flight"] -= 1
 
     @app.post("/infer", dependencies=[Depends(_require_token)])
-    async def infer(body: InferRequest) -> dict:
+    async def infer(body: InferRequest, request: Request) -> dict:
         problem = validate_payload(
             body.task,
             has_image=bool(body.image_b64),
@@ -176,7 +186,12 @@ def create_app(cfg: Optional[RunnerConfig] = None,
             # answer to the wrong question and burns a GPU slot doing it.
             raise HTTPException(400, problem)
         png = _decode_png(body.image_b64) if body.image_b64 else None
-        text = await _do_infer(body.task, png, body.prompt)
+
+        async def wanted() -> bool:
+            return not await request.is_disconnected()
+
+        text = await _do_infer(body.task, png, body.prompt,
+                               max_new_tokens=body.max_new_tokens, wanted=wanted)
         return {"text": text}
 
     @app.post("/ocr", dependencies=[Depends(_require_token)])

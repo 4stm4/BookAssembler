@@ -56,6 +56,9 @@ EDGE_TIMEOUT = int(os.environ.get("KAE_TRANSLATE_EDGE_TIMEOUT", "900"))
 GPU_TIMEOUT = int(os.environ.get("KAE_TRANSLATE_GPU_TIMEOUT", "300"))
 # Requests kept in flight on a GPU agent; its Manager queues the rest (RFC 0022 §5.6).
 GPU_WORKERS = int(os.environ.get("KAE_TRANSLATE_GPU_WORKERS", "2"))
+# Longest translation the GPU is asked for: a paragraph's Russian runs to a
+# few hundred tokens; a decode that starts repeating itself stops here.
+GPU_MAX_TOKENS = int(os.environ.get("KAE_TRANSLATE_MAX_TOKENS", "1536"))
 MAX_ATTEMPTS = 3
 # An agent that failed this many units in a row is down, not unlucky.
 RETIRE_AFTER = 5
@@ -422,7 +425,7 @@ def _call_target(target: Target, prompt: str) -> Optional[str]:
         # in the queue itself.
         return call_infer(target.host, "translate", prompt=prompt, kind=target.kind,
                           model=target.model, timeout=GPU_TIMEOUT, attempts=1,
-                          priority=int(Priority.BULK))
+                          priority=int(Priority.BULK), max_new_tokens=GPU_MAX_TOKENS)
     # An explicit host goes straight to that ollama and takes no GPU slot.
     return generate_text(prompt, task="translate", host=target.host,
                          model=target.model, timeout=EDGE_TIMEOUT)

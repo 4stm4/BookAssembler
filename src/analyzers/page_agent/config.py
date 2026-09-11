@@ -14,3 +14,9 @@ VISION_CONCURRENCY = int(os.environ.get("KAE_VISION_CONCURRENCY", "2"))
 # measurement on the target GPU, never as a default "improvement".
 RENDER_DPI = int(os.environ.get("KAE_VISION_DPI", "72"))
 
+# Longest page answer worth waiting for: the role and 15 block types are a few
+# hundred tokens, a table page's tabular more. Without a cap a decode that
+# starts repeating itself ran to the Runner's 2048 — minutes on a T4, repeated
+# identically on every retry since the decode is greedy.
+CLASSIFY_MAX_TOKENS = int(os.environ.get("KAE_PAGE_CLASSIFY_MAX_TOKENS", "1536"))
+
