@@ -53,6 +53,13 @@ class TitlePageAnalyzer(BaseAnalyzer):
         count = 0
         for i, child in enumerate(container.children):
             if isinstance(child, ParagraphBlock) and not isinstance(child, TitlePageBlock):
+                if child.is_tombstoned:
+                    # Already removed by an earlier analyzer. Replacing it
+                    # here would create a fresh cover/blank block at the same
+                    # id with is_tombstoned defaulting False — resurrecting
+                    # the node and tripping the No Silent Deletions guard
+                    # (RFC 0001 §2.4).
+                    continue
                 # A page that carries an image and no text layer is unread, not
                 # empty. Relabelling it BlankPageBlock discards the needs_ocr
                 # flag and states as fact that the page has no content.
@@ -199,6 +206,10 @@ class TitlePageAnalyzer(BaseAnalyzer):
         self, container: ContainerUnit, result: List[_NodeLoc]
     ) -> None:
         for idx, child in enumerate(container.children):
+            if getattr(child, "is_tombstoned", False):
+                # Already removed (a repeating header, an absorbed row) —
+                # its text must not count toward the title page's content.
+                continue
             if isinstance(child, ParagraphBlock) and not isinstance(child, TitlePageBlock):
                 result.append((child, container, idx))
             elif isinstance(child, BlankPageBlock):
