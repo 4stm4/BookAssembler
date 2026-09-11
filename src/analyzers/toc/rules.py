@@ -16,6 +16,14 @@ def is_toc_heading(text: str) -> bool:
     return bool(_TOC_HEADING_RE.match(text or ""))
 
 
+_BARE_PAGE_NUM_RE = re.compile(r"^\s*(\d{1,4}|[ivxlcdm]+)\s*$", re.IGNORECASE)
+
+
+def is_bare_page_number(text: str) -> bool:
+    """A line that is nothing but a folio number — "42", "vii"."""
+    return bool(_BARE_PAGE_NUM_RE.match(text or ""))
+
+
 def parse_entry(text: str) -> Tuple[str, Optional[str], Optional[int]]:
     """Split "1.2  Registers .......... 45" into
     (entry_text, chapter_number, target_page).
@@ -73,6 +81,11 @@ def is_toc_entry(text: str, *, anchored: bool = False) -> bool:
     """
     stripped = (text or "").strip()
     if not stripped or len(stripped) > MAX_TOC_TEXT_LEN or len(stripped) < 3:
+        return False
+    if is_bare_page_number(stripped):
+        # A running folio ("vii", "42") sitting alone on its own line — the
+        # front-matter page number next to a real "Table of Contents"
+        # header, not an entry.
         return False
 
     if _ENDS_WITH_PAGE_NUM.search(stripped):

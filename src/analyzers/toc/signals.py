@@ -55,3 +55,14 @@ MAX_TOC_TEXT_LEN = 120
 # run whose average page falls outside these fractions is rejected unless a
 # "Contents" heading anchors it.
 TOC_PAGE_FRACTION = 0.12
+
+# The heading trigger ("CONTENTS"/"Table of Contents" as a standalone line)
+# is looser than the entry rules — a two-column table header split into
+# lines ("Location" / "Contents"), or the bare word inside a code comment,
+# both satisfy it. A proportional front window does not save this on a long
+# book: TOC_PAGE_FRACTION of 585 pages is 70, well past where an unrelated
+# "Contents" cell can occur. A real table of contents starts within the first
+# couple dozen pages regardless of the book's length — this caps the window
+# in absolute pages, measured on the Zilog Z80 manual where stray matches at
+# pages 33/42/295/297 each restarted an anchored run over ordinary prose.
+TOC_HEADING_MAX_PAGE = 20
