@@ -22,7 +22,7 @@ from src.krm.models import (
     VisualLayout,
 )
 
-from src.analyzers.page_agent.config import RENDER_DPI, VISION_CONCURRENCY
+from src.analyzers.page_agent.config import CLASSIFY_MAX_TOKENS, RENDER_DPI, VISION_CONCURRENCY
 from src.analyzers.page_agent.signals import FAILURE_BUDGET_RATIO, MIN_BLOCKS, MIN_FAILURE_BUDGET, MIN_NUMERIC_RATIO, MIN_SHORT_RATIO, log
 from src.analyzers.page_agent.rules import _PageResult, _clean_tabular, _looks_numeric, _text
 from src.analyzers.source_io import pixmap_to_jpeg as _pixmap_to_jpeg, resolve_source_path as _resolve_source_path
@@ -241,6 +241,7 @@ class PageAgentAnalyzer(BaseAnalyzer):
         )
         text = call_infer(
             host, "vision", png, prompt=prompt, kind=kind, model=model,
+            max_new_tokens=CLASSIFY_MAX_TOKENS,
         ) or ""
         role = "text"
         types: Dict[int, str] = {}

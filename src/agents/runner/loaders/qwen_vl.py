@@ -142,9 +142,14 @@ class QwenVLLoader:
         image_png: Optional[bytes],
         task: str,
         prompt: Optional[str] = None,
+        max_new_tokens: Optional[int] = None,
     ) -> str:
         if not self.loaded:
             raise RuntimeError("QwenVLLoader.infer() called before load()")
+        # The caller knows how long a right answer can be: a page's block types
+        # are a few hundred tokens, and a greedy decode that starts repeating
+        # itself otherwise runs on to the loader's ceiling — minutes on a T4.
+        limit = min(max_new_tokens, self._max_new_tokens) if max_new_tokens else self._max_new_tokens
 
         real_prompt = prompt or TASK_PROMPTS.get(task, TASK_PROMPTS["table"])
         if image_png is None and not prompt:
@@ -178,9 +183,7 @@ class QwenVLLoader:
                     padding=True,
                     return_tensors="pt",
                 ).to("cuda")
-                out = self._model.generate(
-                    **inputs, max_new_tokens=self._max_new_tokens
-                )
+                out = self._model.generate(**inputs, max_new_tokens=limit)
                 trimmed = [o[len(i):] for i, o in zip(inputs.input_ids, out)]
                 decoded = self._processor.batch_decode(
                     trimmed, skip_special_tokens=True

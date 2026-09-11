@@ -4,19 +4,25 @@ ModelPool with LRU eviction by VRAM (RFC 0022 §6).
 Registers loaders by task; loads lazily on first /infer for that task; evicts
 the least-recently-used loader when a new load would exceed the VRAM budget.
 
-Concurrency: serialized inside the pool (asyncio.Lock) — one active inference
-at a time on the Runner. Concurrent inference on a single GPU rarely helps and
-often OOMs; if we ever need it, that's a separate RFC.
+Concurrency: serialized inside the pool — one active inference at a time on
+the Runner (`_infer_lock`), and loading under a lock of its own (`_lock`), so
+/health etc. stay responsive during long inferences. Concurrent inference on a
+single GPU rarely helps and often OOMs; if we ever need it, that's a separate
+RFC.
 """
 
 import asyncio
 import logging
 import time
-from typing import Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from src.agents.runner.loaders.base import ModelLoader
 
 log = logging.getLogger(__name__)
+
+
+class Abandoned(Exception):
+    """The caller left while its request waited for its turn."""
 
 
 class ModelPool:
@@ -26,6 +32,7 @@ class ModelPool:
         self._loaders: Dict[str, ModelLoader] = {}       # loader.name → loader
         self._last_used: Dict[str, float] = {}           # loader.name → ts
         self._lock = asyncio.Lock()
+        self._infer_lock = asyncio.Lock()
 
     def register(self, loader: ModelLoader) -> None:
         for task in loader.tasks:
@@ -89,11 +96,21 @@ class ModelPool:
         return self._loaders[candidates[0][1]]
 
     async def infer(self, task: str, image_png: Optional[bytes] = None,
-                    prompt: Optional[str] = None) -> str:
+                    prompt: Optional[str] = None, *,
+                    max_new_tokens: Optional[int] = None,
+                    wanted: Optional[Callable[[], Awaitable[bool]]] = None) -> str:
         loader = await self.ensure_loaded(task)
-        # ensure_loaded already grabbed the lock briefly; keep inference outside
-        # of that lock so /health etc. stay responsive during long inferences.
-        result = await loader.infer(image_png, task, prompt=prompt)
+        # One generation at a time. The module said so, but inference ran
+        # outside every lock: two in flight from PageAgent, plus a timed-out
+        # client's retry, ran model.generate side by side on one T4 — seven
+        # minutes of "Programming the Z80" without a single answer, no error.
+        async with self._infer_lock:
+            if wanted is not None and not await wanted():
+                # Its client timed out while it waited. Nobody will read the
+                # answer, and generating it would hold up everyone behind.
+                raise Abandoned(task)
+            extra: Dict[str, Any] = {"max_new_tokens": max_new_tokens} if max_new_tokens else {}
+            result = await loader.infer(image_png, task, prompt=prompt, **extra)
         self._last_used[loader.name] = time.time()
         return result
 
