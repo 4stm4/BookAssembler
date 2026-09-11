@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Image as ImageIcon, Type } from 'lucide-react';
 import type { KRMNode, KRMStyle } from '../types';
 
@@ -10,11 +10,22 @@ import type { KRMNode, KRMStyle } from '../types';
  * Which pages get this treatment is decided server-side and delivered as
  * `layout: "positional"` by GET /api/v1/jobs/:id/pages — this component does
  * not re-derive that rule, so it cannot drift from the one that builds the PDF.
+ *
+ * The page is drawn at its real size (width_pt/height_pt from that same
+ * endpoint), not A4: a bbox and a font size in points only mean something
+ * against the page they came from. A scan drawn on A4 came out with every
+ * line too small and the scan stretched under it.
  */
 
-// A4 in mm; bbox is normalized to the page, so only the ratio matters here.
-const PAGE_W_MM = 210;
-const PAGE_H_MM = 297;
+// Only when the adapter recorded no size (documents processed before it did).
+const A4_PT = { w: 595.28, h: 841.89 };
+
+// A line is drawn in the browser's face, not the source's, so its natural
+// width differs. It is stretched to its source box — within limits: past
+// them the text would be unreadable, and something else is wrong.
+const MIN_FIT = 0.6;
+const MAX_FIT = 1.6;
+
 // A style's typeface, resolved to a real stack. Falling through to
 // `undefined` would inherit the page container's serif, so a block the source
 // set in a sans or typewriter face would still render as Georgia.
@@ -34,9 +45,6 @@ function familyOf(st?: KRMStyle): string | undefined {
   return undefined;
 }
 
-// 297mm at 72dpi ≈ 842pt — converts font_size_pt into a fraction of page height.
-const PAGE_H_PT = 842;
-
 function nodeText(node: KRMNode): string {
   if (node.caption_text) return node.caption_text;
   if (node.text) return node.text;
@@ -51,32 +59,61 @@ function rgb(c?: [number, number, number]): string | undefined {
   return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
 }
 
+/** One source line, stretched to the width of its box. */
+const FittedLine: React.FC<{ text: string; boxWidth: number }> = ({ text, boxWidth }) => {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [scale, setScale] = useState(1);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || !boxWidth) return;
+    const natural = el.scrollWidth;
+    if (natural > 0) {
+      setScale(Math.min(MAX_FIT, Math.max(MIN_FIT, boxWidth / natural)));
+    }
+  }, [text, boxWidth]);
+  return (
+    <span
+      ref={ref}
+      className="inline-block whitespace-nowrap origin-left"
+      style={{ transform: `scaleX(${scale})` }}
+    >
+      {text}
+    </span>
+  );
+};
+
 const PageCanvas: React.FC<{
   jobId: string;
   pageIndex: number;
   nodes: KRMNode[];
+  pageSizePt?: { w: number; h: number };
   selectedId?: string;
   onSelect?: (node: KRMNode) => void;
-}> = ({ jobId, pageIndex, nodes, selectedId, onSelect }) => {
+}> = ({ jobId, pageIndex, nodes, pageSizePt, selectedId, onSelect }) => {
   const ref = useRef<HTMLDivElement>(null);
-  const [height, setHeight] = useState(0);
+  const [box, setBox] = useState({ w: 0, h: 0 });
   const [showScan, setShowScan] = useState(false);
+  const page = pageSizePt ?? A4_PT;
 
-  // Font sizes are a fraction of page height, so they need the rendered size.
+  // Font sizes and line widths are fractions of the page, so they need the
+  // rendered size.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const update = () => setHeight(el.getBoundingClientRect().height);
+    const update = () => {
+      const r = el.getBoundingClientRect();
+      setBox({ w: r.width, h: r.height });
+    };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
-  // A merged block that kept its sources' geometry (a title page) is drawn line
-  // by line — that arrangement is what makes it a title page (RFC 0021 §5.4).
+  // A block that kept its lines' geometry is drawn line by line, each line in
+  // its own box; a block without it is one box its text wraps in.
   type Placed = {
-    key: string; nodeId: string; text: string;
+    key: string; nodeId: string; text: string; single: boolean;
     bbox: [number, number, number, number]; style?: KRMStyle; type: string;
   };
   const placed: Placed[] = [];
@@ -84,13 +121,13 @@ const PageCanvas: React.FC<{
     if (n.lines?.length) {
       n.lines.forEach((ln, i) =>
         placed.push({
-          key: `${n.id}:${i}`, nodeId: n.id, text: ln.text,
+          key: `${n.id}:${i}`, nodeId: n.id, text: ln.text, single: true,
           bbox: ln.bbox, style: ln.style, type: n.type,
         })
       );
     } else if (n.bbox) {
       placed.push({
-        key: n.id, nodeId: n.id, text: nodeText(n),
+        key: n.id, nodeId: n.id, text: nodeText(n), single: false,
         bbox: n.bbox, style: n.style, type: n.type,
       });
     }
@@ -121,7 +158,7 @@ const PageCanvas: React.FC<{
         ref={ref}
         className="relative w-full bg-white rounded shadow-inner overflow-hidden"
         style={{
-          aspectRatio: `${PAGE_W_MM} / ${PAGE_H_MM}`,
+          aspectRatio: `${page.w} / ${page.h}`,
           // The editor pane is font-mono; a reconstructed page must not inherit
           // that or every block renders in the wrong typeface.
           fontFamily: 'Georgia, "Times New Roman", serif',
@@ -140,6 +177,11 @@ const PageCanvas: React.FC<{
           const text = item.text;
           const st = item.style;
           const pt = st?.font_size_pt ?? 11;
+          const fontPx = box.h ? (pt / page.h) * box.h : 0;
+          const boxWidth = (x1 - x0) * box.w;
+          // A block without per-line geometry is fitted too when it is one
+          // line tall; taller, it can only wrap.
+          const fit = item.single || (fontPx > 0 && (y1 - y0) * box.h < 1.6 * fontPx);
           const selected = selectedId === item.nodeId;
           const node = nodes.find((n) => n.id === item.nodeId)!;
           return (
@@ -147,22 +189,24 @@ const PageCanvas: React.FC<{
               key={item.key}
               onClick={() => onSelect?.(node)}
               title={`${item.type} · ${(x0 * 100).toFixed(1)}%, ${(y0 * 100).toFixed(1)}%`}
-              className={`absolute overflow-hidden leading-tight cursor-pointer transition-colors ${
-                selected ? 'ring-2 ring-cyan-400 bg-cyan-400/10' : 'hover:bg-cyan-400/10'
-              }`}
+              className={`absolute leading-none cursor-pointer transition-colors ${
+                fit ? 'overflow-visible' : 'overflow-hidden leading-tight'
+              } ${selected ? 'ring-2 ring-cyan-400 bg-cyan-400/10' : 'hover:bg-cyan-400/10'}`}
               style={{
                 left: `${x0 * 100}%`,
                 top: `${y0 * 100}%`,
                 width: `${(x1 - x0) * 100}%`,
                 height: `${(y1 - y0) * 100}%`,
-                fontSize: height ? `${(pt / PAGE_H_PT) * height}px` : undefined,
+                fontSize: fontPx ? `${fontPx}px` : undefined,
                 fontWeight: st?.is_bold ? 700 : 400,
                 fontStyle: st?.is_italic ? 'italic' : 'normal',
                 fontFamily: familyOf(st),
                 color: rgb(st?.text_color_rgb) ?? '#111',
               }}
             >
-              {text || (
+              {text ? (
+                fit ? <FittedLine text={text} boxWidth={boxWidth} /> : text
+              ) : (
                 // Figures and other textless blocks still occupy the page —
                 // an empty div would make them look like nothing is there.
                 <span className="block w-full h-full border border-dashed border-slate-400 rounded-sm text-[8px] text-slate-500 px-0.5">

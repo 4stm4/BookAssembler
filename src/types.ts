@@ -309,6 +309,9 @@ export interface PageLayout {
   role: string;
   layout: 'positional' | 'reflow' | 'blank';
   block_ids: string[];
+  /** The source page's size in points, when the adapter recorded it. */
+  width_pt?: number;
+  height_pt?: number;
 }
 
 export interface GraphVisualizationData {

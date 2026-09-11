@@ -190,6 +190,10 @@ class PdfSourceAdapter(BaseSourceAdapter):
             page = pdf_doc.load_page(page_idx)
             pw = float(page.rect.width) or 1.0
             ph = float(page.rect.height) or 1.0
+            # Every bbox is normalised to its page, so the page's own size is
+            # what turns it and a font size in points back into a layout. A
+            # scan is rarely A4; assuming A4 drew every such page too small.
+            doc.metadata.setdefault("page_sizes_pt", []).append([round(pw, 2), round(ph, 2)])
             page_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_PRESERVE_WHITESPACE)
 
             page_has_text = False

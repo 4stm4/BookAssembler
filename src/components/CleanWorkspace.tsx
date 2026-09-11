@@ -114,7 +114,8 @@ const PageGroup: React.FC<{
   items?: KRMNode[];
   children: React.ReactNode;
 }> = ({ page, jobId, onRefinePage, items, children }) => {
-  const layout = React.useContext(PageLayoutCtx)[page]?.layout;
+  const pageLayout = React.useContext(PageLayoutCtx)[page];
+  const layout = pageLayout?.layout;
   const [status, setStatus] = useState<'idle' | 'running' | 'done'>('idle');
   const [showPreview, setShowPreview] = useState(false);
   // Positional pages (cover, title, toc) open reconstructed — that layout is
@@ -182,7 +183,14 @@ const PageGroup: React.FC<{
       </div>
       <div className="p-2 space-y-1">
         {view === 'canvas' && canReconstruct ? (
-          <PageCanvas jobId={jobId!} pageIndex={page} nodes={items!} />
+          <PageCanvas
+            jobId={jobId!}
+            pageIndex={page}
+            nodes={items!}
+            pageSizePt={pageLayout?.width_pt && pageLayout?.height_pt
+              ? { w: pageLayout.width_pt, h: pageLayout.height_pt }
+              : undefined}
+          />
         ) : (
           children
         )}

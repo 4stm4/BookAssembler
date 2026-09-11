@@ -189,15 +189,21 @@ def layout_for(slot: PageSlot) -> str:
 def page_layout_map(doc: KnowledgeDocument) -> List[Dict[str, Any]]:
     """Per-page layout decision plus the ids on each page, for the editor."""
     pages = group_by_page(doc)
+    sizes = (doc.metadata or {}).get("page_sizes_pt") or []
     out: List[Dict[str, Any]] = []
     for idx in sorted(pages):
         slot = pages[idx]
-        out.append({
+        entry: Dict[str, Any] = {
             "page_index": idx,
             "role": slot.role,
             "layout": layout_for(slot),
             "block_ids": [b.id for b in slot.blocks],
-        })
+        }
+        # The page's real size: a reconstruction drawn on A4 put a scan's text
+        # at the wrong scale (RFC 0021 §3 — positional render keeps size).
+        if idx < len(sizes) and sizes[idx]:
+            entry["width_pt"], entry["height_pt"] = sizes[idx][0], sizes[idx][1]
+        out.append(entry)
     return out
 
 

@@ -688,6 +688,7 @@ def create_app() -> FastAPI:
             "source_uri": doc.source_uri,
             "source_type": doc.source_type,
             "page_count": doc.metadata.get("page_count", 0) if doc.metadata else 0,
+            "page_sizes_pt": (doc.metadata or {}).get("page_sizes_pt") or [],
             "containers": serialized,
             "semantic_units": semantic,
         }
@@ -903,7 +904,11 @@ def create_app() -> FastAPI:
             title=data.get("title", ""),
             source_uri=data.get("_source_uri", data.get("source_uri", "")),
             source_type=data.get("_source_type", data.get("source_type", "pdf")),
-            metadata={"page_count": data.get("page_count", 0)},
+            metadata={
+                "page_count": data.get("page_count", 0),
+                # Without them the editor falls back to drawing every page as A4.
+                **({"page_sizes_pt": data["page_sizes_pt"]} if data.get("page_sizes_pt") else {}),
+            },
         )
         for c in data.get("containers", []):
             doc.root_containers.append(rebuild_node(c))
@@ -1549,6 +1554,20 @@ def create_app() -> FastAPI:
         doc = docs_store.get(job_id)
         if doc is None:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        if not (doc.metadata or {}).get("page_sizes_pt"):
+            # Processed before the adapter recorded page sizes: read them from
+            # the source — without them the editor draws every page as A4.
+            try:
+                pdf = await _open_source_pdf(job_id, doc)
+                try:
+                    doc.metadata["page_sizes_pt"] = [
+                        [round(float(p.rect.width), 2), round(float(p.rect.height), 2)]
+                        for p in pdf
+                    ]
+                finally:
+                    pdf.close()
+            except HTTPException:
+                pass  # no source to read — the layout still stands without sizes
         from src.assembler.page_assembler import page_layout_map
         return {"job_id": job_id, "pages": page_layout_map(doc)}
 
