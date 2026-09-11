@@ -590,6 +590,35 @@ def test_edge_numbers_that_are_not_folios_do_not_form_the_chain():
     assert pm.resolve("5") == 5 and pm.resolve("21") == 21 and pm.resolve("12") == 12
 
 
+def test_a_shift_that_falls_where_the_scan_missed_a_page():
+    """Intel 3000, chapter 2: page 2-38 is not in the file — the shift
+    goes 8 → 7 → 6; a stray "2-64" on page 61 fits nothing."""
+    from src.analyzers.toc.folios import PageMap
+    folios = [(p, f"2-{p - 8}") for p in range(40, 46)] + \
+             [(p, f"2-{p - 7}") for p in range(46, 61)] + [(61, "2-64")] + \
+             [(p, f"2-{p - 7}") for p in range(62, 67)] + [(p, f"2-{p - 6}") for p in range(67, 71)]
+    pm = PageMap(folios)
+    assert pm.resolve("2-39") == 46 and pm.resolve("2-49") == 56 and pm.resolve("2-63") == 69
+
+
+def test_a_folio_absorbed_into_a_diagram_still_counts():
+    """MCS-40, chapter 3: the folio line went into a DiagramBlock's labels
+    and was tombstoned; it still says which page it is."""
+    def folio(page, text, tomb=False):
+        b = _para(page, (0.8, 0.95, text))
+        b.is_tombstoned = tomb
+        return b
+    toc = ContainerUnit(title="Contents", semantic_type="toc",
+                        visual_layout=VisualLayout(NormalizedRect(0, 0, 1, 1), 2), children=[
+        TocEntryBlock(entry_text="Interface Characteristics", page_label="3-2"),
+    ])
+    pages = [folio(55, "3·1", True), folio(57, "3-3"), folio(58, "3-4", True), folio(60, "3-6", True)]
+    doc = KnowledgeDocument(title="t", source_uri="test://", root_containers=[
+        ContainerUnit(title="book", children=[toc] + pages)])
+    TocLinkAnalyzer().run(doc, ReadingGraph(), KnowledgeGraph())
+    assert toc.children[0].target_page == 56
+
+
 def test_a_section_number_in_the_running_head_is_not_the_folio():
     """MetaPost: "3 УПРАВЛЕНИЕ ВЫВОДОМ METAPOST … 5" — section 3 on pages
     whose own numbers are 5 and 6; neighbouring sections agree on a shift

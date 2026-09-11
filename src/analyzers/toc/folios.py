@@ -25,11 +25,13 @@ MAX_EDGE_TEXT = 80
 # Numbers at a page's edge that are not its folio are many on a scan: table
 # cells, diagram labels, the telephone numbers of sales offices (Signetics:
 # 500 candidates over 106 pages). The folios are the ones that form a chain
-# through the book — the number grows with the page, and the shift between
-# them never shrinks (a plate or a blank page without a folio only adds to
-# it). The longest such chain is the book's numbering; a chain this short is
-# no numbering at all.
+# through the book: the number grows with the page, and the shift between
+# them moves only in small steps — a plate without a folio adds a page, a
+# page the scan missed takes one away (Intel 3000, chapter 2: 8 → 7 → 6).
+# The longest such chain is the book's numbering; a chain this short is no
+# numbering at all.
 MIN_CHAIN = 3
+MAX_SHIFT_STEP = 8
 
 # "2-15" as printed; a scan's OCR reads the hyphen as a raised dot as often
 # as not ("2·15", "1·35" — Intel 3000, MCS-40). A full stop is not taken:
@@ -83,8 +85,8 @@ def folio_candidates(text: str) -> List[str]:
 
 def _longest_chain(points: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
     """The longest run of (page, number) — pages rising, numbers rising, the
-    shift page − number never falling. Among equally long runs, the one
-    whose shift moves least."""
+    shift page − number moving by at most MAX_SHIFT_STEP from one point to
+    the next. Among equally long runs, the one whose shift moves least."""
     if not points:
         return []
     best: List[Tuple[int, int]] = [(1, 0)] * len(points)   # (length, -total shift change)
@@ -92,8 +94,9 @@ def _longest_chain(points: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
     for i, (pi, ni) in enumerate(points):
         for j in range(i):
             pj, nj = points[j]
-            if pj < pi and nj < ni and pj - nj <= pi - ni:
-                cand = (best[j][0] + 1, best[j][1] - ((pi - ni) - (pj - nj)))
+            step = abs((pi - ni) - (pj - nj))
+            if pj < pi and nj < ni and step <= MAX_SHIFT_STEP:
+                cand = (best[j][0] + 1, best[j][1] - step)
                 if cand > best[i]:
                     best[i], prev[i] = cand, j
     i = max(range(len(points)), key=lambda k: best[k])
