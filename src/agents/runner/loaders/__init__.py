@@ -10,6 +10,7 @@ from typing import Callable, Dict, List
 
 from src.agents.runner.loaders.base import EchoLoader, ModelLoader
 from src.agents.runner.loaders.qwen_vl import QwenVLLoader
+from src.agents.runner.loaders.qwen_text import QwenTextLoader
 
 
 # Slug → factory. Slugs come from KAE_RUNNER_LOADERS and stay stable so the
@@ -17,6 +18,7 @@ from src.agents.runner.loaders.qwen_vl import QwenVLLoader
 LOADER_REGISTRY: Dict[str, Callable[[], ModelLoader]] = {
     "echo": lambda: EchoLoader(),
     "qwen_vl": lambda: QwenVLLoader(),
+    "qwen_text": lambda: QwenTextLoader(),
 }
 
 
@@ -37,6 +39,6 @@ def build_loaders(slugs: List[str]) -> List[ModelLoader]:
 
 
 __all__ = [
-    "ModelLoader", "EchoLoader", "QwenVLLoader",
+    "ModelLoader", "EchoLoader", "QwenVLLoader", "QwenTextLoader",
     "LOADER_REGISTRY", "build_loaders",
 ]

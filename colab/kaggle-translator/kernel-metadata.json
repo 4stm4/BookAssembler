@@ -1,0 +1,17 @@
+{
+  "id": "phoenixfree/kae-gpu-translator",
+  "id_no": null,
+  "title": "kae-gpu-translator",
+  "code_file": "translator.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "keywords": [],
+  "dataset_sources": [],
+  "kernel_sources": [],
+  "competition_sources": [],
+  "model_sources": []
+}
