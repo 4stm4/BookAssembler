@@ -10,6 +10,7 @@ Heavy deps imported lazily so CPU-only environments can import this module.
 
 import asyncio
 import logging
+import time
 from typing import Any, List, Optional
 
 log = logging.getLogger(__name__)
@@ -88,6 +89,7 @@ class QwenTextLoader:
         task: str,
         prompt: Optional[str] = None,
         max_new_tokens: Optional[int] = None,
+        timeout: int = 120,
     ) -> str:
         if not self.loaded:
             raise RuntimeError("QwenTextLoader.infer() called before load()")
@@ -95,8 +97,10 @@ class QwenTextLoader:
             raise ValueError(f"task '{task}' requires a prompt")
 
         limit = min(max_new_tokens, self._max_new_tokens) if max_new_tokens else self._max_new_tokens
+        deadline = time.monotonic() + timeout
 
         def _infer_sync() -> str:
+            from src.agents.runner.loaders.qwen_vl import _DeadlineCriteria
             messages = [{"role": "user", "content": prompt}]
             text = self._tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
@@ -104,7 +108,14 @@ class QwenTextLoader:
             inputs = self._tokenizer(
                 text, return_tensors="pt", padding=True
             ).to("cuda")
-            out = self._model.generate(**inputs, max_new_tokens=limit)
+            stopper = _DeadlineCriteria(deadline)
+            out = self._model.generate(
+                **inputs, max_new_tokens=limit,
+                stopping_criteria=[stopper],
+            )
+            if time.monotonic() > deadline:
+                log.warning("infer: %s hit %ds deadline", task, timeout)
+                raise TimeoutError(f"{task} inference exceeded {timeout}s")
             trimmed = out[0][inputs.input_ids.shape[1]:]
             return self._tokenizer.decode(trimmed, skip_special_tokens=True)
 
