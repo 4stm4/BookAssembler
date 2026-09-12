@@ -180,6 +180,14 @@ class PageAgentAnalyzer(BaseAnalyzer):
         classify_mode: bool, kind: str, model: Optional[str],
     ) -> "_PageResult":
         """One page's network work. Runs on a worker thread; touches no KRM."""
+        # Re-read agents.json so a tunnel URL change mid-batch takes effect
+        # without restarting the whole extraction.
+        fresh_host, fresh_model, fresh_kind = pick("vision")
+        if fresh_host:
+            host, kind = fresh_host, fresh_kind
+            if fresh_model:
+                model = fresh_model
+
         if not classify_mode:
             latex = self._recognize_table(
                 pdf_path, page_index, host, blocks, kind=kind, model=model,
