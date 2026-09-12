@@ -113,7 +113,6 @@ class QwenTextLoader:
                 **inputs, max_new_tokens=limit,
                 stopping_criteria=[stopper],
                 repetition_penalty=1.15,
-                no_repeat_ngram_size=4,
             )
             if time.monotonic() > deadline:
                 log.warning("infer: %s hit %ds deadline", task, timeout)
