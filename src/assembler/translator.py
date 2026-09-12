@@ -122,6 +122,42 @@ _GLOSSARY: dict[str, dict[str, str]] = {
         "word": "слово",
         "byte": "байт",
         "nibble": "полубайт",
+        "chip": "микросхема",
+        "shifter": "схема сдвига",
+        "hardware": "аппаратное обеспечение",
+        "hardware organization": "аппаратная организация",
+        "basic concepts": "основные понятия",
+        "basic programming techniques": "основные приёмы программирования",
+        "addressing techniques": "методы адресации",
+        "application examples": "примеры применения",
+        "program development": "разработка программ",
+        "instruction format": "формат команды",
+        "flowchart": "блок-схема",
+        "flowcharting": "составление блок-схем",
+        "powers of 2": "степени двойки",
+        "input/output devices": "устройства ввода-вывода",
+        "input/output techniques": "методы ввода-вывода",
+        "data structures": "структуры данных",
+        "index register": "индексный регистр",
+        "flag register": "регистр флагов",
+        "general-purpose register": "регистр общего назначения",
+        "refresh register": "регистр регенерации",
+        "memory": "память",
+        "RAM": "ОЗУ",
+        "ROM": "ПЗУ",
+        "stack": "стек",
+        "queue": "очередь",
+        "linked list": "связный список",
+        "binary tree": "двоичное дерево",
+        "lookup table": "таблица поиска",
+        "assembler": "ассемблер",
+        "assembly language": "язык ассемблера",
+        "compiler": "компилятор",
+        "debugger": "отладчик",
+        "editor": "редактор",
+        "loader": "загрузчик",
+        "monitor": "монитор",
+        "simulator": "симулятор",
     },
 }
 
@@ -140,6 +176,7 @@ def _build_translate_prompt(text: str, target_lang: str) -> str:
         "Rules:\n"
         "- Keep instruction mnemonics, register and signal names, numbers, hexadecimal "
         "and binary values, labels and program code exactly as written.\n"
+        "- Keep processor names (Z80, 8080, 6502, etc.) exactly as written — never transliterate.\n"
         f"- Use the established {target_lang} terminology of the field.\n"
         "- Do not translate proper names (author names, company names).\n"
         f"- Reply in {target_lang} only. Never reply in Chinese or any other language.\n"
