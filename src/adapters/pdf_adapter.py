@@ -197,6 +197,21 @@ class PdfSourceAdapter(BaseSourceAdapter):
             page_dict = page.get_text("dict", flags=fitz.TEXT_PRESERVE_LIGATURES | fitz.TEXT_PRESERVE_WHITESPACE)
 
             page_has_text = False
+            # PyMuPDF occasionally emits two blocks at the identical bbox with
+            # identical text (e.g. a faux-bold double draw) — derive_source_id
+            # hashes (page, bbox, text), so without disambiguation the second
+            # occurrence collides with the first and ReadingOrderAnalyzer later
+            # sees the same node id twice in the reading sequence, which can
+            # close a cycle and abort the whole run.
+            _occurrence_seen: Dict[tuple, int] = {}
+
+            def _next_ordinal(key: tuple) -> Optional[int]:
+                n = _occurrence_seen.get(key, 0)
+                _occurrence_seen[key] = n + 1
+                # First occurrence keeps ordinal=None so its id matches what a
+                # source with no duplicate at this spot always produced —
+                # only the 2nd+ occurrence needs disambiguating.
+                return n if n > 0 else None
 
             for block in page_dict.get("blocks", []):
                 btype = block.get("type", 0)
@@ -222,7 +237,8 @@ class PdfSourceAdapter(BaseSourceAdapter):
 
                     fig = FigureBlock(
                         id=derive_source_id(
-                            "figure", source_uri, page_idx, norm_rect, image_uri
+                            "figure", source_uri, page_idx, norm_rect, image_uri,
+                            ordinal=_next_ordinal(("figure", page_idx, norm_rect, image_uri)),
                         ),
                         image_uri=image_uri,
                         mime_type=mime,
@@ -321,7 +337,8 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     ext_conf = _extraction_confidence(full_text)
                     code = CodeBlock(
                         id=derive_source_id(
-                            "code", source_uri, page_idx, norm_rect, full_text
+                            "code", source_uri, page_idx, norm_rect, full_text,
+                            ordinal=_next_ordinal(("code", page_idx, norm_rect, full_text)),
                         ),
                         code_text=full_text,
                         parent_container_id=current_container.id,
@@ -368,7 +385,8 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     ext_conf = _extraction_confidence(full_text)
                     para = ParagraphBlock(
                         id=derive_source_id(
-                            "paragraph", source_uri, page_idx, norm_rect, full_text
+                            "paragraph", source_uri, page_idx, norm_rect, full_text,
+                            ordinal=_next_ordinal(("paragraph", page_idx, norm_rect, full_text)),
                         ),
                         inlines=inlines,
                         parent_container_id=current_container.id,
