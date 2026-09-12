@@ -64,6 +64,76 @@ MAX_ATTEMPTS = 3
 RETIRE_AFTER = 5
 
 
+_GLOSSARY: dict[str, dict[str, str]] = {
+    "Russian": {
+        "two's complement": "дополнительный код",
+        "one's complement": "обратный код",
+        "sign bit": "знаковый бит",
+        "carry flag": "флаг переноса",
+        "overflow flag": "флаг переполнения",
+        "zero flag": "флаг нуля",
+        "sign flag": "знаковый флаг",
+        "half-carry flag": "флаг полупереноса",
+        "program counter": "счётчик команд",
+        "stack pointer": "указатель стека",
+        "accumulator": "аккумулятор",
+        "instruction set": "система команд",
+        "opcode": "код операции",
+        "operand": "операнд",
+        "addressing mode": "режим адресации",
+        "immediate addressing": "непосредственная адресация",
+        "direct addressing": "прямая адресация",
+        "indirect addressing": "косвенная адресация",
+        "indexed addressing": "индексная адресация",
+        "register pair": "регистровая пара",
+        "interrupt": "прерывание",
+        "maskable interrupt": "маскируемое прерывание",
+        "non-maskable interrupt": "немаскируемое прерывание",
+        "subroutine": "подпрограмма",
+        "conditional jump": "условный переход",
+        "unconditional jump": "безусловный переход",
+        "bit manipulation": "битовые операции",
+        "shift": "сдвиг",
+        "rotate": "циклический сдвиг",
+        "arithmetic shift": "арифметический сдвиг",
+        "logical shift": "логический сдвиг",
+        "fetch": "выборка",
+        "decode": "декодирование",
+        "execute": "выполнение",
+        "bus": "шина",
+        "data bus": "шина данных",
+        "address bus": "шина адреса",
+        "control bus": "шина управления",
+        "clock cycle": "тактовый цикл",
+        "machine cycle": "машинный цикл",
+        "memory-mapped I/O": "ввод-вывод с отображением на память",
+        "input/output": "ввод-вывод",
+        "handshake": "квитирование",
+        "polling": "опрос",
+        "DMA": "ПДП (прямой доступ к памяти)",
+        "latch": "защёлка",
+        "buffer": "буфер",
+        "binary-coded decimal": "двоично-десятичный код",
+        "BCD": "ДДК",
+        "most significant bit": "старший бит",
+        "least significant bit": "младший бит",
+        "signed": "знаковый",
+        "unsigned": "беззнаковый",
+        "word": "слово",
+        "byte": "байт",
+        "nibble": "полубайт",
+    },
+}
+
+
+def _glossary_block(target_lang: str) -> str:
+    terms = _GLOSSARY.get(target_lang)
+    if not terms:
+        return ""
+    lines = [f"  {eng} → {loc}" for eng, loc in terms.items()]
+    return "Glossary (use these terms):\n" + "\n".join(lines) + "\n\n"
+
+
 def _build_translate_prompt(text: str, target_lang: str) -> str:
     return (
         f"You are translating a technical book on computers and programming into {target_lang}.\n"
@@ -71,8 +141,11 @@ def _build_translate_prompt(text: str, target_lang: str) -> str:
         "- Keep instruction mnemonics, register and signal names, numbers, hexadecimal "
         "and binary values, labels and program code exactly as written.\n"
         f"- Use the established {target_lang} terminology of the field.\n"
+        "- Do not translate proper names (author names, company names).\n"
+        f"- Reply in {target_lang} only. Never reply in Chinese or any other language.\n"
         "- Translate everything and add nothing. Output only the translation: "
         "no notes, quotes or explanations.\n\n"
+        f"{_glossary_block(target_lang)}"
         f"Text:\n{text}"
     )
 
