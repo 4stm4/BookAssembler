@@ -47,6 +47,11 @@ class ModelPool:
     def tasks(self) -> List[str]:
         return sorted(self._by_task.keys())
 
+    def first_task(self) -> str:
+        if not self._by_task:
+            return "vision"
+        return next(iter(self._by_task))
+
     def loaded_names(self) -> List[str]:
         return sorted(name for name, ldr in self._loaders.items() if ldr.loaded)
 

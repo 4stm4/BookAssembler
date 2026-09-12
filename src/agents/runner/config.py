@@ -37,7 +37,7 @@ class RunnerConfig:
 
     # Which task loaders to prewarm so /ready flips quickly (see loaders/).
     warmup_tasks: List[str] = field(default_factory=lambda: _env_list(
-        "KAE_RUNNER_WARMUP_TASKS", ["vision"],
+        "KAE_RUNNER_WARMUP_TASKS", [],
     ))
 
     # Idle shutdown (RFC 0022 §5.4). Set to 0 to disable (dev only — INVARIANT §9.4).

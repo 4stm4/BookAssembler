@@ -80,9 +80,11 @@ def create_app(cfg: Optional[RunnerConfig] = None,
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        audit.runner_started(warmup=list(cfg.warmup_tasks))
-        # Warmup declared set (RFC 0022 §5.3).
-        for task in cfg.warmup_tasks:
+        warmup = list(cfg.warmup_tasks)
+        if not warmup:
+            warmup = [pool.first_task()]
+        audit.runner_started(warmup=warmup)
+        for task in warmup:
             try:
                 loader = await pool.ensure_loaded(task)
                 metrics.model_loads_total += 1
