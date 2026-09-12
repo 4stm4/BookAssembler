@@ -46,6 +46,11 @@ class RunnerConfig:
     # LRU model pool budget in MB; 0 → auto (detect free VRAM on start).
     vram_budget_mb: int = _env_int("KAE_RUNNER_VRAM_BUDGET_MB", 0)
 
+    # Hard timeout on a single model.generate() call (seconds).  A VL decode
+    # that starts repeating itself can run for minutes without producing a
+    # useful answer; killing it frees the infer lock for the next request.
+    infer_timeout: int = _env_int("KAE_RUNNER_INFER_TIMEOUT", 120)
+
     # Which loaders to register at startup. Comma-separated slugs, resolved
     # against src.agents.runner.loaders.LOADER_REGISTRY. Empty → EchoLoader
     # (dev / no-GPU / tests).

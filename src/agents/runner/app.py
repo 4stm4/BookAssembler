@@ -161,14 +161,16 @@ def create_app(cfg: Optional[RunnerConfig] = None,
         try:
             _bump()
             text = await pool.infer(task, png, prompt=prompt,
-                                    max_new_tokens=max_new_tokens, wanted=wanted)
+                                    max_new_tokens=max_new_tokens, wanted=wanted,
+                                    timeout=cfg.infer_timeout)
             _bump()
             ok = True
             return text
         except KeyError as e:
             raise HTTPException(400, str(e)) from e
+        except (asyncio.TimeoutError, TimeoutError):
+            raise HTTPException(504, f"inference timed out after {cfg.infer_timeout}s")
         except Abandoned as e:
-            # Not an inference failure: nobody was left to answer.
             abandoned = True
             raise HTTPException(499, "client left before its turn") from e
         finally:

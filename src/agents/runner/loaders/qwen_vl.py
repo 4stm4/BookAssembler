@@ -22,10 +22,32 @@ import tempfile
 from typing import Any, Dict, List, Optional
 
 
+import threading
+import time
+
 log = logging.getLogger(__name__)
 
 
 DEFAULT_MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
+
+# Lazy — torch/transformers may not be importable at module scope.
+_StoppingCriteria = None
+
+def _get_stopping_criteria_base():
+    global _StoppingCriteria
+    if _StoppingCriteria is None:
+        from transformers import StoppingCriteria as _SC
+        _StoppingCriteria = _SC
+    return _StoppingCriteria
+
+
+class _DeadlineCriteria:
+    """StoppingCriteria that fires when wall-clock time exceeds a deadline."""
+    def __init__(self, deadline: float) -> None:
+        self._deadline = deadline
+
+    def __call__(self, input_ids, scores, **kwargs) -> bool:
+        return time.monotonic() > self._deadline
 
 
 TASK_PROMPTS: Dict[str, str] = {
@@ -143,24 +165,19 @@ class QwenVLLoader:
         task: str,
         prompt: Optional[str] = None,
         max_new_tokens: Optional[int] = None,
+        timeout: int = 120,
     ) -> str:
         if not self.loaded:
             raise RuntimeError("QwenVLLoader.infer() called before load()")
-        # The caller knows how long a right answer can be: a page's block types
-        # are a few hundred tokens, and a greedy decode that starts repeating
-        # itself otherwise runs on to the loader's ceiling — minutes on a T4.
         limit = min(max_new_tokens, self._max_new_tokens) if max_new_tokens else self._max_new_tokens
 
         real_prompt = prompt or TASK_PROMPTS.get(task, TASK_PROMPTS["table"])
         if image_png is None and not prompt:
-            # A text task is nothing but its prompt; a task default would ask
-            # the model to describe an image that was never sent.
             raise ValueError(f"task '{task}' has no image and no prompt")
 
+        deadline = time.monotonic() + timeout
+
         def _infer_sync() -> str:
-            # Text tasks (RFC 0022 §4.4) run on this same model with no image:
-            # Qwen2.5-VL is multimodal, so dropping the image turns it into an
-            # ordinary text model rather than requiring a second one.
             tmp_path = None
             if image_png is not None:
                 fd, tmp_path = tempfile.mkstemp(suffix=".png")
@@ -183,7 +200,14 @@ class QwenVLLoader:
                     padding=True,
                     return_tensors="pt",
                 ).to("cuda")
-                out = self._model.generate(**inputs, max_new_tokens=limit)
+                stopper = _DeadlineCriteria(deadline)
+                out = self._model.generate(
+                    **inputs, max_new_tokens=limit,
+                    stopping_criteria=[stopper],
+                )
+                if time.monotonic() > deadline:
+                    log.warning("infer: %s hit %ds deadline", task, timeout)
+                    raise TimeoutError(f"{task} inference exceeded {timeout}s")
                 trimmed = [o[len(i):] for i, o in zip(inputs.input_ids, out)]
                 decoded = self._processor.batch_decode(
                     trimmed, skip_special_tokens=True

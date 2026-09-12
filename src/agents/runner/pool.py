@@ -103,19 +103,22 @@ class ModelPool:
     async def infer(self, task: str, image_png: Optional[bytes] = None,
                     prompt: Optional[str] = None, *,
                     max_new_tokens: Optional[int] = None,
-                    wanted: Optional[Callable[[], Awaitable[bool]]] = None) -> str:
+                    wanted: Optional[Callable[[], Awaitable[bool]]] = None,
+                    timeout: int = 120) -> str:
         loader = await self.ensure_loaded(task)
-        # One generation at a time. The module said so, but inference ran
-        # outside every lock: two in flight from PageAgent, plus a timed-out
-        # client's retry, ran model.generate side by side on one T4 — seven
-        # minutes of "Programming the Z80" without a single answer, no error.
         async with self._infer_lock:
             if wanted is not None and not await wanted():
-                # Its client timed out while it waited. Nobody will read the
-                # answer, and generating it would hold up everyone behind.
                 raise Abandoned(task)
             extra: Dict[str, Any] = {"max_new_tokens": max_new_tokens} if max_new_tokens else {}
-            result = await loader.infer(image_png, task, prompt=prompt, **extra)
+            extra["timeout"] = timeout
+            try:
+                result = await asyncio.wait_for(
+                    loader.infer(image_png, task, prompt=prompt, **extra),
+                    timeout=timeout + 5,
+                )
+            except asyncio.TimeoutError:
+                log.error("ModelPool: %s inference timed out after %ds", task, timeout)
+                raise
         self._last_used[loader.name] = time.time()
         return result
 
