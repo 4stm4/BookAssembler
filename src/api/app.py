@@ -750,6 +750,9 @@ def create_app() -> FastAPI:
             cc = n.get("classification_confidence")
             if cc is not None:
                 node.classification_confidence = cc
+            md = n.get("metadata")
+            if md:
+                node.metadata = md
 
         def rebuild_node(n: Dict[str, Any]) -> Any:
             t = n.get("type", "")
