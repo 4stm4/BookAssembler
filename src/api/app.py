@@ -980,6 +980,20 @@ def create_app() -> FastAPI:
     graphs_store: Any = BoundedLRU(int(os.environ.get("KAE_GRAPHS_CACHE_SIZE", "24")))
     progress_store: Any = BoundedLRU(int(os.environ.get("KAE_PROGRESS_CACHE_SIZE", "512")))
 
+    def _infer_target_lang(job_id: str) -> str:
+        """Best-effort: read target_lang from book.json, fall back to 'Russian'."""
+        book_json = os.path.join(kae_ssd_path, job_id, "book.json")
+        if os.path.isfile(book_json):
+            try:
+                with open(book_json) as f:
+                    data = json.load(f)
+                lang = data.get("target_lang", "")
+                if lang:
+                    return lang
+            except Exception:
+                pass
+        return "Russian"
+
     def _persist_doc(job_id: str, doc: KnowledgeDocument) -> None:
         path = os.path.join(_docs_dir, f"{job_id}.json")
         data = _serialize_document(doc)
@@ -1884,22 +1898,30 @@ def create_app() -> FastAPI:
         target_lang: str = "Russian"
         page_aware: bool = True
 
+    class PreviewRequest(BaseModel):
+        target_lang: str = ""
+
     @app.post("/api/v1/jobs/{job_id}/assemble/preview")
-    async def assemble_preview(job_id: str) -> Dict[str, Any]:
-        """Assemble document from KRM without translation (page-aware layout)."""
+    async def assemble_preview(job_id: str, body: PreviewRequest = PreviewRequest()) -> Dict[str, Any]:
+        """Assemble document from KRM (page-aware layout).
+
+        Pass target_lang (e.g. "Russian") to render translations;
+        omit it for a source-language preview.
+        """
         doc = docs_store.get(job_id)
         if doc is None:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
         from src.assembler.translator import _generate_pdf
+        lang = body.target_lang or _infer_target_lang(job_id)
         output_path = os.path.join(kae_ssd_path, job_id, "preview_pages.pdf")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
         def _run():
-            return _generate_pdf(doc, "", output_path, job_id, page_aware=True)
+            return _generate_pdf(doc, lang, output_path, job_id, page_aware=True)
 
         await asyncio.to_thread(_run)
         audit_logger.log("BOOK_ASSEMBLED", "api", {
-            "job_id": job_id, "target_lang": "", "mode": "preview",
+            "job_id": job_id, "target_lang": lang, "mode": "preview",
             "output": output_path,
         })
         return {"status": "completed", "download_url": f"/api/v1/jobs/{job_id}/download/preview"}
