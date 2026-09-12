@@ -926,6 +926,52 @@ def create_app() -> FastAPI:
                 tb.id = n.get("id", tb.id)
                 _restore_layout(tb, n)
                 return tb
+            elif t == "EphemeraBlock":
+                eb = EphemeraBlock(
+                    ephemera_type=n.get("ephemera_type", "header"),
+                    repeated_text=n.get("repeated_text", n.get("text", "")),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                eb.id = n.get("id", eb.id)
+                _restore_layout(eb, n)
+                return eb
+            elif t == "AlgorithmBlock":
+                ab = AlgorithmBlock(
+                    algorithm_name=n.get("algorithm_name", ""),
+                    algorithm_number=n.get("algorithm_number"),
+                    pseudocode=n.get("pseudocode", ""),
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                ab.id = n.get("id", ab.id)
+                _restore_layout(ab, n)
+                return ab
+            elif t == "SidebarBlock":
+                content = [rebuild_node(c) for c in n.get("content", [])]
+                sb = SidebarBlock(
+                    sidebar_type=n.get("sidebar_type", "note"),
+                    content=content,
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                sb.id = n.get("id", sb.id)
+                _restore_layout(sb, n)
+                return sb
+            elif t == "IndexEntryBlock":
+                subs = [
+                    IndexEntryBlock(
+                        term=s.get("term", ""),
+                        page_refs=s.get("page_refs", []),
+                    )
+                    for s in n.get("subentries", [])
+                ]
+                ie = IndexEntryBlock(
+                    term=n.get("term", ""),
+                    page_refs=n.get("page_refs", []),
+                    subentries=subs,
+                    confidence_score=n.get("confidence_score", 1.0),
+                )
+                ie.id = n.get("id", ie.id)
+                _restore_layout(ie, n)
+                return ie
             return ContainerUnit(title=n.get("title", "unknown"))
 
         doc = KnowledgeDocument(
