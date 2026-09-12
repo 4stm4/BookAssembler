@@ -45,6 +45,11 @@ class ReadingOrderAnalyzer(BaseAnalyzer):
         footnote_refs: List[tuple] = []  # (parent_block_id, footnote_id)
 
         def _collect(node: BaseKRMNode, parent_block_id: str = "") -> None:
+            if getattr(node, "is_tombstoned", False):
+                # Superseded content (e.g. blocks PageAgent folded into a
+                # TableBlock) stays in the tree for provenance but must never
+                # occupy the reading flow — RFC 0001 §2.4.
+                return
             if isinstance(node, ContainerUnit):
                 for child in node.children:
                     _collect(child, parent_block_id)
