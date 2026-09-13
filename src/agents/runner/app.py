@@ -4,7 +4,12 @@ Runner FastAPI app (RFC 0022 §4.2).
 Endpoints:
     GET  /health           # cheap, no model load
     GET  /ready            # 200 once the warmup set is loaded
-    POST /infer            # {task, image_b64?, prompt?} → {text}
+    POST /infer            # {task, image_b64?, prompt?} → {text} — shared envelope
+    POST /vision           # {image_b64, prompt?} → {text} — one route per role
+    POST /table            #   (RFC 0022 §4.4): the route implies `task`, so a
+    POST /formula          #   caller can never send it to the wrong queue.
+    POST /refine           # {prompt} → {text}
+    POST /translate        # {prompt} → {text}
     POST /ocr              # legacy alias, task='table'
     POST /shutdown         # graceful stop
     GET  /models           # {task→model, loaded[], vram_used_mb}
@@ -52,6 +57,25 @@ class InferRequest(BaseModel):
 class OcrRequest(BaseModel):
     image_b64: str
     ocr_type: Optional[str] = "format"
+
+
+class ImageTaskRequest(BaseModel):
+    """Body for a role-specific image endpoint (vision/table/formula).
+
+    `task` is implied by the route, so callers never pass it — one fewer way
+    to send a request to the wrong queue.
+    """
+
+    image_b64: str
+    prompt: Optional[str] = None
+    max_new_tokens: Optional[int] = Field(default=None, ge=1)
+
+
+class TextTaskRequest(BaseModel):
+    """Body for a role-specific text endpoint (refine/translate)."""
+
+    prompt: str
+    max_new_tokens: Optional[int] = Field(default=None, ge=1)
 
 
 def _decode_png(b64: str) -> bytes:
@@ -203,6 +227,41 @@ def create_app(cfg: Optional[RunnerConfig] = None,
         png = _decode_png(body.image_b64)
         text = await _do_infer("table", png, None)
         return {"text": text}
+
+    def _image_endpoint(task: str):
+        async def handler(body: ImageTaskRequest, request: Request) -> dict:
+            png = _decode_png(body.image_b64)
+
+            async def wanted() -> bool:
+                return not await request.is_disconnected()
+
+            text = await _do_infer(task, png, body.prompt,
+                                   max_new_tokens=body.max_new_tokens, wanted=wanted)
+            return {"text": text}
+        return handler
+
+    def _text_endpoint(task: str):
+        async def handler(body: TextTaskRequest, request: Request) -> dict:
+            async def wanted() -> bool:
+                return not await request.is_disconnected()
+
+            text = await _do_infer(task, None, body.prompt,
+                                   max_new_tokens=body.max_new_tokens, wanted=wanted)
+            return {"text": text}
+        return handler
+
+    # One named route per role (RFC 0022 §4.4): a client that only ever does
+    # vision classification calls /vision and never has to know the shared
+    # /infer envelope exists, and a typo in `task` can no longer route a
+    # request to the wrong queue — the route itself is the task.
+    for _task in ("vision", "table", "formula"):
+        app.post(f"/{_task}", dependencies=[Depends(_require_token)])(
+            _image_endpoint(_task)
+        )
+    for _task in ("refine", "translate"):
+        app.post(f"/{_task}", dependencies=[Depends(_require_token)])(
+            _text_endpoint(_task)
+        )
 
     @app.post("/shutdown", dependencies=[Depends(_require_token)])
     async def shutdown() -> dict:

@@ -252,9 +252,17 @@ def call_infer(
     token = _token_for_host(host)
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    # /ocr is a legacy alias that only ever spoke image payloads (RFC 0022
-    # §4.1), so a text task has nothing to fall back to.
-    paths = ("/infer",) if b64 is None else ("/infer", "/ocr")
+    # A role gets its own route (RFC 0022 §4.4) so a request can never land
+    # in the wrong queue by a wrong `task` string; /infer is kept as the
+    # fallback for a Runner still on the shared-envelope version, and /ocr as
+    # the legacy alias that only ever spoke image payloads (RFC 0022 §4.1).
+    _ROLE_PATHS = {"vision": "/vision", "table": "/table", "formula": "/formula",
+                   "refine": "/refine", "translate": "/translate"}
+    role_path = _ROLE_PATHS.get(task)
+    if role_path:
+        paths = (role_path, "/infer") if b64 is None else (role_path, "/infer", "/ocr")
+    else:
+        paths = ("/infer",) if b64 is None else ("/infer", "/ocr")
     for path in paths:
         text, exc = _post_infer(f"{host}{path}", payload, headers,
                                 timeout=timeout, attempts=attempts)
