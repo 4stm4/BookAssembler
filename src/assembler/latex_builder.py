@@ -176,10 +176,14 @@ def build_latex(
     cover) and reflow for text pages (RFC 0021 §3).
     """
     if page_aware:
-        from src.assembler.page_assembler import assemble_pages
-        title = _esc(doc.title or "Untitled")
-        header = f"\\title{{{title}}}\n\\maketitle\n"
-        return _PREAMBLE + header + assemble_pages(doc, target_lang) + _POSTAMBLE
+        # No synthetic \maketitle here: assemble_pages already renders the
+        # source's own title/cover page positionally, at its real
+        # page_or_screen_index (POSITIONAL_ROLES in page_assembler.py). A
+        # \maketitle banner would insert an extra page with no source page
+        # index of its own, permanently offsetting every page after it from
+        # its counterpart in the original — breaking the page correspondence
+        # this pipeline exists to preserve.
+        return _PREAMBLE + assemble_pages(doc, target_lang) + _POSTAMBLE
 
     body: List[str] = []
     title = _esc(doc.title or "Untitled")
