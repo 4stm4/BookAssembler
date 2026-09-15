@@ -12,10 +12,11 @@ from src.krm.models import (
     TitlePageBlock,
     TextLineInline,
     StyledTextSpan,
+    UnknownBlock,
 )
 
 def _get_text(block: Any) -> str:
-    if isinstance(block, ParagraphBlock):
+    if isinstance(block, (ParagraphBlock, UnknownBlock)):
         parts = []
         for inline in (block.inlines or []):
             for span in getattr(inline, "spans", []):

@@ -20,6 +20,7 @@ from src.krm.models import (
     ContainerUnit,
     KnowledgeDocument,
     ParagraphBlock,
+    UnknownBlock,
 )
 
 from src.analyzers.citation.signals import _CITE_RE
@@ -95,7 +96,7 @@ class CitationLinkerAnalyzer(BaseAnalyzer):
             if isinstance(child, ContainerUnit):
                 self._link_citations(child, kg, bib_map)
                 continue
-            if not isinstance(child, ParagraphBlock) or child.is_tombstoned:
+            if not isinstance(child, (ParagraphBlock, UnknownBlock)) or child.is_tombstoned:
                 continue
             text = block_text(child)
             for m in _CITE_RE.finditer(text):

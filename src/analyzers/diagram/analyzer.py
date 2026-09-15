@@ -11,6 +11,7 @@ from src.krm.models import (
     DiagramBlock,
     KnowledgeDocument,
     ParagraphBlock,
+    UnknownBlock,
     VisualLayout,
     NormalizedRect,
 )
@@ -50,7 +51,7 @@ class DiagramDetectorAnalyzer(BaseAnalyzer):
                     continue
                 if isinstance(child, ContainerUnit):
                     walk(child)
-                elif isinstance(child, ParagraphBlock) and not isinstance(child, DiagramBlock):
+                elif isinstance(child, (ParagraphBlock, UnknownBlock)) and not isinstance(child, DiagramBlock):
                     pg = page_of(child)
                     if pg is not None and _bbox_of(child) is not None:
                         by_page.setdefault(pg, []).append((child, container))

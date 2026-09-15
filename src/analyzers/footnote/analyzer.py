@@ -16,6 +16,7 @@ from src.krm.models import (
     FootnoteBlock,
     KnowledgeDocument,
     ParagraphBlock,
+    UnknownBlock,
 )
 
 from src.analyzers.footnote.rules import _bbox_bottom_y, _full_text, _parse_marker
@@ -58,7 +59,7 @@ class FootnoteDetectorAnalyzer(BaseAnalyzer):
             for n in nodes:
                 if isinstance(n, ContainerUnit):
                     walk(n.children)
-                elif isinstance(n, ParagraphBlock) and not n.is_tombstoned:
+                elif isinstance(n, (ParagraphBlock, UnknownBlock)) and not n.is_tombstoned:
                     s = font_size(n)
                     if s:
                         sizes.append(round(s, 1))
@@ -75,10 +76,10 @@ class FootnoteDetectorAnalyzer(BaseAnalyzer):
 
         new_children: List[Any] = []
         for child in container.children:
-            if not isinstance(child, ParagraphBlock) or child.is_tombstoned:
+            if not isinstance(child, (ParagraphBlock, UnknownBlock)) or child.is_tombstoned:
                 new_children.append(child)
                 continue
-            if type(child) is not ParagraphBlock:
+            if type(child) not in (ParagraphBlock, UnknownBlock):
                 new_children.append(child)
                 continue
 

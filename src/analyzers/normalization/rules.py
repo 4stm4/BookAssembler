@@ -11,6 +11,7 @@ from src.krm.models import (
     ParagraphBlock,
     SpanUnit,
     TableBlock,
+    UnknownBlock,
 )
 
 def _collect_spans(doc: KnowledgeDocument) -> List[SpanUnit]:
@@ -22,7 +23,7 @@ def _collect_spans(doc: KnowledgeDocument) -> List[SpanUnit]:
         elif isinstance(node, ContainerUnit):
             for child in node.children:
                 _walk(child)
-        elif isinstance(node, ParagraphBlock):
+        elif isinstance(node, (ParagraphBlock, UnknownBlock)):
             for inline in node.inlines:
                 _walk(inline)
         elif isinstance(node, InlineUnit):

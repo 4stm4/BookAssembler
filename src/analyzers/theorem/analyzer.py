@@ -18,6 +18,7 @@ from src.krm.models import (
     ProofSpec,
     RemarkSpec,
     TheoremSpec,
+    UnknownBlock,
 )
 
 from src.analyzers.theorem.signals import _EXAMPLE_RE, _PROOF_END_MARKERS, _PROOF_RE, _REMARK_RE, _THEOREM_RE, _THEOREM_TYPES
@@ -60,10 +61,10 @@ class TheoremDetectorAnalyzer(BaseAnalyzer):
         active_id: str = ""
 
         for child in container.children:
-            if not isinstance(child, ParagraphBlock) or child.is_tombstoned:
+            if not isinstance(child, (ParagraphBlock, UnknownBlock)) or child.is_tombstoned:
                 active_env = None
                 continue
-            if type(child) is not ParagraphBlock:
+            if type(child) not in (ParagraphBlock, UnknownBlock):
                 active_env = None
                 continue
 

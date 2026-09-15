@@ -10,7 +10,7 @@ from src.analyzers.base import (
 )
 from src.graph.knowledge_graph import KGEntityNode, KnowledgeGraph, RelationType
 from src.graph.reading_graph import ReadingGraph
-from src.krm.models import ContainerUnit, KnowledgeDocument, ParagraphBlock
+from src.krm.models import ContainerUnit, KnowledgeDocument, ParagraphBlock, UnknownBlock
 from src.graph.knowledge_graph import EntityType
 
 from src.analyzers.heading.rules import _collect_containers, _detect_heading_threshold, _heading_level, _is_heading, _is_monospace
@@ -51,7 +51,7 @@ class HeadingAnalyzer(BaseAnalyzer):
         for root in doc.root_containers:
             for blk in root.children:
                 if (
-                    isinstance(blk, ParagraphBlock)
+                    isinstance(blk, (ParagraphBlock, UnknownBlock))
                     and not blk.is_tombstoned
                     and not _is_monospace(blk)
                 ):

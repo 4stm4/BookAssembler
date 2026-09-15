@@ -6,7 +6,7 @@ from src.analyzers.access import block_text
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
-from src.krm.models import ContainerUnit, KnowledgeDocument, ParagraphBlock
+from src.krm.models import ContainerUnit, KnowledgeDocument, ParagraphBlock, UnknownBlock
 
 from src.analyzers.scan_noise.rules import is_scan_noise
 
@@ -50,7 +50,7 @@ class ScanNoiseAnalyzer(BaseAnalyzer):
             if isinstance(child, ContainerUnit):
                 self._process(child)
             elif (
-                type(child) is ParagraphBlock
+                type(child) in (ParagraphBlock, UnknownBlock)
                 and not child.is_tombstoned
                 and is_scan_noise(block_text(child))
             ):

@@ -12,6 +12,7 @@ from src.krm.models import (
     ContainerUnit,
     KnowledgeDocument,
     ParagraphBlock,
+    UnknownBlock,
 )
 
 from src.analyzers.llm_refinement.config import CONFIDENCE_THRESHOLD, MAX_TOTAL_TIME, OLLAMA_MODEL, OLLAMA_URL
@@ -133,7 +134,7 @@ class LLMRefinementAnalyzer(BaseAnalyzer):
         for child in container.children:
             if isinstance(child, ContainerUnit):
                 self._collect_low_confidence(child, results)
-            elif isinstance(child, ParagraphBlock):
+            elif isinstance(child, (ParagraphBlock, UnknownBlock)):
                 md = child.metadata or {}
                 # "llm_refined_at" is the legacy timestamp marker — still
                 # honoured so documents persisted before the switch stay skipped.

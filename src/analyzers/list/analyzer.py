@@ -18,6 +18,7 @@ from src.krm.models import (
     ListItemBlock,
     ParagraphBlock,
     StructuralUnit,
+    UnknownBlock,
 )
 
 from src.analyzers.list.rules import _classify_marker, _first_span_text, _strip_marker
@@ -104,7 +105,7 @@ class ListDetectorAnalyzer(BaseAnalyzer):
             buffer.clear()
 
         for child in container.children:
-            if isinstance(child, ParagraphBlock) and not child.is_tombstoned:
+            if isinstance(child, (ParagraphBlock, UnknownBlock)) and not child.is_tombstoned:
                 text = _first_span_text(child)
                 classified = _classify_marker(text) if text else None
                 if classified:

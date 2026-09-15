@@ -37,11 +37,11 @@ from src.krm.models import (
     InlineUnit,
     KnowledgeDocument,
     NormalizedRect,
-    ParagraphBlock,
     ProvenanceInfo,
     StyleDescriptor,
     StyledTextSpan,
     TextLineInline,
+    UnknownBlock,
     VisualLayout,
 )
 
@@ -383,7 +383,11 @@ class PdfSourceAdapter(BaseSourceAdapter):
                             ),
                         )])]
                     ext_conf = _extraction_confidence(full_text)
-                    para = ParagraphBlock(
+                    # UnknownBlock, not ParagraphBlock: the adapter cannot judge
+                    # whether this run of text is prose, a heading, a caption, or
+                    # a table row without semantic analysis (RFC 0008 §5.2) — that
+                    # judgment belongs to the classification analyzers downstream.
+                    para = UnknownBlock(
                         id=derive_source_id(
                             "paragraph", source_uri, page_idx, norm_rect, full_text,
                             ordinal=_next_ordinal(("paragraph", page_idx, norm_rect, full_text)),
@@ -399,7 +403,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     current_container.children.append(para)
 
             if not page_has_text:
-                placeholder = ParagraphBlock(
+                placeholder = UnknownBlock(
                     id=derive_source_id(
                         "ocr-placeholder", source_uri, page_idx, None, ""
                     ),

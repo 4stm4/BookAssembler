@@ -196,6 +196,21 @@ class ParagraphBlock(StructuralUnit):
 
 
 @dataclass
+class UnknownBlock(StructuralUnit):
+    """
+    Text extracted from a source with no semantic role assigned yet.
+
+    Adapters emit this for any text run they cannot classify without
+    judgment (RFC 0008 §5.2 forbids semantic analysis in an adapter, and
+    RFC 0002's structural layer has no neutral placeholder otherwise). Every
+    classification analyzer in the pipeline may claim one of these; whatever
+    is still an UnknownBlock at the end is resolved to ParagraphBlock by
+    UnknownResolverAnalyzer, the pipeline's final default.
+    """
+    inlines: List[InlineUnit] = field(default_factory=list)
+
+
+@dataclass
 class TableCell(BaseKRMNode):
     """
     Cell inside a table grid containing structural units.

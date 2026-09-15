@@ -14,10 +14,11 @@ from src.krm.models import (
     TableBlock,
     TableCell,
     TextLineInline,
+    UnknownBlock,
 )
 
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
-from src.analyzers.table.rules import _bbox, _cluster_columns, _count_columns, _find_table_runs, _get_text, _looks_like_separator, _page_idx
+from src.analyzers.table.rules import _bbox, _cluster_columns, _count_columns, _find_table_runs, _get_text, _looks_like_separator, _page_idx, _table_from_lines
 
 class TableDetectorAnalyzer(BaseAnalyzer):
     def __init__(self) -> None:
@@ -56,6 +57,21 @@ class TableDetectorAnalyzer(BaseAnalyzer):
             if isinstance(child, ContainerUnit):
                 self._process_container(child)
 
+        # A table can also arrive as ONE block whose own lines are the rows
+        # (a PDF text layer that groups a boxed table into a single block —
+        # RFC 0008 §5.2 forbids the adapter from splitting it further). Try
+        # this before the cross-block path below; a block that isn't a table
+        # is returned untouched, so ordinary paragraphs never get here.
+        for idx, child in enumerate(container.children):
+            if getattr(child, "is_tombstoned", False):
+                continue
+            if not isinstance(child, (ParagraphBlock, UnknownBlock)):
+                continue
+            table = _table_from_lines(child)
+            if table is not None:
+                container.children[idx] = table
+                self._table_count += 1
+
         para_blocks: List[Tuple[int, ParagraphBlock]] = []
         separator_indices: set = set()
         for idx, child in enumerate(container.children):
@@ -64,7 +80,7 @@ class TableDetectorAnalyzer(BaseAnalyzer):
             # and insert a duplicate TableBlock — with an identical derived id.
             if getattr(child, "is_tombstoned", False):
                 continue
-            if isinstance(child, ParagraphBlock) and _bbox(child) is not None and _page_idx(child) is not None:
+            if isinstance(child, (ParagraphBlock, UnknownBlock)) and _bbox(child) is not None and _page_idx(child) is not None:
                 text = _get_text(child)
                 bb = _bbox(child)
                 if _looks_like_separator(text):
