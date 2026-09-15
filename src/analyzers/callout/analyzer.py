@@ -18,6 +18,7 @@ from src.krm.models import (
     ParagraphBlock,
     StyledTextSpan,
     TextLineInline,
+    UnknownBlock,
 )
 
 from src.analyzers.callout.rules import _classify, _replace_first_text
@@ -58,11 +59,11 @@ class CalloutDetectorAnalyzer(BaseAnalyzer):
 
         new_children: List[Any] = []
         for child in container.children:
-            if not isinstance(child, ParagraphBlock) or child.is_tombstoned:
+            if not isinstance(child, (ParagraphBlock, UnknownBlock)) or child.is_tombstoned:
                 new_children.append(child)
                 continue
             # Do not re-wrap already-typed subclasses (TitlePageBlock etc.)
-            if type(child) is not ParagraphBlock:
+            if type(child) not in (ParagraphBlock, UnknownBlock):
                 new_children.append(child)
                 continue
 

@@ -15,6 +15,7 @@ from src.krm.models import (
     EphemeraBlock,
     KnowledgeDocument,
     ParagraphBlock,
+    UnknownBlock,
 )
 
 from src.analyzers.ephemera.signals import MIN_REPEAT_PAGES, _PAGENUM_RE
@@ -62,7 +63,7 @@ class EphemeraDetectorAnalyzer(BaseAnalyzer):
             if isinstance(child, ContainerUnit):
                 self._collect(child, seen)
                 continue
-            if type(child) is not ParagraphBlock or child.is_tombstoned:
+            if type(child) not in (ParagraphBlock, UnknownBlock) or child.is_tombstoned:
                 continue
             vl = child.visual_layout
             if not vl or not vl.bounding_box:
@@ -81,10 +82,10 @@ class EphemeraDetectorAnalyzer(BaseAnalyzer):
 
         new_children: List[Any] = []
         for child in container.children:
-            if not isinstance(child, ParagraphBlock) or child.is_tombstoned:
+            if not isinstance(child, (ParagraphBlock, UnknownBlock)) or child.is_tombstoned:
                 new_children.append(child)
                 continue
-            if type(child) is not ParagraphBlock:
+            if type(child) not in (ParagraphBlock, UnknownBlock):
                 new_children.append(child)
                 continue
 

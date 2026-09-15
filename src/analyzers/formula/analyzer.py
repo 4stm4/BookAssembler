@@ -15,6 +15,7 @@ from src.krm.models import (
     FormulaBlock,
     KnowledgeDocument,
     ParagraphBlock,
+    UnknownBlock,
 )
 
 from src.analyzers.formula.rules import _extract_formula_number, _looks_like_formula, _math_font
@@ -61,7 +62,7 @@ class FormulaDetectorAnalyzer(BaseAnalyzer):
 
         new_children: List[Any] = []
         for child in container.children:
-            if not isinstance(child, ParagraphBlock) or child.is_tombstoned:
+            if not isinstance(child, (ParagraphBlock, UnknownBlock)) or child.is_tombstoned:
                 new_children.append(child)
                 continue
 

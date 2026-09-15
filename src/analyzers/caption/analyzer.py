@@ -13,6 +13,7 @@ from src.krm.models import (
     StyledTextSpan,
     TableBlock,
     TextLineInline,
+    UnknownBlock,
 )
 
 from src.analyzers.caption.signals import _CAPTION_RE, _EXAMPLE_HEADING_RE, _TARGET_TYPE_MAP
@@ -58,7 +59,7 @@ class CaptionAnalyzer(BaseAnalyzer):
         replacements: Dict[int, CaptionBlock] = {}
 
         for idx, child in enumerate(container.children):
-            if not isinstance(child, ParagraphBlock) or child.is_tombstoned:
+            if not isinstance(child, (ParagraphBlock, UnknownBlock)) or child.is_tombstoned:
                 # A tombstoned block was removed by an earlier analyzer
                 # (ephemera, table absorption, …); reclassifying it here would
                 # resurrect it and trip the No Silent Deletions guard

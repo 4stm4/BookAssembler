@@ -15,6 +15,7 @@ from src.krm.models import (
     FormulaBlock,
     KnowledgeDocument,
     ParagraphBlock,
+    UnknownBlock,
 )
 
 from src.analyzers.vision_fallback.config import MAX_VISION_CALLS, MAX_VISION_TIME, VISION_CONFIDENCE_THRESHOLD
@@ -143,7 +144,7 @@ class VisionFallbackAnalyzer(BaseAnalyzer):
                     if isinstance(child, FormulaBlock):
                         if (child.metadata or {}).get("needs_vision_ocr"):
                             formulas.append(child)
-                    elif isinstance(child, ParagraphBlock):
+                    elif isinstance(child, (ParagraphBlock, UnknownBlock)):
                         if child.classification_confidence < VISION_CONFIDENCE_THRESHOLD:
                             if not child.is_tombstoned:
                                 low_conf.append(child)

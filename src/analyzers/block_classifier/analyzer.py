@@ -14,6 +14,7 @@ from src.krm.models import (
     ContainerUnit,
     KnowledgeDocument,
     ParagraphBlock,
+    UnknownBlock,
 )
 
 from src.analyzers.block_classifier.rules import (
@@ -54,7 +55,7 @@ class BlockClassifierAnalyzer(BaseAnalyzer):
             if isinstance(child, ContainerUnit):
                 self._process_container(child)
                 continue
-            if not isinstance(child, ParagraphBlock) or child.is_tombstoned:
+            if not isinstance(child, (ParagraphBlock, UnknownBlock)) or child.is_tombstoned:
                 continue
             text = _get_text(child)
             child.classification_confidence = _classify_paragraph_confidence(text)

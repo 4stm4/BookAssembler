@@ -4,7 +4,7 @@ from src.analyzers.access import block_text, font_size
 from collections import Counter
 import re
 from typing import Any, Dict, List, Optional
-from src.krm.models import ContainerUnit, KnowledgeDocument, ParagraphBlock
+from src.krm.models import ContainerUnit, KnowledgeDocument, ParagraphBlock, UnknownBlock
 
 from src.analyzers.heading.signals import (
     MIN_WORD_CHAR_RATIO,
@@ -67,7 +67,7 @@ def _heading_level(font_size: float, threshold: float) -> int:
     return 3
 
 def _is_heading(block: Any, threshold: float) -> bool:
-    if not isinstance(block, ParagraphBlock):
+    if not isinstance(block, (ParagraphBlock, UnknownBlock)):
         return False
     if _is_monospace(block):
         return False

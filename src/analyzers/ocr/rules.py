@@ -8,7 +8,6 @@ from src.krm.models import (
     ContainerUnit,
     KnowledgeDocument,
     NormalizedRect,
-    ParagraphBlock,
     StyleDescriptor,
     StyledTextSpan,
     TextLineInline,

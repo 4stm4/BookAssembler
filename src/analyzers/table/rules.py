@@ -84,6 +84,112 @@ def _find_table_runs(blocks_with_idx: List[Tuple[int, ParagraphBlock]]) -> List[
 
     return runs
 
+def _line_rows(block: Any) -> List[Tuple[str, Optional[NormalizedRect]]]:
+    """Per-line (text, bbox) pairs from a block's own inlines.
+
+    PdfSourceAdapter keeps each source line's own bounding box on its
+    inline (RFC 0008 §5.2: it groups visually-contiguous text into one
+    block without splitting it, but does not discard line geometry), so a
+    block that itself contains several table-row-shaped lines can be read
+    as row candidates without every row needing to be a separate sibling.
+    """
+    rows: List[Tuple[str, Optional[NormalizedRect]]] = []
+    for inline in (block.inlines or []):
+        text = "".join(
+            span.text for span in getattr(inline, "spans", [])
+            if hasattr(span, "text")
+        ).strip()
+        if not text:
+            continue
+        vl = getattr(inline, "visual_layout", None)
+        bbox = getattr(vl, "bounding_box", None) if vl else None
+        rows.append((text, bbox))
+    return rows
+
+
+_ROW_Y_TOLERANCE = 0.003
+
+
+def _group_into_rows(
+    rows: List[Tuple[str, Optional[NormalizedRect]]],
+) -> List[List[Tuple[str, Optional[NormalizedRect]]]]:
+    """Group (text, bbox) fragments sharing a y0 into a visual row.
+
+    A boxed table's columns are often separate PDF text lines that just
+    happen to share a baseline ("0" and "00000000" and "32" and "00100000"
+    all start at the same y0, because the columns are laid out side by
+    side) — the block's own `inlines` order does not reflect that. Fragments
+    with no bbox cannot be placed on a row with anything and go one-per-row.
+    """
+    with_bbox = [(t, b) for t, b in rows if b is not None]
+    without_bbox = [(t, b) for t, b in rows if b is None]
+    with_bbox.sort(key=lambda tb: tb[1].y0)
+
+    grouped: List[List[Tuple[str, Optional[NormalizedRect]]]] = []
+    for item in with_bbox:
+        if grouped and abs(item[1].y0 - grouped[-1][0][1].y0) < _ROW_Y_TOLERANCE:
+            grouped[-1].append(item)
+        else:
+            grouped.append([item])
+
+    for item in grouped:
+        item.sort(key=lambda tb: tb[1].x0)
+
+    grouped.extend([item] for item in without_bbox)
+    return grouped
+
+
+def _table_from_lines(block: Any) -> Optional[TableBlock]:
+    """A TableBlock built from one block's own lines, or None.
+
+    Same acceptance rules as the multi-block path (_find_table_runs et al.):
+    at least MIN_TABLE_ROWS candidate rows, no oversized cell, and — for a
+    single visual column — enough rows or long enough text to rule out a
+    short list of labels. Returns None (no mutation) when the content does
+    not look like a table, so a real paragraph is never touched.
+    """
+    fragments = [(t, b) for t, b in _line_rows(block) if not _looks_like_separator(t)]
+    if len(fragments) < MIN_TABLE_ROWS:
+        return None
+    if any(len(t) > MAX_CELL_TEXT_LEN for t, _ in fragments):
+        return None
+
+    rows = _group_into_rows(fragments)
+    if len(rows) < MIN_TABLE_ROWS:
+        return None
+
+    is_single_col = all(len(row) <= 1 for row in rows)
+    row_texts = [" ".join(t for t, _ in row) for row in rows]
+    avg_text_len = sum(len(t) for t in row_texts) / len(rows)
+    if is_single_col and len(rows) < 5:
+        return None
+    if is_single_col and avg_text_len < 15:
+        return None
+
+    grid: List[List[TableCell]] = [
+        [
+            TableCell(content=[ParagraphBlock(
+                inlines=[TextLineInline(spans=[StyledTextSpan(text=t)])],
+            )])
+            for t, _ in row
+        ]
+        for row in rows
+    ]
+    col_penalty = 0.15 if is_single_col else 0.0
+    cls_conf = min(0.90, 0.50 + len(rows) * 0.05 - col_penalty)
+    table = TableBlock(
+        grid=grid,
+        parent_container_id=block.parent_container_id,
+        provenance_info=block.provenance_info,
+        visual_layout=block.visual_layout,
+        extraction_confidence=block.extraction_confidence,
+        classification_confidence=cls_conf,
+        confidence_score=min(block.extraction_confidence, cls_conf),
+    )
+    table.id = block.id  # RFC 0001 §2.3: reclassification keeps identity
+    return table
+
+
 def _cluster_columns(
     blocks_with_idx: List[Tuple[int, ParagraphBlock]],
 ) -> List[List[Tuple[int, ParagraphBlock]]]:

@@ -42,6 +42,7 @@ from src.analyzers.scan_noise import ScanNoiseAnalyzer
 from src.analyzers.table import TableDetectorAnalyzer
 from src.analyzers.theorem import TheoremDetectorAnalyzer
 from src.analyzers.title_page import TitlePageAnalyzer
+from src.analyzers.unknown_resolver import UnknownResolverAnalyzer
 from src.analyzers.vision_fallback import VisionFallbackAnalyzer
 
 def create_default_pipeline() -> List[BaseAnalyzer]:
@@ -88,6 +89,11 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         EntityExtractorAnalyzer(),
         ProperNounExtractorAnalyzer(),
         CitationLinkerAnalyzer(),
+        # Every classifier above had its chance to claim an UnknownBlock;
+        # whatever is left is ordinary prose (RFC 0002 §2, UnknownBlock).
+        # Must run before ReadingOrderAnalyzer and the assemblers, which
+        # only understand ParagraphBlock.
+        UnknownResolverAnalyzer(),
         # Last: reading order is built over the final tree. Running it early
         # (it used to be step 3) linked the pre-restructure leaves, and every
         # detector that then wrapped a paragraph into a list / callout / table
@@ -131,6 +137,7 @@ __all__ = [
     "TableDetectorAnalyzer",
     "TheoremDetectorAnalyzer",
     "TitlePageAnalyzer",
+    "UnknownResolverAnalyzer",
     "VisionFallbackAnalyzer",
     "create_default_pipeline",
 ]

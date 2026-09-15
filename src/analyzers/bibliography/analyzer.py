@@ -15,6 +15,7 @@ from src.krm.models import (
     ContainerUnit,
     KnowledgeDocument,
     ParagraphBlock,
+    UnknownBlock,
 )
 
 from src.analyzers.bibliography.rules import _is_bib_container, _parse_entry
@@ -60,10 +61,10 @@ class BibliographyDetectorAnalyzer(BaseAnalyzer):
     def _promote_children(self, container: ContainerUnit) -> None:
         new_children: List[Any] = []
         for child in container.children:
-            if not isinstance(child, ParagraphBlock) or child.is_tombstoned:
+            if not isinstance(child, (ParagraphBlock, UnknownBlock)) or child.is_tombstoned:
                 new_children.append(child)
                 continue
-            if type(child) is not ParagraphBlock:
+            if type(child) not in (ParagraphBlock, UnknownBlock):
                 new_children.append(child)
                 continue
 

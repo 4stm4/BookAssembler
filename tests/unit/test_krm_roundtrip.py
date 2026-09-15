@@ -1,68 +1,64 @@
-"""KRM roundtrip: a real scanned page image -> OCR -> TableDetectorAnalyzer.
+"""KRM roundtrip: a real PDF page -> PdfSourceAdapter -> TableDetectorAnalyzer.
 
-Fixture: tests/fixtures/decimal_binary_table.png, a screenshot of Fig. 1.2
-"Decimal-Binary Table" (a two-column decimal/binary lookup table). The image
-carries no text layer, so it is embedded as the sole content of a one-page
-PDF (RFC 0008: a page with images and no extractable text is flagged
-needs_ocr). PdfSourceAdapter never produces a TableBlock on its own - the
-real path is:
+Fixture: tests/fixtures/z80_decimal_binary_table.pdf, page 20 of "Programming
+the Z80" (Fig. 1.2 "Decimal-Binary Table") exported as a real one-page PDF
+with its own text layer — no OCR, no network, fully deterministic.
 
-    image -> PdfSourceAdapter (flags needs_ocr) -> OCRAnalyzer (real vision
-    call, recovers ParagraphBlock lines from the picture) -> TableDetectorAnalyzer
-    (clusters the aligned rows into a TableBlock)
+The table's four columns are not laid out as one line per row in the PDF's
+own text stream: PyMuPDF gives each column entry its own line, and several
+of those lines only happen to share a y-coordinate because they sit side by
+side (RFC 0002, UnknownBlock). PdfSourceAdapter groups all of that into a
+single UnknownBlock per its own block boundaries (RFC 0008 §5.2: no semantic
+splitting in the adapter) — TableDetectorAnalyzer reads that block's own
+line geometry, regroups fragments that share a y0 into a visual row, and
+sorts each row by x0 into the real column order (src/analyzers/table/rules.py
+_table_from_lines / _group_into_rows).
 
-The expected grid is the table as printed in the image, so this checks the
-whole chain against what a human reading the picture would transcribe -
-nothing dropped, reordered, or garbled (RFC 0001 SS2.4: no silent deletion).
-
-Requires a reachable vision agent (configured host, e.g. the project's
-ollama vision model) - this test does no network mocking and is meant to run
-where that agent is reachable, not as an isolated unit test on a machine
-with no agent configured.
+This checks the whole real chain end to end: nothing dropped, no cell
+mis-ordered, no silent deletion of the rows absorbed into the table (RFC
+0001 SS2.4).
 """
 
-import io
-import logging
-import time
 from pathlib import Path
 
-import pytest
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
-logging.getLogger("src.agents").setLevel(logging.DEBUG)
-logging.getLogger("src.analyzers.ocr").setLevel(logging.DEBUG)
-
 from src.adapters.pdf_adapter import PdfSourceAdapter
-from src.agents import pick
-from src.analyzers.ocr import OCRAnalyzer
 from src.analyzers.table import TableDetectorAnalyzer
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
-from src.krm.models import ParagraphBlock, TableBlock
+from src.krm.models import TableBlock, UnknownBlock
 
-FIXTURE_IMAGE = Path(__file__).parent.parent / "fixtures" / "decimal_binary_table.png"
+FIXTURE_PDF = Path(__file__).parent.parent / "fixtures" / "z80_decimal_binary_table.pdf"
 
-# The table exactly as printed in the fixture image (Fig. 1.2), left column
-# read top to bottom: decimal value, its 8-bit binary value.
-EXPECTED_ROWS = [
-    "0 00000000", "1 00000001", "2 00000010", "3 00000011", "4 00000100",
-    "5 00000101", "6 00000110", "7 00000111", "8 00001000", "9 00001001",
-    "10 00001010", "11 00001011", "12 00001100", "13 00001101", "14 00001110",
-    "15 00001111", "16 00010000", "17 00010001", "31 00011111",
+# The table exactly as printed on the page (Fig. 1.2), row by row, left to
+# right. A "•" cell is the printed ellipsis marker for an omitted range.
+EXPECTED_GRID = [
+    ["0", "00000000", "32", "00100000"],
+    ["1 00000001", "33", "00100001"],
+    ["2", "00000010", "•"],
+    ["3 00000011"],
+    ["4", "00000100"],
+    ["5", "00000101", "63 00111111"],
+    ["6", "00000110", "64", "01000000"],
+    ["7", "00000111", "65 01000001"],
+    ["8 00001000"],
+    ["9", "00001001"],
+    ["10", "00001010", "127 01111111"],
+    ["11 00001011", "128 10000000"],
+    ["12", "00001100", "129 10000001"],
+    ["13 00001101"],
+    ["14", "00001110"],
+    ["15 00001111"],
+    ["•"],
+    ["16", "00010000"],
+    ["17", "00010001", "•"],
+    ["•"],
+    ["•"],
+    ["254", "11111110"],
+    ["31 00011111", "255", "11111111"],
 ]
 
 
-def _pdf_with_image(image_path: Path) -> bytes:
-    fitz = pytest.importorskip("pymupdf")
-    doc = fitz.open()
-    page = doc.new_page()
-    page.insert_image(page.rect, filename=str(image_path))
-    data = doc.tobytes()
-    doc.close()
-    return data
-
-
-def _grid_row_texts(table: TableBlock):
+def _grid_texts(table: TableBlock):
     rows = []
     for row in table.grid:
         texts = []
@@ -71,66 +67,33 @@ def _grid_row_texts(table: TableBlock):
                 for inline in block.inlines:
                     for span in inline.spans:
                         texts.append(span.text)
-        rows.append(" ".join(" ".join(texts).split()))
+        rows.append(texts)
     return rows
 
 
-@pytest.mark.skipif(not FIXTURE_IMAGE.exists(), reason="fixture image missing")
-def test_roundtrip_table_block(tmp_path):
-    """The real Fig. 1.2 screenshot must round-trip through OCR and
-    TableDetectorAnalyzer into a TableBlock matching what is printed on it."""
-    host, model, kind = pick("vision")
-    print(f"[roundtrip] vision agent: host={host} model={model} kind={kind}", flush=True)
-    if not host:
-        pytest.skip("no reachable vision agent configured for OCR")
-
-    pdf_path = tmp_path / "decimal_binary_table.pdf"
-    pdf_path.write_bytes(_pdf_with_image(FIXTURE_IMAGE))
-    print(f"[roundtrip] built PDF at {pdf_path} ({pdf_path.stat().st_size} bytes)", flush=True)
-
+def test_roundtrip_table_block():
+    """A real PDF page's table must round-trip through PdfSourceAdapter and
+    TableDetectorAnalyzer into a TableBlock matching what is printed on it,
+    cell for cell, in reading order."""
     doc = PdfSourceAdapter().parse(
-        io.BytesIO(pdf_path.read_bytes()), f"file://{pdf_path}"
+        open(FIXTURE_PDF, "rb"), f"file://{FIXTURE_PDF}"
     )
-    print(f"[roundtrip] parsed doc: {len(doc.root_containers[0].children)} top-level children", flush=True)
-
-    rg, kg = ReadingGraph(), KnowledgeGraph()
-
-    t0 = time.time()
-    print("[roundtrip] calling OCRAnalyzer.run() ...", flush=True)
-    OCRAnalyzer().run(doc, rg, kg)
-    print(f"[roundtrip] OCRAnalyzer.run() returned after {time.time() - t0:.1f}s", flush=True)
-
-    recovered = [c for c in doc.root_containers[0].children
-                 if isinstance(c, ParagraphBlock) and not c.is_tombstoned]
-    print(f"[roundtrip] {len(recovered)} live ParagraphBlock after OCR:", flush=True)
-    for p in recovered[:40]:
-        text = " ".join(s.text for i in (p.inlines or []) for s in i.spans)
-        print(f"[roundtrip]   line: {text!r}", flush=True)
-
-    TableDetectorAnalyzer().run(doc, rg, kg)
-    print("[roundtrip] TableDetectorAnalyzer.run() done", flush=True)
-
     container = doc.root_containers[0]
+
+    TableDetectorAnalyzer().run(doc, ReadingGraph(), KnowledgeGraph())
+
     tables = [c for c in container.children if isinstance(c, TableBlock)]
-    print(f"[roundtrip] {len(tables)} TableBlock found", flush=True)
     assert len(tables) == 1, f"expected exactly one TableBlock, got {len(tables)}"
     table = tables[0]
 
-    actual_rows = _grid_row_texts(table)
-    positions = []
-    for expected_row in EXPECTED_ROWS:
-        assert expected_row in actual_rows, (
-            f"row {expected_row!r} from the image is missing in the "
-            f"extracted table: {actual_rows}"
-        )
-        positions.append(actual_rows.index(expected_row))
-    assert positions == sorted(positions), (
-        "extracted rows must preserve the image's top-to-bottom order: "
-        f"{actual_rows}"
-    )
+    assert _grid_texts(table) == EXPECTED_GRID
 
-    absorbed = [c for c in container.children if isinstance(c, ParagraphBlock)]
-    assert absorbed and all(p.is_tombstoned for p in absorbed if p in container.children), (
-        "OCR-recovered rows merged into the table must be tombstoned, not "
-        "deleted (RFC 0001 SS2.4)"
+    absorbed = [
+        c for c in container.children
+        if isinstance(c, UnknownBlock) and c.is_tombstoned
+    ]
+    assert not absorbed, (
+        "the table's own block was reclassified in place (RFC 0001 SS2.3), "
+        "not absorbed from separate siblings, so nothing here should be "
+        "tombstoned"
     )

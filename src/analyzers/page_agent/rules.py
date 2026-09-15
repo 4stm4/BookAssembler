@@ -16,6 +16,7 @@ from src.krm.models import (
     TableCell,
     TextLineInline,
     StyledTextSpan,
+    UnknownBlock,
     VisualLayout,
 )
 
@@ -45,7 +46,7 @@ def _clean_tabular(raw: Any) -> Optional[str]:
     return s or None
 
 def _text(node: Any) -> str:
-    if isinstance(node, ParagraphBlock):
+    if isinstance(node, (ParagraphBlock, UnknownBlock)):
         return " ".join(
             s.text for i in (node.inlines or [])
             for s in getattr(i, "spans", []) if hasattr(s, "text")

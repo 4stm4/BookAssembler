@@ -13,6 +13,7 @@ from src.krm.models import (
     ContainerUnit,
     KnowledgeDocument,
     ParagraphBlock,
+    UnknownBlock,
 )
 
 from src.analyzers.font_stats.signals import log
@@ -84,7 +85,7 @@ class FontStatsAnalyzer(BaseAnalyzer):
         for node in containers:
             if isinstance(node, ContainerUnit):
                 for child in node.children:
-                    if isinstance(child, ParagraphBlock) and not child.is_tombstoned:
+                    if isinstance(child, (ParagraphBlock, UnknownBlock)) and not child.is_tombstoned:
                         fp = _extract_font(child)
                         if fp:
                             results.append((child, fp))

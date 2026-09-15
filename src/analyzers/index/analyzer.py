@@ -15,6 +15,7 @@ from src.krm.models import (
     IndexEntryBlock,
     KnowledgeDocument,
     ParagraphBlock,
+    UnknownBlock,
 )
 
 from src.analyzers.index.signals import _INDEX_ENTRY_RE, _INDEX_TITLE_RE
@@ -61,10 +62,10 @@ class IndexDetectorAnalyzer(BaseAnalyzer):
             if isinstance(child, ContainerUnit):
                 new_children.append(child)
                 continue
-            if not isinstance(child, ParagraphBlock) or child.is_tombstoned:
+            if not isinstance(child, (ParagraphBlock, UnknownBlock)) or child.is_tombstoned:
                 new_children.append(child)
                 continue
-            if type(child) is not ParagraphBlock:
+            if type(child) not in (ParagraphBlock, UnknownBlock):
                 new_children.append(child)
                 continue
 

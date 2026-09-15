@@ -19,6 +19,7 @@ from src.krm.models import (
     ContainerUnit,
     KnowledgeDocument,
     ParagraphBlock,
+    UnknownBlock,
 )
 
 from src.analyzers.proper_noun.signals import _PATTERNS
@@ -62,7 +63,7 @@ class ProperNounExtractorAnalyzer(BaseAnalyzer):
             if isinstance(child, ContainerUnit):
                 self._process(child, kg, seen)
                 continue
-            if not isinstance(child, ParagraphBlock) or child.is_tombstoned:
+            if not isinstance(child, (ParagraphBlock, UnknownBlock)) or child.is_tombstoned:
                 continue
 
             text = block_text(child)

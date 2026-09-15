@@ -16,6 +16,7 @@ from src.krm.models import (
     KnowledgeDocument,
     ParagraphBlock,
     StyledTextSpan,
+    UnknownBlock,
 )
 
 from src.analyzers.definition.signals import _DEFINITION_PATTERN_RE, _DEFINITION_PREFIX_RE
@@ -54,9 +55,9 @@ class DefinitionDetectorAnalyzer(BaseAnalyzer):
                 self._process(child, doc)
 
         for child in container.children:
-            if not isinstance(child, ParagraphBlock) or child.is_tombstoned:
+            if not isinstance(child, (ParagraphBlock, UnknownBlock)) or child.is_tombstoned:
                 continue
-            if type(child) is not ParagraphBlock:
+            if type(child) not in (ParagraphBlock, UnknownBlock):
                 continue
             if child.metadata and child.metadata.get("semantic_decorator"):
                 continue

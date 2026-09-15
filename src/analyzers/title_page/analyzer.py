@@ -15,6 +15,7 @@ from src.krm.models import (
     TitlePageBlock,
     TextLineInline,
     StyledTextSpan,
+    UnknownBlock,
 )
 
 from src.analyzers.title_page.signals import MAX_SCAN_PAGES, MAX_TITLE_BLOCK_LEN, MIN_SCORE, TITLE_MAX_PAGES, _NodeLoc, _RE_STRONG, log
@@ -66,7 +67,7 @@ class TitlePageAnalyzer(BaseAnalyzer):
     def _replace_blanks(self, container: ContainerUnit) -> int:
         count = 0
         for i, child in enumerate(container.children):
-            if isinstance(child, ParagraphBlock) and not isinstance(child, TitlePageBlock):
+            if isinstance(child, (ParagraphBlock, UnknownBlock)) and not isinstance(child, TitlePageBlock):
                 if child.is_tombstoned:
                     # Already removed by an earlier analyzer. Replacing it
                     # here would create a fresh cover/blank block at the same
@@ -228,7 +229,7 @@ class TitlePageAnalyzer(BaseAnalyzer):
                 # Already removed (a repeating header, an absorbed row) —
                 # its text must not count toward the title page's content.
                 continue
-            if isinstance(child, ParagraphBlock) and not isinstance(child, TitlePageBlock):
+            if isinstance(child, (ParagraphBlock, UnknownBlock)) and not isinstance(child, TitlePageBlock):
                 result.append((child, container, idx))
             elif isinstance(child, BlankPageBlock):
                 result.append((child, container, idx))

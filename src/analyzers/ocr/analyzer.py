@@ -12,10 +12,10 @@ from src.krm.models import (
     ContainerUnit,
     KnowledgeDocument,
     NormalizedRect,
-    ParagraphBlock,
     StyleDescriptor,
     StyledTextSpan,
     TextLineInline,
+    UnknownBlock,
     VisualLayout,
 )
 
@@ -156,7 +156,10 @@ class OCRAnalyzer(BaseAnalyzer):
         made = []
         for i, (line, rect, style) in enumerate(lines):
             bbox = rect or page_box
-            block = ParagraphBlock(
+            # UnknownBlock: OCR recovers text, not its role — the same
+            # classification analyzers that judge adapter-extracted text
+            # judge this too (RFC 0002 §2, UnknownBlock).
+            block = UnknownBlock(
                 id=derive_source_id("ocr-line", source_uri, page, bbox, line, i),
                 inlines=[TextLineInline(spans=[StyledTextSpan(text=line)])],
                 parent_container_id=parent.id,
