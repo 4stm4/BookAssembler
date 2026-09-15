@@ -88,6 +88,26 @@ def test_roundtrip_table_block():
 
     assert _grid_texts(table) == EXPECTED_GRID
 
+    # Geometry: the table's own box is the union of its cells (not just the
+    # source block's box wholesale), and every cell carries its own bbox
+    # (width/height via NormalizedRect) and font (RFC 0002 - TableCell is a
+    # BaseKRMNode; src/analyzers/table/rules.py stopped discarding this).
+    table_box = table.visual_layout.bounding_box
+    assert table_box.width > 0 and table_box.height > 0
+    first_row = table.grid[0]
+    for cell in first_row:
+        assert cell.visual_layout is not None, "cell lost its geometry"
+        box = cell.visual_layout.bounding_box
+        assert box.width > 0 and box.height > 0
+        assert table_box.x0 <= box.x0 and box.x1 <= table_box.x1
+        assert table_box.y0 <= box.y0 and box.y1 <= table_box.y1
+        assert cell.visual_layout.style is not None, "cell lost its font"
+        assert cell.visual_layout.style.font_size_pt > 0
+    decimal_cell, binary_cell = first_row[0], first_row[1]
+    assert decimal_cell.visual_layout.bounding_box.x1 < binary_cell.visual_layout.bounding_box.x0, (
+        "decimal column must sit to the left of the binary column"
+    )
+
     absorbed = [
         c for c in container.children
         if isinstance(c, UnknownBlock) and c.is_tombstoned
