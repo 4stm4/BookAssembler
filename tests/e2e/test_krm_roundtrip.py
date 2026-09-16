@@ -30,10 +30,15 @@ from src.krm.models import TableBlock, UnknownBlock
 FIXTURE_PDF = Path(__file__).parent.parent / "fixtures" / "z80_decimal_binary_table.pdf"
 
 # The table exactly as printed on the page (Fig. 1.2), row by row, left to
-# right. A "•" cell is the printed ellipsis marker for an omitted range. The
-# header row is a separate PDF block from the table body - TableDetectorAnalyzer
-# absorbs it as the sibling directly above the detected table (RFC 0008 §5.2:
-# the adapter has no way to know they belong together).
+# right, verified against the actual rendered page pixels (not just the PDF's
+# text layer) - word-level y0 in points confirmed 23 real rows, one row step
+# apart, with a single anomaly: the "•" after "15 00001111" sits +4.9pt below
+# it versus a normal ~14.7-15.2pt row step, i.e. it shares row 15's line
+# rather than starting a genuine new one (src/analyzers/table/rules.py
+# _merge_stray_rows). A "•" cell is the printed ellipsis marker for an
+# omitted range. The header row is a separate PDF block from the table body -
+# TableDetectorAnalyzer absorbs it as the sibling directly above the detected
+# table (RFC 0008 §5.2: the adapter has no way to know they belong together).
 EXPECTED_GRID = [
     ["Decimal", "Binary", "Decimal", "Binary"],
     ["0", "00000000", "32", "00100000"],
@@ -51,8 +56,7 @@ EXPECTED_GRID = [
     ["12", "00001100", "129 10000001"],
     ["13 00001101"],
     ["14", "00001110"],
-    ["15 00001111"],
-    ["•"],
+    ["15 00001111", "•"],
     ["16", "00010000"],
     ["17", "00010001", "•"],
     ["•"],
@@ -91,7 +95,7 @@ def test_roundtrip_table_block():
     table = tables[0]
 
     assert _grid_texts(table) == EXPECTED_GRID
-    assert table.row_count == len(EXPECTED_GRID) == 24
+    assert table.row_count == len(EXPECTED_GRID) == 23
     assert table.column_count == 4
 
     # Geometry: the table's own box is the union of its cells (not just the
