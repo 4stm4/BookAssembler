@@ -10,15 +10,13 @@ from src.krm.models import (
     KnowledgeDocument,
     NormalizedRect,
     ParagraphBlock,
-    StyledTextSpan,
     TableBlock,
     TableCell,
-    TextLineInline,
     UnknownBlock,
 )
 
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
-from src.analyzers.table.rules import _bbox, _cluster_columns, _count_columns, _find_table_runs, _get_text, _looks_like_separator, _page_idx, _table_from_lines
+from src.analyzers.table.rules import _bbox, _cluster_columns, _count_columns, _find_table_runs, _get_text, _looks_like_separator, _page_idx, _rows_from_block, _table_from_lines
 
 class TableDetectorAnalyzer(BaseAnalyzer):
     def __init__(self) -> None:
@@ -98,21 +96,18 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                     if not run:
                         continue
 
-                    grid: List[List[TableCell]] = []
                     first_idx = run[0][0]
 
-                    for orig_idx, block in run:
-                        text = _get_text(block)
-                        cell = TableCell(
-                            content=[
-                                ParagraphBlock(
-                                    inlines=[TextLineInline(spans=[StyledTextSpan(text=text)])],
-                                )
-                            ]
-                        )
-                        grid.append([cell])
-
-                    row_count = len(grid)
+                    # Accept/reject on the run as clustered (one candidate per
+                    # sibling block) - unaffected by _rows_from_block later
+                    # possibly expanding one sibling into several grid rows
+                    # (a rowspan, or a wrapped line). Deciding on the
+                    # post-expansion row count let a wrapped 2-line sentence
+                    # push an ordinary caption+paragraph+exercise+page-number
+                    # group over the row_count>=5 threshold and get accepted
+                    # as a "table" - RFC 0001 §2.4 exists for exactly this
+                    # kind of silent misclassification.
+                    row_count = len(run)
                     run_indices = {orig_idx for orig_idx, _ in run}
                     has_separators = bool(separator_indices & {i - 1 for i in run_indices} |
                                          separator_indices & {i + 1 for i in run_indices})
@@ -125,6 +120,10 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                         continue
                     if is_single_col and avg_text_len < 15 and not has_separators:
                         continue
+
+                    grid: List[List[TableCell]] = []
+                    for orig_idx, block in run:
+                        grid.extend(_rows_from_block(block))
 
                     sep_boost = 0.10 if has_separators else 0.0
                     col_penalty = 0.15 if is_single_col else 0.0
