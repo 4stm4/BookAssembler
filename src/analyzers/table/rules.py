@@ -36,6 +36,62 @@ _BORDER_MATCH_RATIO = 0.34
 _BORDER_MATCH_FLOOR = 0.001
 
 
+def _cluster_extents(
+    starts_ends: List[Tuple[float, float]], tolerance: float,
+) -> List[Tuple[float, float]]:
+    """Group (start, end) spans that share a start into one track's extent.
+
+    A "column" is the set of cells that begin at roughly the same x; the
+    track it occupies runs from the leftmost of their starts to the
+    rightmost of their ends. Rows work the same way on the other axis.
+    """
+    ordered = sorted(starts_ends)
+    tracks: List[List[Tuple[float, float]]] = []
+    for span in ordered:
+        if tracks and span[0] - tracks[-1][0][0] < tolerance:
+            tracks[-1].append(span)
+        else:
+            tracks.append([span])
+    return [(min(s for s, _ in t), max(e for _, e in t)) for t in tracks]
+
+
+def _ruled_boundaries(
+    marks: List[float], extents: List[Tuple[float, float]], tolerance: float,
+) -> set:
+    """Which boundaries between tracks a printed line falls on.
+
+    A rule runs in the GAP between two tracks, never through one: matching
+    it against a cell's own box compares a line drawn clear of the glyphs
+    with the edge of those glyphs, which cannot coincide at any tolerance -
+    measured, that left every vertical border unset on both fixtures.
+    Boundary i sits between track i-1 and track i; 0 is the outer edge
+    before the first track and len(extents) the one after the last.
+    """
+    ruled = set()
+    if not extents:
+        return ruled
+    for mark in marks:
+        if mark <= extents[0][0] + tolerance:
+            ruled.add(0)
+            continue
+        if mark >= extents[-1][1] - tolerance:
+            ruled.add(len(extents))
+            continue
+        for i in range(1, len(extents)):
+            if extents[i - 1][1] - tolerance <= mark <= extents[i][0] + tolerance:
+                ruled.add(i)
+                break
+    return ruled
+
+
+def _track_of(position: float, extents: List[Tuple[float, float]]) -> int:
+    """Index of the track a cell belongs to, by its own start position."""
+    return min(
+        range(len(extents)),
+        key=lambda i: abs(extents[i][0] - position),
+    ) if extents else 0
+
+
 def _step(positions: List[float]) -> float:
     """Median gap between neighbouring positions, or 0.0 if there is none.
 
@@ -116,38 +172,41 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
     rule_x = [to_page(run, clip.x0, page_w) for run in vertical]
     rule_y = [to_page(run, clip.y0, page_h) for run in horizontal]
 
-    # The tolerance has to come from this table's own scale: a rule counts
-    # as a cell's border only if it runs nearer to that edge than the next
-    # row or column is.
-    row_tops = sorted(
-        min(c.visual_layout.bounding_box.y0 for c in row if c.visual_layout)
-        for row in table.grid
-        if any(c.visual_layout for c in row)
-    )
-    col_lefts = sorted({
-        round(c.visual_layout.bounding_box.x0, 4)
-        for row in table.grid for c in row if c.visual_layout
-    })
-    y_tolerance = max(_step(row_tops) * _BORDER_MATCH_RATIO, _BORDER_MATCH_FLOOR)
-    x_tolerance = max(_step(col_lefts) * _BORDER_MATCH_RATIO, _BORDER_MATCH_FLOOR)
+    placed = [
+        cell for row in table.grid for cell in row
+        if cell.visual_layout is not None and cell.visual_layout.bounding_box is not None
+    ]
+    if not placed:
+        return False
 
-    def near(position: float, marks: List[float], tolerance: float) -> bool:
-        return any(abs(position - mark) <= tolerance for mark in marks)
+    # Cells cluster into columns by where they start, and into rows the same
+    # way on the other axis; a printed rule then belongs to the gap between
+    # two of those tracks. The clustering tolerance is a fraction of the
+    # table's own step, because the step differs about twofold between the
+    # fixtures and one constant cannot serve both.
+    col_spans = [(c.visual_layout.bounding_box.x0, c.visual_layout.bounding_box.x1) for c in placed]
+    row_spans = [(c.visual_layout.bounding_box.y0, c.visual_layout.bounding_box.y1) for c in placed]
+    x_step = _step(sorted({round(s, 4) for s, _ in col_spans}))
+    y_step = _step(sorted({round(s, 4) for s, _ in row_spans}))
+    x_tolerance = max(x_step * _BORDER_MATCH_RATIO, _BORDER_MATCH_FLOOR)
+    y_tolerance = max(y_step * _BORDER_MATCH_RATIO, _BORDER_MATCH_FLOOR)
 
-    marked = False
-    for row in table.grid:
-        for cell in row:
-            if cell.visual_layout is None or cell.visual_layout.bounding_box is None:
-                continue
-            box = cell.visual_layout.bounding_box
-            cell.border_left = near(box.x0, rule_x, x_tolerance)
-            cell.border_right = near(box.x1, rule_x, x_tolerance)
-            cell.border_top = near(box.y0, rule_y, y_tolerance)
-            cell.border_bottom = near(box.y1, rule_y, y_tolerance)
-            marked = marked or any(
-                (cell.border_left, cell.border_right, cell.border_top, cell.border_bottom)
-            )
-    return marked
+    col_extents = _cluster_extents(col_spans, max(x_step, _BORDER_MATCH_FLOOR))
+    row_extents = _cluster_extents(row_spans, max(y_step, _BORDER_MATCH_FLOOR))
+    ruled_x = _ruled_boundaries(rule_x, col_extents, x_tolerance)
+    ruled_y = _ruled_boundaries(rule_y, row_extents, y_tolerance)
+    if not ruled_x and not ruled_y:
+        return False
+
+    for cell in placed:
+        box = cell.visual_layout.bounding_box
+        column = _track_of(box.x0, col_extents)
+        line = _track_of(box.y0, row_extents)
+        cell.border_left = column in ruled_x
+        cell.border_right = (column + 1) in ruled_x
+        cell.border_top = line in ruled_y
+        cell.border_bottom = (line + 1) in ruled_y
+    return True
 
 
 def _looks_like_separator(text: str) -> bool:
