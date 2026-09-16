@@ -111,6 +111,108 @@ def _line_rows(block: Any) -> List[Tuple[str, Optional[NormalizedRect], Optional
     return rows
 
 
+def _make_cell(
+    text: str, bbox: Optional[NormalizedRect], style: Optional[Any],
+    page_idx: Optional[int], row_span: int = 1,
+) -> "TableCell":
+    return TableCell(
+        row_span=row_span,
+        content=[ParagraphBlock(
+            inlines=[TextLineInline(spans=[StyledTextSpan(text=text)])],
+        )],
+        visual_layout=VisualLayout(
+            bounding_box=bbox, page_or_screen_index=page_idx or 0, style=style,
+        ) if bbox is not None else None,
+    )
+
+
+def _local_column_bins(
+    fragments: List[Tuple[str, Optional[NormalizedRect], Optional[Any]]],
+    tolerance: float = 0.02,
+) -> List[float]:
+    x0s = sorted(b.x0 for _, b, _ in fragments if b is not None)
+    bins: List[float] = []
+    for x in x0s:
+        if bins and x - bins[-1] < tolerance:
+            continue
+        bins.append(x)
+    return bins
+
+
+def _nearest_bin(x0: float, bins: List[float]) -> int:
+    return min(range(len(bins)), key=lambda i: abs(bins[i] - x0))
+
+
+def _rows_from_block(block: Any) -> List[List["TableCell"]]:
+    """Split one sibling block's own lines into column-ordered grid rows.
+
+    The cross-block path (_find_table_runs) treats each sibling block as one
+    table row. That block's own inlines carry the same per-line geometry
+    _table_from_lines reads for a single-block table (RFC 0008 §5.2: the
+    adapter groups text into blocks without splitting it, but keeps each
+    line's own bbox and StyleDescriptor) - sorting those fragments by x0
+    recovers the real column order instead of joining everything into one
+    cell.
+
+    A block can itself contain more than one visual sub-row sharing a
+    single logical table row (e.g. "Line Regulation" / "Tj - 25*C" printed
+    once, next to two stacked condition lines each with their own MIN/TYP
+    value) - a real rowspan, not a second table row. A column populated in
+    only the first sub-row and blank in the rest becomes one TableCell with
+    row_span set to the sub-row count, held in the first output row only;
+    later output rows simply have no cell at that column, which is exactly
+    how a jagged row already renders (RFC 0002: TableCell.row_span existed
+    but nothing ever set it).
+
+    A block with no per-line geometry (or none of it survives filtering)
+    falls back to a single row holding the whole block's text.
+    """
+    fragments = [item for item in _line_rows(block) if not _looks_like_separator(item[0])]
+    if not fragments:
+        text = _get_text(block)
+        return [[_make_cell(text, None, None, None)]]
+
+    page_idx = _page_idx(block)
+    sub_rows = _group_into_rows(fragments)
+
+    if len(sub_rows) <= 1:
+        row = sub_rows[0] if sub_rows else fragments
+        row = sorted(row, key=lambda item: item[1].x0 if item[1] is not None else 0.0)
+        return [[_make_cell(t, b, s, page_idx) for t, b, s in row]]
+
+    # A real rowspan needs the LATER sub-rows to be genuine multi-column data
+    # rows continuing this one, not just the next unrelated line of prose
+    # that happens to share this block (e.g. a title line "jiA7812" directly
+    # above an unrelated paragraph line - one fragment each, nothing in
+    # common). Require every sub-row after the first to carry at least 2
+    # fragments of its own before treating a first-row-only column as shared.
+    looks_like_continuation = all(len(r) >= 2 for r in sub_rows[1:])
+
+    bins = _local_column_bins(fragments)
+    # column index -> {sub_row index -> (text, bbox, style)}
+    by_col: Dict[int, Dict[int, Tuple[str, Optional[NormalizedRect], Optional[Any]]]] = {}
+    for sr_idx, sub_row in enumerate(sub_rows):
+        for text, bbox, style in sub_row:
+            col = _nearest_bin(bbox.x0, bins) if bbox is not None else 0
+            by_col.setdefault(col, {})[sr_idx] = (text, bbox, style)
+
+    rows: List[List[TableCell]] = [[] for _ in sub_rows]
+    for col in sorted(by_col):
+        occupied = by_col[col]
+        if len(occupied) == 1 and 0 in occupied and len(sub_rows) > 1 and looks_like_continuation:
+            # Populated only in the first sub-row: a real rowspan.
+            text, bbox, style = occupied[0]
+            rows[0].append(_make_cell(text, bbox, style, page_idx, row_span=len(sub_rows)))
+            continue
+        for sr_idx in sorted(occupied):
+            text, bbox, style = occupied[sr_idx]
+            rows[sr_idx].append(_make_cell(text, bbox, style, page_idx))
+
+    for row in rows:
+        row.sort(key=lambda c: c.visual_layout.bounding_box.x0 if c.visual_layout else 0.0)
+    return rows
+
+
 _ROW_Y_TOLERANCE = 0.003
 
 

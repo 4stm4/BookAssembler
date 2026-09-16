@@ -11,7 +11,7 @@ import logging
 import os
 import re
 import subprocess
-from typing import Any, List
+from typing import Any, List, Optional
 
 from src.security.manager import Capability, get_security_manager
 from src.krm.models import (
@@ -47,6 +47,8 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 \usepackage{amsmath}
 \usepackage{amsthm}
 \usepackage{graphicx}
+\usepackage{array}
+\usepackage{multirow}
 \newtheorem{theorem}{Theorem}[chapter]
 \newtheorem{lemma}[theorem]{Lemma}
 \newtheorem{corollary}[theorem]{Corollary}
@@ -386,6 +388,50 @@ def render_node(
             body.append(_wrap_align(txt, _alignment(node)) + "\n")
 
 
+_COLUMN_X_TOLERANCE = 0.03
+
+
+def _cell_text(cell: Any) -> str:
+    text = ""
+    for content in getattr(cell, "content", []):
+        if isinstance(content, ParagraphBlock):
+            text += _para_text(content)
+    return text
+
+
+def _cell_x0(cell: Any) -> Optional[float]:
+    vl = getattr(cell, "visual_layout", None)
+    box = getattr(vl, "bounding_box", None) if vl else None
+    return box.x0 if box is not None else None
+
+
+def _column_bins(grid: List[List[Any]]) -> Optional[List[float]]:
+    """Canonical column x0 positions, or None if any cell lacks geometry.
+
+    A row missing a middle column (a real gap in the source, not every row
+    of a table has every field) is jagged in `grid` - shorter than the
+    widest row, with nothing to say which column it's short in. Without
+    this, padding a short row at its end shifts every later cell one column
+    left of where it belongs. Clustering every cell's own x0 (kept on
+    TableCell.visual_layout since src/analyzers/table/rules.py stopped
+    discarding it) recovers which column each cell actually belongs to.
+    """
+    x0s = []
+    for row in grid:
+        for cell in row:
+            x0 = _cell_x0(cell)
+            if x0 is None:
+                return None
+            x0s.append(x0)
+    x0s.sort()
+    bins: List[float] = []
+    for x in x0s:
+        if bins and x - bins[-1] < _COLUMN_X_TOLERANCE:
+            continue
+        bins.append(x)
+    return bins
+
+
 def _render_table(table: TableBlock) -> str:
     """Render a table atomically (RFC 0007 §5.2).
 
@@ -400,20 +446,47 @@ def _render_table(table: TableBlock) -> str:
     grid = getattr(table, "grid", None)
     if not grid:
         return ""
-    ncols = max((len(row) for row in grid), default=0)
-    if ncols == 0:
-        return ""
-    col_spec = "|" + "l|" * ncols
+
+    bins = _column_bins(grid)
+    if bins is not None and len(bins) > 1:
+        ncols = len(bins)
+        rendered_rows = []
+        for row in grid:
+            cells = [""] * ncols
+            for cell in row:
+                x0 = _cell_x0(cell)
+                col = min(range(ncols), key=lambda i: abs(bins[i] - x0))
+                text = _esc(_cell_text(cell))
+                row_span = getattr(cell, "row_span", 1) or 1
+                if row_span > 1:
+                    # One value shared across several sub-rows of the source
+                    # (e.g. a condition label next to two stacked readings) -
+                    # RFC 0002: TableCell.row_span, set by
+                    # src/analyzers/table/rules.py _rows_from_block. The
+                    # spanned rows below simply have no cell at this column.
+                    text = f"\\multirow{{{row_span}}}{{*}}{{{text}}}"
+                cells[col] = text
+            rendered_rows.append(cells)
+    else:
+        ncols = max((len(row) for row in grid), default=0)
+        if ncols == 0:
+            return ""
+        rendered_rows = []
+        for row in grid:
+            cells = [_esc(_cell_text(cell)) for cell in row]
+            cells += [""] * (ncols - len(cells))
+            rendered_rows.append(cells)
+
+    # Fixed, wrapping column widths that always sum to \textwidth, regardless
+    # of column count or cell length. Plain "l" columns are unconstrained -
+    # a wide detected grid (many columns, long cell text) ran past the page
+    # margin, and text positioned past the page edge is gone from both the
+    # rendered page and anything that reads it back (RFC 0001 SS2.4: that is
+    # silent loss, just at the render step instead of an earlier one).
+    col_width = f"\\dimexpr(\\textwidth-{ncols * 2}pt)/{ncols}\\relax"
+    col_spec = "|" + (f">{{\\raggedright\\arraybackslash}}p{{{col_width}}}|") * ncols
     lines = ["\\begin{center}", f"\\begin{{tabular}}{{{col_spec}}}", "\\hline"]
-    for row in grid:
-        cells = []
-        for cell in row:
-            cell_text = ""
-            for content in getattr(cell, "content", []):
-                if isinstance(content, ParagraphBlock):
-                    cell_text += _para_text(content)
-            cells.append(_esc(cell_text))
-        cells += [""] * (ncols - len(cells))
+    for cells in rendered_rows:
         lines.append(" & ".join(cells) + " \\\\ \\hline")
     lines += ["\\end{tabular}", "\\end{center}", ""]
     return "\n".join(lines)
