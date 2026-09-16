@@ -464,15 +464,21 @@ def _render_table(table: TableBlock) -> str:
         return ""
 
     bins = _column_bins(grid)
+    # Row-span width, in characters, tracked per cell alongside its text -
+    # needed below to give \multirow an explicit column width instead of
+    # "*" (natural width), which a p{} column can't provide on its own.
     if bins is not None and len(bins) > 1:
         ncols = len(bins)
         rendered_rows = []
         for row in grid:
             cells = [""] * ncols
+            texts = [""] * ncols
             for cell in row:
                 x0 = _cell_x0(cell)
                 col = min(range(ncols), key=lambda i: abs(bins[i] - x0))
-                text = _esc(_cell_text(cell))
+                raw = _cell_text(cell)
+                text = _esc(raw)
+                texts[col] = raw
                 row_span = getattr(cell, "row_span", 1) or 1
                 if row_span > 1:
                     # One value shared across several sub-rows of the source
@@ -480,20 +486,60 @@ def _render_table(table: TableBlock) -> str:
                     # RFC 0002: TableCell.row_span, set by
                     # src/analyzers/table/rules.py _rows_from_block. The
                     # spanned rows below simply have no cell at this column.
-                    text = f"\\multirow{{{row_span}}}{{*}}{{{text}}}"
-                cells[col] = text
-            rendered_rows.append(cells)
+                    cells[col] = ("multirow", row_span, text)
+                else:
+                    cells[col] = text
+            rendered_rows.append((cells, texts))
     else:
         ncols = max((len(row) for row in grid), default=0)
         if ncols == 0:
             return ""
         rendered_rows = []
         for row in grid:
-            cells = [_esc(_cell_text(cell)) for cell in row]
-            cells += [""] * (ncols - len(cells))
-            rendered_rows.append(cells)
+            raws = [_cell_text(cell) for cell in row]
+            raws += [""] * (ncols - len(raws))
+            rendered_rows.append(([_esc(r) for r in raws], raws))
 
-    col_spec = "|" + "l|" * ncols
+    # A column holding whole condition sentences ("145V < VIN < 30V") needs
+    # to wrap onto several lines to stay readable at a normal font size; a
+    # column of short values (MIN/TYP/MAX/UNITS, single words or numbers)
+    # reads better fixed-width and unwrapped. Column width in characters -
+    # not a fixed column-index guess - decides which is which, since a
+    # source table's column order isn't fixed across fixtures.
+    col_max_len = [0] * ncols
+    for _, texts in rendered_rows:
+        for i, t in enumerate(texts):
+            col_max_len[i] = max(col_max_len[i], len(t))
+
+    _WIDE_CHAR_THRESHOLD = 14
+    is_wide = [n > _WIDE_CHAR_THRESHOLD for n in col_max_len]
+    # RFC 0021 SS3: a4paper with 2.2cm margins leaves ~16.6cm of \textwidth;
+    # 16cm stays safely inside it once the table's own vertical rules are
+    # accounted for.
+    _PAGE_WIDTH_CM = 16.0
+    _CHAR_WIDTH_CM = 0.17  # footnotesize average glyph advance, roughtly
+    narrow_total_cm = sum(
+        min(n, _WIDE_CHAR_THRESHOLD) * _CHAR_WIDTH_CM + 0.3
+        for n, wide in zip(col_max_len, is_wide) if not wide
+    )
+    wide_count = sum(is_wide)
+    wide_width_cm = (
+        max(2.2, (_PAGE_WIDTH_CM - narrow_total_cm) / wide_count) if wide_count else 0.0
+    )
+
+    col_spec_parts = [
+        f"p{{{wide_width_cm:.2f}cm}}" if wide else "l"
+        for wide in is_wide
+    ]
+    col_spec = "|" + "|".join(col_spec_parts) + "|"
+
+    def _render_cell(cell: Any, col: int) -> str:
+        if isinstance(cell, tuple):
+            _, row_span, text = cell
+            width = f"{wide_width_cm:.2f}cm" if is_wide[col] else "*"
+            return f"\\multirow{{{row_span}}}{{{width}}}{{{text}}}"
+        return cell
+
     # Outer frame plus a rule under the first row (its usual role is a
     # header), nothing between the rows after that - matching how a real
     # printed table like this is actually ruled: source scans of this exact
@@ -501,23 +547,21 @@ def _render_table(table: TableBlock) -> str:
     # box and under the headings.
     body_lines = [f"\\begin{{tabular}}{{{col_spec}}}", "\\hline"]
     last = len(rendered_rows) - 1
-    for i, cells in enumerate(rendered_rows):
+    for i, (cells, _) in enumerate(rendered_rows):
         rule = "\\hline" if i in (0, last) else ""
-        body_lines.append(" & ".join(cells) + " \\\\ " + rule)
+        rendered = [_render_cell(c, col) for col, c in enumerate(cells)]
+        body_lines.append(" & ".join(rendered) + " \\\\ " + rule)
     body_lines.append("\\end{tabular}")
     tabular = "\n".join(body_lines)
 
-    # Plain "l" columns are unconstrained, so a wide grid (many columns, one
-    # cell holding a full sentence) can be wider than \textwidth - text
-    # positioned past the page edge is gone from both the rendered page and
-    # anything that reads it back (RFC 0001 SS2.4: silent loss, just at the
-    # render step instead of an earlier one). p{width} wrapping columns fixed
-    # that but forced every long cell to wrap into many lines, making a wide
-    # table so tall a plain (unbreakable) tabular overflowed onto - and
-    # partly repeated itself across - a second page. \resizebox scales the
-    # unwrapped table as one image-like block to fit \textwidth (font
-    # included), so nothing wraps and nothing runs off the page.
-    lines = ["\\begin{center}", "\\resizebox{\\textwidth}{!}{%", tabular, "}", "\\end{center}", ""]
+    # A fixed, readable font (footnotesize) with p{} wrapping on the wide
+    # columns only, instead of \resizebox scaling the whole table down to
+    # fit \textwidth - resizebox kept every column on one line but shrank a
+    # wide, many-column table to a font too small to read, trading
+    # structural fidelity for something no reader could use (RFC 0021 SS3
+    # asks for a hybrid render that stays legible, not just geometrically
+    # accurate).
+    lines = ["\\begin{center}", "\\footnotesize", tabular, "\\end{center}", ""]
     return "\n".join(lines)
 
 
