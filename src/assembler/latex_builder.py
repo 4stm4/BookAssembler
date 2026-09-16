@@ -477,18 +477,24 @@ def _render_table(table: TableBlock) -> str:
             cells += [""] * (ncols - len(cells))
             rendered_rows.append(cells)
 
-    # Fixed, wrapping column widths that always sum to \textwidth, regardless
-    # of column count or cell length. Plain "l" columns are unconstrained -
-    # a wide detected grid (many columns, long cell text) ran past the page
-    # margin, and text positioned past the page edge is gone from both the
-    # rendered page and anything that reads it back (RFC 0001 SS2.4: that is
-    # silent loss, just at the render step instead of an earlier one).
-    col_width = f"\\dimexpr(\\textwidth-{ncols * 2}pt)/{ncols}\\relax"
-    col_spec = "|" + (f">{{\\raggedright\\arraybackslash}}p{{{col_width}}}|") * ncols
-    lines = ["\\begin{center}", f"\\begin{{tabular}}{{{col_spec}}}", "\\hline"]
+    col_spec = "|" + "l|" * ncols
+    body_lines = [f"\\begin{{tabular}}{{{col_spec}}}", "\\hline"]
     for cells in rendered_rows:
-        lines.append(" & ".join(cells) + " \\\\ \\hline")
-    lines += ["\\end{tabular}", "\\end{center}", ""]
+        body_lines.append(" & ".join(cells) + " \\\\ \\hline")
+    body_lines.append("\\end{tabular}")
+    tabular = "\n".join(body_lines)
+
+    # Plain "l" columns are unconstrained, so a wide grid (many columns, one
+    # cell holding a full sentence) can be wider than \textwidth - text
+    # positioned past the page edge is gone from both the rendered page and
+    # anything that reads it back (RFC 0001 SS2.4: silent loss, just at the
+    # render step instead of an earlier one). p{width} wrapping columns fixed
+    # that but forced every long cell to wrap into many lines, making a wide
+    # table so tall a plain (unbreakable) tabular overflowed onto - and
+    # partly repeated itself across - a second page. \resizebox scales the
+    # unwrapped table as one image-like block to fit \textwidth (font
+    # included), so nothing wraps and nothing runs off the page.
+    lines = ["\\begin{center}", "\\resizebox{\\textwidth}{!}{%", tabular, "}", "\\end{center}", ""]
     return "\n".join(lines)
 
 
