@@ -16,6 +16,140 @@ from src.krm.models import (
     VisualLayout,
 )
 
+_RULE_ZOOM = 3.0          # render scale for rule detection
+_RULE_PAD_PT = 12.0       # printed rules sit outside the cells' own text boxes
+_RULE_INK_LEVEL = 160     # 0-255 grey below which a pixel counts as ink
+_RULE_SPAN = 0.60         # a rule crosses most of the table, text never does
+
+# How close a printed rule has to run to a cell's own edge to count as that
+# cell's border, as a fraction of the table's own row step (vertically) or
+# column step (horizontally). A cell's box is the extent of its text and the
+# rule beside it is drawn clear of the glyphs, so an exact match finds
+# nothing - but a fixed tolerance is worse: measured, the row step is 0.0176
+# of the page on one fixture and 0.0100 on the other, so any constant wide
+# enough for the first reaches two rows deep into the second. Marking a
+# border then says nothing (every cell of the voltage-regulator table came
+# back ruled top and bottom - 89 of 89 - which cannot be true of cells that
+# share their lines). A third of the step keeps the match inside the gap
+# between one row and the next.
+_BORDER_MATCH_RATIO = 0.34
+_BORDER_MATCH_FLOOR = 0.001
+
+
+def _step(positions: List[float]) -> float:
+    """Median gap between neighbouring positions, or 0.0 if there is none.
+
+    Used to size a table's own border tolerance from its own geometry: the
+    row step and the column step differ by nearly 2x between the fixtures,
+    so a shared constant cannot serve both.
+    """
+    gaps = sorted(
+        positions[i + 1] - positions[i]
+        for i in range(len(positions) - 1)
+        if positions[i + 1] - positions[i] > 0
+    )
+    return gaps[len(gaps) // 2] if gaps else 0.0
+
+
+def _rule_runs(flags) -> List[Tuple[int, int]]:
+    """Contiguous True spans in a 1-D boolean array (one per printed rule)."""
+    out: List[Tuple[int, int]] = []
+    start = None
+    for i, value in enumerate(flags):
+        if value and start is None:
+            start = i
+        elif not value and start is not None:
+            out.append((start, i))
+            start = None
+    if start is not None:
+        out.append((start, len(flags)))
+    return out
+
+
+def _mark_cell_borders(np, pymupdf, page, table) -> bool:
+    """Set each cell's border_* from the rules printed on the source page.
+
+    These pages are scans: the rules are not vector strokes the adapter
+    could have carried into the KRM (page.get_drawings() finds none), so
+    the rendered image is the only place they exist. A rule is the one
+    thing in a table region that runs across most of its width or height -
+    text never does - so thresholding the region and asking which pixel
+    rows/columns are almost entirely ink finds them without needing to know
+    where the columns are.
+
+    Each cell is then asked about its own four edges: a cell carries a
+    border where a detected line runs along that edge of its box. Storing
+    it per cell rather than as a table-level summary keeps the one thing a
+    summary throws away - which particular edge was drawn.
+
+    Returns True when at least one border was set.
+    """
+    bbox = table.visual_layout.bounding_box
+    page_w, page_h = page.rect.width, page.rect.height
+    clip = pymupdf.Rect(
+        bbox.x0 * page_w - _RULE_PAD_PT, bbox.y0 * page_h - _RULE_PAD_PT,
+        bbox.x1 * page_w + _RULE_PAD_PT, bbox.y1 * page_h + _RULE_PAD_PT,
+    )
+    clip = clip & page.rect
+    if clip.is_empty or clip.width < 2 or clip.height < 2:
+        return None
+
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(_RULE_ZOOM, _RULE_ZOOM), clip=clip)
+    if pix.width < 2 or pix.height < 2:
+        return None
+    arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+    ink = arr[:, :, :3].mean(axis=2) < _RULE_INK_LEVEL
+    height, width = ink.shape
+
+    horizontal = _rule_runs(ink.sum(axis=1) > _RULE_SPAN * width)
+    vertical = _rule_runs(ink.sum(axis=0) > _RULE_SPAN * height)
+    if not horizontal and not vertical:
+        return False
+
+    # Each run is a band of pixels in the crop; its centre, taken back
+    # through the render scale and the crop's own offset, is where the
+    # printed line sits on the page.
+    def to_page(run: Tuple[int, int], origin: float, extent: float) -> float:
+        centre = (run[0] + run[1]) / 2.0
+        return (origin + centre / _RULE_ZOOM) / extent
+
+    rule_x = [to_page(run, clip.x0, page_w) for run in vertical]
+    rule_y = [to_page(run, clip.y0, page_h) for run in horizontal]
+
+    # The tolerance has to come from this table's own scale: a rule counts
+    # as a cell's border only if it runs nearer to that edge than the next
+    # row or column is.
+    row_tops = sorted(
+        min(c.visual_layout.bounding_box.y0 for c in row if c.visual_layout)
+        for row in table.grid
+        if any(c.visual_layout for c in row)
+    )
+    col_lefts = sorted({
+        round(c.visual_layout.bounding_box.x0, 4)
+        for row in table.grid for c in row if c.visual_layout
+    })
+    y_tolerance = max(_step(row_tops) * _BORDER_MATCH_RATIO, _BORDER_MATCH_FLOOR)
+    x_tolerance = max(_step(col_lefts) * _BORDER_MATCH_RATIO, _BORDER_MATCH_FLOOR)
+
+    def near(position: float, marks: List[float], tolerance: float) -> bool:
+        return any(abs(position - mark) <= tolerance for mark in marks)
+
+    marked = False
+    for row in table.grid:
+        for cell in row:
+            if cell.visual_layout is None or cell.visual_layout.bounding_box is None:
+                continue
+            box = cell.visual_layout.bounding_box
+            cell.border_left = near(box.x0, rule_x, x_tolerance)
+            cell.border_right = near(box.x1, rule_x, x_tolerance)
+            cell.border_top = near(box.y0, rule_y, y_tolerance)
+            cell.border_bottom = near(box.y1, rule_y, y_tolerance)
+            marked = marked or any(
+                (cell.border_left, cell.border_right, cell.border_top, cell.border_bottom)
+            )
+    return marked
+
+
 def _looks_like_separator(text: str) -> bool:
     return bool(_SEPARATOR_RE.match(text.strip()))
 
