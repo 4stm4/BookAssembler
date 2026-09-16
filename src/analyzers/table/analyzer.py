@@ -17,7 +17,7 @@ from src.krm.models import (
 )
 
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
-from src.analyzers.table.rules import _bbox, _cluster_columns, _count_columns, _find_table_runs, _get_text, _header_row_for_block, _looks_like_separator, _page_idx, _rows_from_block, _table_from_lines
+from src.analyzers.table.rules import _bbox, _cluster_columns, _count_columns, _find_table_runs, _get_text, _header_row_for_block, _looks_like_separator, _page_idx, _rows_from_block, _snap_row_to_columns, _table_from_lines
 
 class TableDetectorAnalyzer(BaseAnalyzer):
     def __init__(self) -> None:
@@ -137,6 +137,8 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                             "table", *[b.id for _, b in run]
                         ),
                         grid=grid,
+                        row_count=len(grid),
+                        column_count=max((len(r) for r in grid), default=0),
                         parent_container_id=container.id,
                         provenance_info=run[0][1].provenance_info,
                         visual_layout=run[0][1].visual_layout,
@@ -204,7 +206,10 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                     ):
                         header_row = _header_row_for_block(header_block)
                         if header_row is not None:
+                            header_row = _snap_row_to_columns(header_row, table.grid)
                             table.grid.insert(0, header_row)
+                            table.row_count = len(table.grid)
+                            table.column_count = max(table.column_count, len(header_row))
                             header_boxes = [
                                 c.visual_layout.bounding_box for c in header_row
                                 if c.visual_layout

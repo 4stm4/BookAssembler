@@ -91,6 +91,8 @@ def test_roundtrip_table_block():
     table = tables[0]
 
     assert _grid_texts(table) == EXPECTED_GRID
+    assert table.row_count == len(EXPECTED_GRID) == 24
+    assert table.column_count == 4
 
     # Geometry: the table's own box is the union of its cells (not just the
     # source block's box wholesale), and every cell carries its own bbox
@@ -98,8 +100,8 @@ def test_roundtrip_table_block():
     # BaseKRMNode; src/analyzers/table/rules.py stopped discarding this).
     table_box = table.visual_layout.bounding_box
     assert table_box.width > 0 and table_box.height > 0
-    first_row = table.grid[0]
-    for cell in first_row:
+    header_row = table.grid[0]
+    for cell in header_row:
         assert cell.visual_layout is not None, "cell lost its geometry"
         box = cell.visual_layout.bounding_box
         assert box.width > 0 and box.height > 0
@@ -107,7 +109,17 @@ def test_roundtrip_table_block():
         assert table_box.y0 <= box.y0 and box.y1 <= table_box.y1
         assert cell.visual_layout.style is not None, "cell lost its font"
         assert cell.visual_layout.style.font_size_pt > 0
-    decimal_cell, binary_cell = first_row[0], first_row[1]
+    # The header's own x0 must land on the body's column positions, not
+    # invent new ones (src/analyzers/table/rules.py _snap_row_to_columns) -
+    # a real bug: "Decimal" is narrower than the digits it heads, so its own
+    # raw x0 clustered as a whole extra column before this fix.
+    body_row = table.grid[1]
+    for header_cell, body_cell in zip(header_row, body_row):
+        assert abs(
+            header_cell.visual_layout.bounding_box.x0
+            - body_cell.visual_layout.bounding_box.x0
+        ) < 0.03, "header column must snap onto the body's own column x0"
+    decimal_cell, binary_cell = body_row[0], body_row[1]
     assert decimal_cell.visual_layout.bounding_box.x1 < binary_cell.visual_layout.bounding_box.x0, (
         "decimal column must sit to the left of the binary column"
     )
