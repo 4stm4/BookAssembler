@@ -17,8 +17,9 @@ from src.krm.models import (
 )
 
 from src.analyzers.caption.signals import _CAPTION_RE
+from src.analyzers.source_io import resolve_source_path
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
-from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _cluster_columns, _count_columns, _find_table_runs, _get_text, _header_row_for_block, _looks_like_separator, _page_idx, _rows_from_block, _rows_from_group, _snap_row_to_columns, _table_from_lines
+from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _cluster_columns, _count_columns, _find_table_runs, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _page_idx, _rows_from_block, _rows_from_group, _snap_row_to_columns, _table_from_lines
 
 class TableDetectorAnalyzer(BaseAnalyzer):
     def __init__(self) -> None:
@@ -51,6 +52,67 @@ class TableDetectorAnalyzer(BaseAnalyzer):
             self._process_container(container)
         if self._table_count:
             log.info("TableDetectorAnalyzer: %d table(s) detected", self._table_count)
+        self._mark_borders(doc)
+
+    def _mark_borders(self, doc: KnowledgeDocument) -> None:
+        """Mark each cell's own edges from the rules printed on the source.
+
+        The grid lines are most of a ruled table's ink, and they are not in
+        the KRM any other way: on these sources they are not vector strokes
+        the adapter could carry over (page.get_drawings() returns nothing -
+        the pages are scans), so the only place they exist is the rendered
+        pixels. A table rebuilt without them is visibly a different object
+        from the one on the page.
+
+        Which edges are drawn is read, not assumed, and it genuinely
+        differs between sources: the decimal/binary page rules only under
+        its header, the voltage-regulator page under every row. Each cell
+        is asked about its own four sides (TableCell.border_*), so a rule
+        that covers part of a boundary stays attached to the cells it
+        actually touches.
+
+        Best-effort by design - no source file, no pixels, or no numpy and
+        the cells simply keep their borders off, and the renderer falls
+        back to its own default.
+        """
+        path = resolve_source_path(doc)
+        if not path:
+            return
+        try:
+            import numpy as np
+            import pymupdf
+        except ImportError:
+            return
+
+        tables: List[TableBlock] = []
+
+        def collect(container: ContainerUnit) -> None:
+            for child in container.children:
+                if isinstance(child, ContainerUnit):
+                    collect(child)
+                elif isinstance(child, TableBlock) and not child.is_tombstoned:
+                    tables.append(child)
+
+        for root in doc.root_containers:
+            collect(root)
+        if not tables:
+            return
+
+        try:
+            source = pymupdf.open(path)
+        except Exception:
+            return
+        try:
+            for table in tables:
+                vl = table.visual_layout
+                if vl is None or vl.bounding_box is None:
+                    continue
+                page_index = vl.page_or_screen_index or 0
+                if page_index >= source.page_count:
+                    continue
+                _mark_cell_borders(np, pymupdf, source[page_index], table)
+        finally:
+            source.close()
 
     def _process_container(self, container: ContainerUnit) -> None:
         for child in list(container.children):

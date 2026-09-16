@@ -214,10 +214,22 @@ class UnknownBlock(StructuralUnit):
 class TableCell(BaseKRMNode):
     """
     Cell inside a table grid containing structural units.
+
+    The four border flags say which of this cell's own edges the source
+    printed a rule on. They live here, per cell, because that is the shape
+    the information actually has: a source table rules some edges and not
+    others, and only the cell knows which of its own sides were drawn. A
+    table-level summary (framed? ruled columns? ruled rows?) cannot express
+    a rule that stops halfway across the table, and loses which boundary a
+    missing line belonged to.
     """
     row_span: int = 1
     col_span: int = 1
     content: List[StructuralUnit] = field(default_factory=list)
+    border_top: bool = False
+    border_right: bool = False
+    border_bottom: bool = False
+    border_left: bool = False
 
 
 @dataclass
@@ -230,6 +242,9 @@ class TableBlock(StructuralUnit):
     a blank filler cell). Both are set by whichever analyzer builds the
     grid (src/analyzers/table/rules.py) rather than left to callers to
     recompute, so every consumer sees the same shape without walking grid.
+
+    Which edges the source printed a rule on lives on the cells themselves
+    (TableCell.border_*), not here: that is the shape the information has.
     """
     grid: List[List[TableCell]] = field(default_factory=list)
     row_count: int = 0

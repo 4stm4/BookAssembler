@@ -531,7 +531,41 @@ def _render_table(table: TableBlock) -> str:
         f"p{{{wide_width_cm:.2f}cm}}" if wide else "l"
         for wide in is_wide
     ]
-    col_spec = "|" + "|".join(col_spec_parts) + "|"
+    # Borders come from the source, not from a house style: each cell
+    # carries the edges the source actually printed a rule on
+    # (TableCell.border_*, set by src/analyzers/table/rules.py
+    # _mark_cell_borders from the page's own pixels). A column is ruled
+    # here when the cells in it say so, and a boundary the source left
+    # unruled stays unruled. With no borders detected at all, fall back to
+    # a plain framed grid rather than inventing a look the source may not
+    # have.
+    def _cells_at(col: int) -> List[Any]:
+        return [row[col] for row in grid if col < len(row)]
+
+    def _any_border(cells: List[Any], side: str) -> bool:
+        return any(getattr(c, side, False) for c in cells)
+
+    has_any_border = any(
+        getattr(cell, side, False)
+        for row in grid for cell in row
+        for side in ("border_left", "border_right", "border_top", "border_bottom")
+    )
+
+    if has_any_border and bins is not None and len(bins) == ncols:
+        # ncols + 1 separators: the table's left edge, each internal
+        # boundary, and the right edge. An internal boundary is ruled when
+        # the column on either side of it carries that edge.
+        seps = []
+        for boundary in range(ncols + 1):
+            left = _cells_at(boundary - 1) if boundary > 0 else []
+            right = _cells_at(boundary) if boundary < ncols else []
+            ruled = _any_border(left, "border_right") or _any_border(right, "border_left")
+            seps.append("|" if ruled else "")
+        col_spec = seps[0] + "".join(
+            part + seps[i + 1] for i, part in enumerate(col_spec_parts)
+        )
+    else:
+        col_spec = "|" + "|".join(col_spec_parts) + "|"
 
     def _render_cell(cell: Any, col: int) -> str:
         if isinstance(cell, tuple):
@@ -540,15 +574,24 @@ def _render_table(table: TableBlock) -> str:
             return f"\\multirow{{{row_span}}}{{{width}}}{{{text}}}"
         return cell
 
-    # Outer frame plus a rule under the first row (its usual role is a
-    # header), nothing between the rows after that - matching how a real
-    # printed table like this is actually ruled: source scans of this exact
-    # table style never draw a line under every row, only round the whole
-    # box and under the headings.
-    body_lines = [f"\\begin{{tabular}}{{{col_spec}}}", "\\hline"]
-    last = len(rendered_rows) - 1
+    # Which rows carry a rule is the source's decision too, and it is the
+    # cells that hold it. An earlier version hardcoded "frame plus a rule
+    # under the header, never between rows" on the claim that printed
+    # tables of this kind are ruled that way - measuring the fixtures
+    # disproved it: the decimal/binary page is ruled that way, but the
+    # voltage-regulator page rules under every single row.
+    def _row_ruled_below(index: int) -> bool:
+        below = grid[index + 1] if index + 1 < len(grid) else []
+        return _any_border(grid[index], "border_bottom") or _any_border(below, "border_top")
+
+    body_lines = [f"\\begin{{tabular}}{{{col_spec}}}"]
+    if has_any_border and grid and _any_border(grid[0], "border_top"):
+        body_lines.append("\\hline")
     for i, (cells, _) in enumerate(rendered_rows):
-        rule = "\\hline" if i in (0, last) else ""
+        if has_any_border:
+            rule = "\\hline" if i < len(grid) and _row_ruled_below(i) else ""
+        else:
+            rule = "\\hline" if i in (0, len(rendered_rows) - 1) else ""
         rendered = [_render_cell(c, col) for col, c in enumerate(cells)]
         body_lines.append(" & ".join(rendered) + " \\\\ " + rule)
     body_lines.append("\\end{tabular}")
@@ -572,10 +615,34 @@ def _render_table(table: TableBlock) -> str:
     # looser than the source, not closer); 1.15 lands nearer the source's
     # measured proportions without guessing. \renewcommand here is scoped
     # to this \begin{center}...\end{center} group, not global.
+    # Set the table at the size it was printed at, not at a fixed
+    # \footnotesize. Every TableCell carries the StyleDescriptor read off
+    # its own source span (RFC 0002), so the size is known rather than
+    # guessed - and the guess was far off: the decimal/binary fixture is
+    # printed at ~14pt while \footnotesize is ~8pt, so every glyph came out
+    # near half the size it should be. The median cell size is used because
+    # one stray span (a footnote marker, an OCR artifact) should not set the
+    # size for the whole table.
+    cell_sizes = sorted(
+        cell.visual_layout.style.font_size_pt
+        for row in grid for cell in row
+        if cell.visual_layout
+        and cell.visual_layout.style
+        and cell.visual_layout.style.font_size_pt
+    )
+    size_pt = cell_sizes[len(cell_sizes) // 2] if cell_sizes else 8.0
+    size_cmd = f"\\fontsize{{{size_pt:.2f}}}{{{size_pt * 1.2:.2f}}}\\selectfont"
+
+    # LaTeX's default \tabcolsep (6pt each side) pushes the column rules
+    # that far outside the cells' text, so the rebuilt table's rules sit
+    # well outside the span its own text occupies - measured against the
+    # source, whose rules hug the text closely. 2pt keeps them next to the
+    # text without letting the glyphs touch the line.
     lines = [
         "\\begin{center}",
         "\\renewcommand{\\arraystretch}{1.15}",
-        "\\footnotesize",
+        "\\setlength{\\tabcolsep}{2pt}",
+        size_cmd,
         tabular,
         "\\end{center}",
         "",
