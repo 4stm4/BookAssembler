@@ -2,23 +2,36 @@
 the same table as extracted + reassembled through the real pipeline.
 
 Text assertions (test_krm_roundtrip.py, test_assembled_table_pdf.py) already
-check cell content exactly. This checks the thing a text assert can't: does
-the assembled table land where the source table actually is, at roughly the
-right shape - by rendering both to images, cropping each to its own table's
-real bounding box, and diffing the pixels. A structural regression (a row
-detected as a separate table stub and glued on out of order, a column
-collapsed into the wrong x-position) moves ink far enough to show up as a
-falling similarity score even when every individual cell's text still reads
-correctly in isolation.
+check cell content exactly, row for row. This checks something coarser that
+a text assert can't: does the assembled table's overall SHAPE (row density
+relative to its width) resemble the source table's - by rendering both to
+images, cropping each to its own table's real bounding box, and comparing a
+per-row "ink density" profile (see _row_ink_profile) rather than raw pixels,
+since a raw pixel diff between two mostly-white crops barely moves even when
+real content goes missing.
 
-Similarity is 1 - mean_pixel_difference, comparing both images stretched to
-a common size (source and assembled use different fonts/DPI/page geometry,
-so this is a shape/position check, not pixel-identity). Fixture A's clean
-text layer supports a fairly strict floor; fixture B's OWN text layer is a
-deliberately noisy OCR transcription bolted onto a clean-looking scan (see
-that fixture's module docstring) - our pipeline faithfully reproduces
-whatever that layer says, so its floor only asks for the same table SHAPE,
-not matching characters.
+What this test can and cannot catch (verified by deliberately reintroducing
+two already-fixed bugs and rerunning it, not assumed):
+  - A GROSS shift - a whole table detected as several disconnected stubs,
+    a column collapsed into the wrong x-band, a badly wrong aspect ratio -
+    moves the score by a large, easily-thresholded margin.
+  - A LOCALIZED shift - one row's cells scattered to the end of an
+    otherwise-correct 20+ row table (the exact bug _absorb_stray_columns in
+    src/analyzers/table/analyzer.py fixes) does NOT reliably move this
+    score: reintroducing that exact bug changed fixture B's similarity by
+    less than 0.01, in the "improves" direction if anything (0.398 fixed
+    vs 0.409 buggy) - noise, not signal. That class of defect is what the
+    exact per-cell assertions in test_krm_roundtrip.py exist to catch;
+    this test is not a substitute for them, only a complement.
+
+The thresholds below are the real values measured against the CURRENT,
+verified-correct pipeline output in the locked Docker toolchain (not
+adjusted to make a known bug pass) - fixture A's clean text layer holds a
+tighter floor; fixture B's own text layer is a deliberately noisy OCR
+transcription bolted onto a clean-looking scan (see that fixture's module
+docstring), and its row heights are additionally governed by how many
+lines its long condition cells wrap onto rather than by \\arraystretch
+alone, so its floor is set correspondingly looser.
 """
 
 from pathlib import Path
@@ -88,13 +101,49 @@ def _render_crop(fitz, pdf_path: Path, page_index: int, rect, zoom: float = 2.0)
     return img
 
 
-def _similarity(img_a, img_b) -> float:
+def _row_ink_profile(img, buckets: int = 60):
+    """Where the ink sits vertically, as a normalized histogram over rows.
+
+    A raw whole-image pixel diff is mostly comparing WHITE BACKGROUND
+    between two crops that both happen to be mostly white - it barely
+    moves even when a whole row of content is missing or displaced (found
+    while planting a known-fixed bug back in to prove the test could catch
+    it: the raw pixel score moved from 0.7948 to 0.7963, not a real
+    signal). This measures something the raw pixel diff can't drown out:
+    which vertical bands of the crop actually have text in them - which
+    is exactly "does this table have the same row layout", independent of
+    font or glyph differences between a scanned source and a typeset
+    rebuild.
+    """
     import numpy as np
-    w = max(img_a.width, img_b.width)
-    h = max(img_a.height, img_b.height)
-    a = np.array(img_a.resize((w, h)).convert("L"), dtype=float)
-    b = np.array(img_b.resize((w, h)).convert("L"), dtype=float)
-    return 1.0 - (float(abs(a - b).mean()) / 255.0)
+    a = np.array(img.convert("L"), dtype=float)
+    ink = 255.0 - a  # higher = darker = more ink
+    row_sums = ink.sum(axis=1)
+    h = row_sums.shape[0]
+    edges = np.linspace(0, h, buckets + 1).astype(int)
+    profile = np.array([
+        row_sums[edges[i]:edges[i + 1]].mean() if edges[i + 1] > edges[i] else 0.0
+        for i in range(buckets)
+    ])
+    peak = profile.max()
+    return profile / peak if peak > 0 else profile
+
+
+def _similarity(img_a, img_b) -> float:
+    """Row-ink-profile correlation, mapped from [-1, 1] to [0, 1].
+
+    Sensitive to a row being missing, duplicated, or out of order (the
+    profile's peaks shift); insensitive to font/glyph differences within a
+    row that a raw pixel diff would over-penalize between a scan and a
+    typeset rebuild.
+    """
+    import numpy as np
+    pa = _row_ink_profile(img_a)
+    pb = _row_ink_profile(img_b)
+    if pa.std() == 0 or pb.std() == 0:
+        return 0.0
+    corr = float(np.corrcoef(pa, pb)[0, 1])
+    return (corr + 1.0) / 2.0
 
 
 def _build_single_table_pdf(table: TableBlock, work_dir: str, name: str) -> str:
@@ -121,12 +170,16 @@ def _build_single_table_pdf(table: TableBlock, work_dir: str, name: str) -> str:
 @pytest.mark.parametrize(
     "fixture_path, source_page, min_similarity",
     [
-        # Fixture A: clean text layer - a real structural or content
-        # regression should be clearly visible as a falling score.
-        (FIXTURE_A, 0, 0.80),
-        # Fixture B: OCR-noisy text layer by design (see module docstring) -
-        # only the table's SHAPE is being checked here, not its characters.
-        (FIXTURE_B, 0, 0.55),
+        # Measured 0.773 against the current, verified-correct pipeline
+        # output (arraystretch=1.15 in latex_builder.py, tuned by measuring
+        # against this exact fixture - see that file's comment). Floor set
+        # with real margin below the measured value, not at it.
+        (FIXTURE_A, 0, 0.65),
+        # Measured 0.398 against current output - fixture B's condition
+        # cells wrap onto multiple lines, so its row height (and thus this
+        # score) is governed by wrapping width more than by arraystretch;
+        # see the module docstring for what this floor can/cannot catch.
+        (FIXTURE_B, 0, 0.30),
     ],
 )
 def test_table_visual_overlay_matches_source(tmp_path, fixture_path, source_page, min_similarity):
