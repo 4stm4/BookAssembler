@@ -245,6 +245,29 @@ def _group_into_rows(
     return grouped
 
 
+def _header_row_for_block(block: Any) -> Optional[List["TableCell"]]:
+    """The sibling directly above a detected table, read as its header row.
+
+    A table's own column headings ("Decimal Binary Decimal Binary") are
+    often a separate PDF block from the table body - the adapter has no way
+    to know they belong together (RFC 0008 §5.2), so TableDetectorAnalyzer
+    grabbing only the body block silently drops the header. This is
+    deliberately narrow: only a block whose own lines collapse to exactly
+    one visual row (via _group_into_rows) qualifies - a wrapped multi-line
+    paragraph sitting just above the table (ordinary body text, not a
+    heading) produces more than one row and is correctly rejected.
+    """
+    fragments = [item for item in _line_rows(block) if not _looks_like_separator(item[0])]
+    if not fragments:
+        return None
+    sub_rows = _group_into_rows(fragments)
+    if len(sub_rows) != 1 or len(sub_rows[0]) < 2:
+        return None
+    page_idx = _page_idx(block)
+    row = sorted(sub_rows[0], key=lambda item: item[1].x0 if item[1] is not None else 0.0)
+    return [_make_cell(t, b, s, page_idx) for t, b, s in row]
+
+
 def _table_from_lines(block: Any) -> Optional[TableBlock]:
     """A TableBlock built from one block's own lines, or None.
 
