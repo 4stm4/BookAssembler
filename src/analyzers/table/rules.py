@@ -21,90 +21,12 @@ _RULE_PAD_PT = 12.0       # printed rules sit outside the cells' own text boxes
 _RULE_INK_LEVEL = 160     # 0-255 grey below which a pixel counts as ink
 _RULE_SPAN = 0.60         # a rule crosses most of the table, text never does
 
-# How close a printed rule has to run to a cell's own edge to count as that
-# cell's border, as a fraction of the table's own row step (vertically) or
-# column step (horizontally). A cell's box is the extent of its text and the
-# rule beside it is drawn clear of the glyphs, so an exact match finds
-# nothing - but a fixed tolerance is worse: measured, the row step is 0.0176
-# of the page on one fixture and 0.0100 on the other, so any constant wide
-# enough for the first reaches two rows deep into the second. Marking a
-# border then says nothing (every cell of the voltage-regulator table came
-# back ruled top and bottom - 89 of 89 - which cannot be true of cells that
-# share their lines). A third of the step keeps the match inside the gap
-# between one row and the next.
-_BORDER_MATCH_RATIO = 0.34
+# Smallest reach allowed when asking whether a horizontal rule runs along a
+# cell's own edge. The reach is normally the cell's own height, which is the
+# right scale and needs no table-wide constant; this only covers a cell whose
+# box came out with no height at all, so that it does not silently match
+# every line on the page.
 _BORDER_MATCH_FLOOR = 0.001
-
-
-def _cluster_extents(
-    starts_ends: List[Tuple[float, float]], tolerance: float,
-) -> List[Tuple[float, float]]:
-    """Group (start, end) spans that share a start into one track's extent.
-
-    A "column" is the set of cells that begin at roughly the same x; the
-    track it occupies runs from the leftmost of their starts to the
-    rightmost of their ends. Rows work the same way on the other axis.
-    """
-    ordered = sorted(starts_ends)
-    tracks: List[List[Tuple[float, float]]] = []
-    for span in ordered:
-        if tracks and span[0] - tracks[-1][0][0] < tolerance:
-            tracks[-1].append(span)
-        else:
-            tracks.append([span])
-    return [(min(s for s, _ in t), max(e for _, e in t)) for t in tracks]
-
-
-def _ruled_boundaries(
-    marks: List[float], extents: List[Tuple[float, float]], tolerance: float,
-) -> set:
-    """Which boundaries between tracks a printed line falls on.
-
-    A rule runs in the GAP between two tracks, never through one: matching
-    it against a cell's own box compares a line drawn clear of the glyphs
-    with the edge of those glyphs, which cannot coincide at any tolerance -
-    measured, that left every vertical border unset on both fixtures.
-    Boundary i sits between track i-1 and track i; 0 is the outer edge
-    before the first track and len(extents) the one after the last.
-    """
-    ruled = set()
-    if not extents:
-        return ruled
-    for mark in marks:
-        if mark <= extents[0][0] + tolerance:
-            ruled.add(0)
-            continue
-        if mark >= extents[-1][1] - tolerance:
-            ruled.add(len(extents))
-            continue
-        for i in range(1, len(extents)):
-            if extents[i - 1][1] - tolerance <= mark <= extents[i][0] + tolerance:
-                ruled.add(i)
-                break
-    return ruled
-
-
-def _track_of(position: float, extents: List[Tuple[float, float]]) -> int:
-    """Index of the track a cell belongs to, by its own start position."""
-    return min(
-        range(len(extents)),
-        key=lambda i: abs(extents[i][0] - position),
-    ) if extents else 0
-
-
-def _step(positions: List[float]) -> float:
-    """Median gap between neighbouring positions, or 0.0 if there is none.
-
-    Used to size a table's own border tolerance from its own geometry: the
-    row step and the column step differ by nearly 2x between the fixtures,
-    so a shared constant cannot serve both.
-    """
-    gaps = sorted(
-        positions[i + 1] - positions[i]
-        for i in range(len(positions) - 1)
-        if positions[i + 1] - positions[i] > 0
-    )
-    return gaps[len(gaps) // 2] if gaps else 0.0
 
 
 def _rule_runs(flags) -> List[Tuple[int, int]]:
@@ -179,33 +101,40 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
     if not placed:
         return False
 
-    # Cells cluster into columns by where they start, and into rows the same
-    # way on the other axis; a printed rule then belongs to the gap between
-    # two of those tracks. The clustering tolerance is a fraction of the
-    # table's own step, because the step differs about twofold between the
-    # fixtures and one constant cannot serve both.
-    col_spans = [(c.visual_layout.bounding_box.x0, c.visual_layout.bounding_box.x1) for c in placed]
-    row_spans = [(c.visual_layout.bounding_box.y0, c.visual_layout.bounding_box.y1) for c in placed]
-    x_step = _step(sorted({round(s, 4) for s, _ in col_spans}))
-    y_step = _step(sorted({round(s, 4) for s, _ in row_spans}))
-    x_tolerance = max(x_step * _BORDER_MATCH_RATIO, _BORDER_MATCH_FLOOR)
-    y_tolerance = max(y_step * _BORDER_MATCH_RATIO, _BORDER_MATCH_FLOOR)
-
-    col_extents = _cluster_extents(col_spans, max(x_step, _BORDER_MATCH_FLOOR))
-    row_extents = _cluster_extents(row_spans, max(y_step, _BORDER_MATCH_FLOOR))
-    ruled_x = _ruled_boundaries(rule_x, col_extents, x_tolerance)
-    ruled_y = _ruled_boundaries(rule_y, row_extents, y_tolerance)
-    if not ruled_x and not ruled_y:
+    # The printed lines ARE the grid - there is no need to infer columns
+    # from where the glyphs happen to start, which is what an earlier
+    # version did and what kept going wrong (the spread inside one column
+    # is larger than the distance used to separate columns, so four columns
+    # clustered into sixteen tracks and a shared boundary came back ruled
+    # on one side only). A cell simply sits in the band between two lines.
+    verticals = sorted(rule_x)
+    horizontals = sorted(rule_y)
+    if not verticals and not horizontals:
         return False
+
+    def band(position: float, lines: List[float]) -> Tuple[Optional[float], Optional[float]]:
+        before = [v for v in lines if v <= position]
+        after = [v for v in lines if v >= position]
+        return (before[-1] if before else None, after[0] if after else None)
 
     for cell in placed:
         box = cell.visual_layout.bounding_box
-        column = _track_of(box.x0, col_extents)
-        line = _track_of(box.y0, row_extents)
-        cell.border_left = column in ruled_x
-        cell.border_right = (column + 1) in ruled_x
-        cell.border_top = line in ruled_y
-        cell.border_bottom = (line + 1) in ruled_y
+        # A vertical rule runs the full height of the table, so the lines
+        # bounding a cell's band are that column's edges for every cell in
+        # it - no proximity test needed or wanted.
+        left, right = band((box.x0 + box.x1) / 2.0, verticals)
+        cell.border_left = left is not None
+        cell.border_right = right is not None
+
+        # A horizontal rule spans the full width the same way, but a table
+        # ruled only under its header puts 22 rows inside one band, and the
+        # rows in the middle of it touch neither line. So an edge counts
+        # only when the line actually runs along it, judged against this
+        # cell's own height rather than any table-wide constant.
+        above, below = band((box.y0 + box.y1) / 2.0, horizontals)
+        reach = max(box.y1 - box.y0, _BORDER_MATCH_FLOOR)
+        cell.border_top = above is not None and (box.y0 - above) <= reach
+        cell.border_bottom = below is not None and (below - box.y1) <= reach
     return True
 
 
