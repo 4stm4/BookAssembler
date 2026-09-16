@@ -42,18 +42,21 @@ def _extract_table(pdf_path: Path, index: int = 0) -> TableBlock:
     doc = PdfSourceAdapter().parse(open(pdf_path, "rb"), f"file://{pdf_path}")
     container = doc.root_containers[0]
     TableDetectorAnalyzer().run(doc, ReadingGraph(), KnowledgeGraph())
-    tables = [c for c in container.children if isinstance(c, TableBlock)]
-    assert tables, f"no TableBlock extracted from {pdf_path.name}"
+    tables = [
+        c for c in container.children
+        if isinstance(c, TableBlock) and not c.is_tombstoned
+    ]
+    assert tables, f"no live TableBlock extracted from {pdf_path.name}"
     return tables[index]
 
 
 @pytest.fixture(scope="module")
 def two_source_doc() -> KnowledgeDocument:
     table_a = _extract_table(FIXTURE_A)
-    # index 0: the 20-row nA7812 spec table - the largest, most clearly
-    # tabular block on this messier page (see tests/e2e/test_krm_roundtrip.py
-    # history: this fixture was also used to catch a prose false-positive
-    # and a fragmentation regression in the detector itself).
+    # index 0: the nA7812 spec table (28 rows once merged - see
+    # tests/e2e/test_krm_roundtrip.py history: this fixture was also used to
+    # catch a prose false-positive, a fragmentation regression, and the
+    # adjacent-table-merge fix in _merge_adjacent_tables).
     table_b = _extract_table(FIXTURE_B, index=0)
 
     return KnowledgeDocument(

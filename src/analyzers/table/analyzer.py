@@ -16,6 +16,7 @@ from src.krm.models import (
     VisualLayout,
 )
 
+from src.analyzers.caption.signals import _CAPTION_RE
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
 from src.analyzers.table.rules import _bbox, _cluster_columns, _count_columns, _find_table_runs, _get_text, _header_row_for_block, _looks_like_separator, _page_idx, _rows_from_block, _snap_row_to_columns, _table_from_lines
 
@@ -176,6 +177,85 @@ class TableDetectorAnalyzer(BaseAnalyzer):
             container.children = new_children
 
         self._detect_single_block_tables(container)
+        self._merge_adjacent_tables(container)
+
+    def _merge_adjacent_tables(self, container: ContainerUnit) -> None:
+        """Fold a run of TableBlocks with nothing real between them into one.
+
+        The two detection passes above see the page's own block boundaries,
+        not the table's true extent: a single logical table (one bordered
+        box in the source, RFC 0008 §5.2 - the adapter cannot tell them it
+        is one table) can straddle both paths when the source mixes
+        granularity - most of its rows arrive as one-line siblings the
+        cross-block path clusters, but one sibling packs several rows into
+        one block (over MAX_CELL_TEXT_LEN once flattened, so the cross-block
+        collector skips it) and only the single-block path catches that
+        piece, as its own separate TableBlock right next to the first.
+
+        A short stray line between two such fragments (its own row that
+        neither pass claimed) is absorbed into the run too, via the same
+        _rows_from_block reader used elsewhere; anything long enough to be
+        real prose stops the run, so this can't swallow unrelated content.
+        """
+        children = container.children
+        i = 0
+        while i < len(children):
+            if not isinstance(children[i], TableBlock):
+                i += 1
+                continue
+            base = children[i]
+            merged_grid: List[List[TableCell]] = list(base.grid)
+            boxes = [c.visual_layout.bounding_box for r in merged_grid for c in r if c.visual_layout]
+            consumed: List[int] = []
+            j = i + 1
+            while j < len(children):
+                nxt = children[j]
+                if getattr(nxt, "is_tombstoned", False):
+                    j += 1
+                    continue
+                if isinstance(nxt, TableBlock):
+                    merged_grid.extend(nxt.grid)
+                    if nxt.visual_layout:
+                        boxes.append(nxt.visual_layout.bounding_box)
+                    consumed.append(j)
+                    j += 1
+                    continue
+                next_text = _get_text(nxt) if isinstance(nxt, (ParagraphBlock, UnknownBlock)) else ""
+                if (
+                    isinstance(nxt, (ParagraphBlock, UnknownBlock))
+                    and len(next_text) <= MAX_CELL_TEXT_LEN // 2
+                    and not _CAPTION_RE.match(next_text.strip())
+                ):
+                    extra_rows = _rows_from_block(nxt)
+                    if extra_rows:
+                        merged_grid.extend(extra_rows)
+                        consumed.append(j)
+                        j += 1
+                        continue
+                break
+            if not consumed:
+                i += 1
+                continue
+            base.grid = merged_grid
+            base.row_count = len(merged_grid)
+            base.column_count = max((len(r) for r in merged_grid), default=0)
+            if boxes and base.visual_layout:
+                base.visual_layout = VisualLayout(
+                    bounding_box=NormalizedRect(
+                        x0=min(b.x0 for b in boxes), y0=min(b.y0 for b in boxes),
+                        x1=max(b.x1 for b in boxes), y1=max(b.y1 for b in boxes),
+                    ),
+                    page_or_screen_index=base.visual_layout.page_or_screen_index,
+                )
+            for k in consumed:
+                children[k].is_tombstoned = True
+                if not children[k].metadata:
+                    children[k].metadata = {}
+                children[k].metadata["tombstone_reason"] = (
+                    "merged_into_adjacent_table" if isinstance(children[k], TableBlock)
+                    else "merged_into_table_row"
+                )
+            i = j
 
     def _detect_single_block_tables(self, container: ContainerUnit) -> None:
         """A table can also arrive as ONE block whose own lines are the rows
