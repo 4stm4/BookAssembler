@@ -107,8 +107,48 @@ def _line_rows(block: Any) -> List[Tuple[str, Optional[NormalizedRect], Optional
         vl = getattr(inline, "visual_layout", None)
         bbox = getattr(vl, "bounding_box", None) if vl else None
         style = getattr(vl, "style", None) if vl else None
-        rows.append((text, bbox, style))
+        rows.extend(_split_numeric_pair(text, bbox, style))
     return rows
+
+
+def _split_numeric_pair(
+    text: str, bbox: Optional[NormalizedRect], style: Optional[Any],
+) -> List[Tuple[str, Optional[NormalizedRect], Optional[Any]]]:
+    """Split "63 00111111" into "63" and "00111111", each with its own bbox.
+
+    PyMuPDF's own line grouping is inconsistent row to row on this exact
+    table: most rows keep a decimal value and its binary value as separate
+    PDF lines (two inlines, two bboxes, cleanly binned to two columns), but
+    some rows fuse them into one inline whose bbox spans both columns'
+    width. Binning that fused fragment by its own x0 alone drops it whole
+    into one column and leaves the other blank for that row - visually, the
+    binary value reads as printed under the Decimal heading.
+
+    Narrowly scoped on purpose: only fires when every whitespace-separated
+    token is pure digits (a page of running text never matches this), so a
+    real multi-word label ("Line Regulation") is never touched. Width is
+    split proportionally by character count - the source uses a fixed-width
+    face for these numbers, so this lines the split up with the real glyph
+    boundaries closely enough for column binning.
+    """
+    tokens = text.split()
+    if len(tokens) < 2 or not all(t.isdigit() for t in tokens):
+        return [(text, bbox, style)]
+    if bbox is None:
+        return [(text, bbox, style)]
+    total_chars = sum(len(t) for t in tokens)
+    if total_chars == 0:
+        return [(text, bbox, style)]
+    width = bbox.x1 - bbox.x0
+    parts: List[Tuple[str, Optional[NormalizedRect], Optional[Any]]] = []
+    x = bbox.x0
+    for i, tok in enumerate(tokens):
+        share = len(tok) / total_chars
+        tok_width = width * share
+        x1 = bbox.x1 if i == len(tokens) - 1 else min(bbox.x1, x + tok_width)
+        parts.append((tok, NormalizedRect(x0=x, y0=bbox.y0, x1=x1, y1=bbox.y1), style))
+        x = x1
+    return parts
 
 
 def _make_cell(
