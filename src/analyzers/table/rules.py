@@ -238,11 +238,50 @@ def _group_into_rows(
         else:
             grouped.append([item])
 
+    grouped = _merge_stray_rows(grouped)
+
     for item in grouped:
         item.sort(key=lambda tb: tb[1].x0)
 
     grouped.extend([item] for item in without_bbox)
     return grouped
+
+
+def _merge_stray_rows(
+    grouped: List[List[Tuple[str, Optional[NormalizedRect], Optional[Any]]]],
+) -> List[List[Tuple[str, Optional[NormalizedRect], Optional[Any]]]]:
+    """Fold a row sitting far closer to its neighbor than a real row step.
+
+    A real, decades-old typeset table can place an ellipsis dot a few points
+    below the line above it - well past _ROW_Y_TOLERANCE, so it survives
+    grouping as its own row, but nowhere near the table's own normal
+    row-to-row spacing either (found on the Fig. 1.2 fixture: a dot at
+    +4.9pt when every real row step there is ~14.7-15.2pt). That gap size is
+    itself the tell: a row closer to its neighbor than roughly half the
+    table's typical step is sharing that neighbor's line, not starting a
+    genuine new one, and gets folded into whichever neighbor it sits closer
+    to. Rows spaced at or near the typical step are never touched.
+    """
+    if len(grouped) < 3:
+        return grouped
+    y0s = [row[0][1].y0 for row in grouped]
+    gaps = [y0s[i + 1] - y0s[i] for i in range(len(y0s) - 1)]
+    if not gaps:
+        return grouped
+    typical_step = sorted(gaps)[len(gaps) // 2]
+    if typical_step <= 0:
+        return grouped
+    threshold = typical_step * 0.6
+
+    merged: List[List[Tuple[str, Optional[NormalizedRect], Optional[Any]]]] = []
+    merged_y0s: List[float] = []
+    for row, y0 in zip(grouped, y0s):
+        if merged and (y0 - merged_y0s[-1]) < threshold:
+            merged[-1] = merged[-1] + row
+            continue
+        merged.append(row)
+        merged_y0s.append(y0)
+    return merged
 
 
 _COLUMN_X_TOLERANCE = 0.03  # matches src/assembler/latex_builder.py's _column_bins

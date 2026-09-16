@@ -256,7 +256,23 @@ def render_node(
     elif isinstance(node, CaptionBlock):
         cap = _esc(_translated(node, node.caption_text or "", target_lang))
         if cap:
-            body.append(f"\\textit{{{cap}}}\n\n")
+            # Position and typography, not just the words: a caption sits
+            # centered under its table/figure in the source, in whatever
+            # font the source actually printed it in (kept on
+            # visual_layout.style through reclassification - RFC 0001 §2.3 -
+            # but unused here until now).
+            vl = getattr(node, "visual_layout", None)
+            style = getattr(vl, "style", None) if vl else None
+            font_cmd = ""
+            if style and style.font_size_pt:
+                size = style.font_size_pt
+                font_cmd = f"\\fontsize{{{size:.1f}}}{{{size * 1.2:.1f}}}\\selectfont "
+            weight = "\\bfseries " if style and style.is_bold else ""
+            body.append(
+                "\\begin{center}\n"
+                f"{{{font_cmd}{weight}\\textit{{{cap}}}}}\n"
+                "\\end{center}\n\n"
+            )
     elif isinstance(node, FootnoteBlock):
         # We don't have inline references reliably; render as a plain
         # small-font \footnotetext at the current position so the note
@@ -478,9 +494,16 @@ def _render_table(table: TableBlock) -> str:
             rendered_rows.append(cells)
 
     col_spec = "|" + "l|" * ncols
+    # Outer frame plus a rule under the first row (its usual role is a
+    # header), nothing between the rows after that - matching how a real
+    # printed table like this is actually ruled: source scans of this exact
+    # table style never draw a line under every row, only round the whole
+    # box and under the headings.
     body_lines = [f"\\begin{{tabular}}{{{col_spec}}}", "\\hline"]
-    for cells in rendered_rows:
-        body_lines.append(" & ".join(cells) + " \\\\ \\hline")
+    last = len(rendered_rows) - 1
+    for i, cells in enumerate(rendered_rows):
+        rule = "\\hline" if i in (0, last) else ""
+        body_lines.append(" & ".join(cells) + " \\\\ " + rule)
     body_lines.append("\\end{tabular}")
     tabular = "\n".join(body_lines)
 
