@@ -30,8 +30,12 @@ from src.krm.models import TableBlock, UnknownBlock
 FIXTURE_PDF = Path(__file__).parent.parent / "fixtures" / "z80_decimal_binary_table.pdf"
 
 # The table exactly as printed on the page (Fig. 1.2), row by row, left to
-# right. A "•" cell is the printed ellipsis marker for an omitted range.
+# right. A "•" cell is the printed ellipsis marker for an omitted range. The
+# header row is a separate PDF block from the table body - TableDetectorAnalyzer
+# absorbs it as the sibling directly above the detected table (RFC 0008 §5.2:
+# the adapter has no way to know they belong together).
 EXPECTED_GRID = [
+    ["Decimal", "Binary", "Decimal", "Binary"],
     ["0", "00000000", "32", "00100000"],
     ["1 00000001", "33", "00100001"],
     ["2", "00000010", "•"],
@@ -112,8 +116,12 @@ def test_roundtrip_table_block():
         c for c in container.children
         if isinstance(c, UnknownBlock) and c.is_tombstoned
     ]
-    assert not absorbed, (
-        "the table's own block was reclassified in place (RFC 0001 SS2.3), "
-        "not absorbed from separate siblings, so nothing here should be "
-        "tombstoned"
+    assert len(absorbed) == 1, (
+        "exactly one sibling should be absorbed: the header row block "
+        f"('Decimal Binary Decimal Binary'), got {len(absorbed)}"
     )
+    absorbed_text = " ".join(
+        s.text for b in absorbed[0].inlines for s in b.spans
+    )
+    assert absorbed_text == "Decimal Binary Decimal Binary"
+    assert absorbed[0].metadata.get("tombstone_reason") == "merged_into_table_header"

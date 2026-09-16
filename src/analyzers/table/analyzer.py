@@ -13,10 +13,11 @@ from src.krm.models import (
     TableBlock,
     TableCell,
     UnknownBlock,
+    VisualLayout,
 )
 
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
-from src.analyzers.table.rules import _bbox, _cluster_columns, _count_columns, _find_table_runs, _get_text, _looks_like_separator, _page_idx, _rows_from_block, _table_from_lines
+from src.analyzers.table.rules import _bbox, _cluster_columns, _count_columns, _find_table_runs, _get_text, _header_row_for_block, _looks_like_separator, _page_idx, _rows_from_block, _table_from_lines
 
 class TableDetectorAnalyzer(BaseAnalyzer):
     def __init__(self) -> None:
@@ -194,5 +195,34 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                 continue
             table = _table_from_lines(child)
             if table is not None:
+                header_idx = idx - 1
+                if header_idx >= 0:
+                    header_block = container.children[header_idx]
+                    if (
+                        not getattr(header_block, "is_tombstoned", False)
+                        and isinstance(header_block, (ParagraphBlock, UnknownBlock))
+                    ):
+                        header_row = _header_row_for_block(header_block)
+                        if header_row is not None:
+                            table.grid.insert(0, header_row)
+                            header_boxes = [
+                                c.visual_layout.bounding_box for c in header_row
+                                if c.visual_layout
+                            ]
+                            if header_boxes and table.visual_layout:
+                                old = table.visual_layout.bounding_box
+                                table.visual_layout = VisualLayout(
+                                    bounding_box=NormalizedRect(
+                                        x0=min(old.x0, min(b.x0 for b in header_boxes)),
+                                        y0=min(old.y0, min(b.y0 for b in header_boxes)),
+                                        x1=max(old.x1, max(b.x1 for b in header_boxes)),
+                                        y1=max(old.y1, max(b.y1 for b in header_boxes)),
+                                    ),
+                                    page_or_screen_index=table.visual_layout.page_or_screen_index,
+                                )
+                            header_block.is_tombstoned = True
+                            if not header_block.metadata:
+                                header_block.metadata = {}
+                            header_block.metadata["tombstone_reason"] = "merged_into_table_header"
                 container.children[idx] = table
                 self._table_count += 1
