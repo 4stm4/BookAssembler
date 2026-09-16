@@ -57,21 +57,6 @@ class TableDetectorAnalyzer(BaseAnalyzer):
             if isinstance(child, ContainerUnit):
                 self._process_container(child)
 
-        # A table can also arrive as ONE block whose own lines are the rows
-        # (a PDF text layer that groups a boxed table into a single block —
-        # RFC 0008 §5.2 forbids the adapter from splitting it further). Try
-        # this before the cross-block path below; a block that isn't a table
-        # is returned untouched, so ordinary paragraphs never get here.
-        for idx, child in enumerate(container.children):
-            if getattr(child, "is_tombstoned", False):
-                continue
-            if not isinstance(child, (ParagraphBlock, UnknownBlock)):
-                continue
-            table = _table_from_lines(child)
-            if table is not None:
-                container.children[idx] = table
-                self._table_count += 1
-
         para_blocks: List[Tuple[int, ParagraphBlock]] = []
         separator_indices: set = set()
         for idx, child in enumerate(container.children):
@@ -93,6 +78,7 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                 para_blocks.append((idx, child))
 
         if len(para_blocks) < MIN_TABLE_ROWS:
+            self._detect_single_block_tables(container)
             return
 
         pages: Dict[int, List[Tuple[int, ParagraphBlock]]] = {}
@@ -171,19 +157,43 @@ class TableDetectorAnalyzer(BaseAnalyzer):
             if (sep_idx - 1) in indices_to_remove or (sep_idx + 1) in indices_to_remove:
                 indices_to_remove.add(sep_idx)
 
-        if not indices_to_remove:
-            return
+        if indices_to_remove:
+            # RFC 0001 §2.4 / 0005 §2: no physical deletion. Rows absorbed into the
+            # table are tombstoned in place (exporters skip them); the table block
+            # is inserted.
+            new_children = []
+            for idx, child in enumerate(container.children):
+                if idx in replacements:
+                    new_children.append(replacements[idx])
+                if idx in indices_to_remove:
+                    child.is_tombstoned = True
+                    if not child.metadata:
+                        child.metadata = {}
+                    child.metadata["tombstone_reason"] = "merged_into_table"
+                new_children.append(child)
+            container.children = new_children
 
-        # RFC 0001 §2.4 / 0005 §2: no physical deletion. Rows absorbed into the table
-        # are tombstoned in place (exporters skip them); the table block is inserted.
-        new_children = []
+        self._detect_single_block_tables(container)
+
+    def _detect_single_block_tables(self, container: ContainerUnit) -> None:
+        """A table can also arrive as ONE block whose own lines are the rows
+        (a PDF text layer that groups a boxed table into a single block —
+        RFC 0008 §5.2 forbids the adapter from splitting it further).
+
+        Run after the cross-block path above, on whatever it left untouched:
+        a block that individually looks tabular can also be one row of a
+        larger run the cross-block path would otherwise have assembled
+        correctly (RFC 0009 §5.2 — analyzers still apply in a fixed order,
+        but within this one detector the coarser, better-tested grouping
+        gets first claim on each block). A block that isn't a table is
+        returned untouched, so ordinary paragraphs never get here.
+        """
         for idx, child in enumerate(container.children):
-            if idx in replacements:
-                new_children.append(replacements[idx])
-            if idx in indices_to_remove:
-                child.is_tombstoned = True
-                if not child.metadata:
-                    child.metadata = {}
-                child.metadata["tombstone_reason"] = "merged_into_table"
-            new_children.append(child)
-        container.children = new_children
+            if getattr(child, "is_tombstoned", False):
+                continue
+            if not isinstance(child, (ParagraphBlock, UnknownBlock)):
+                continue
+            table = _table_from_lines(child)
+            if table is not None:
+                container.children[idx] = table
+                self._table_count += 1

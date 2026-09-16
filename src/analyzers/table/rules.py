@@ -1,6 +1,6 @@
 """table: Pure decision logic — no KRM writes, no I/O."""
 
-from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, X_OVERLAP_THRESHOLD, Y_STEP_TOLERANCE, _SEPARATOR_RE, _TAB_SPLIT_RE, log
+from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, X_OVERLAP_THRESHOLD, Y_STEP_TOLERANCE, _SEPARATOR_RE, _SINGLE_COL_PROSE_LEN, _TAB_SPLIT_RE, log
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -166,6 +166,17 @@ def _table_from_lines(block: Any) -> Optional[TableBlock]:
     row_texts = [" ".join(t for t, _, _ in row) for row in rows]
     avg_text_len = sum(len(t) for t in row_texts) / len(rows)
     if is_single_col and len(rows) < 5:
+        return None
+    if is_single_col and avg_text_len > _SINGLE_COL_PROSE_LEN:
+        # A wrapped paragraph looks exactly like a single-column "table" here
+        # (its own line-wrap gives every line consistent spacing, same as a
+        # real one-column table would) - RFC 0001 caught this on a real page:
+        # "With the 5 V supply complete, our next concern is..." is seven
+        # perfectly evenly-spaced lines, no different from a spec table's
+        # rows, EXCEPT that prose wraps to near-full column width while a
+        # real single-column table's entries are short (bullet lists,
+        # appendix TOCs). Multi-column rows aren't affected - a genuine
+        # spec-table row is judged as a whole row, not by this ceiling.
         return None
     if is_single_col and avg_text_len < 15:
         return None
