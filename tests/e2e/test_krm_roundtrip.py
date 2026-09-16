@@ -39,30 +39,38 @@ FIXTURE_PDF = Path(__file__).parent.parent / "fixtures" / "z80_decimal_binary_ta
 # omitted range. The header row is a separate PDF block from the table body -
 # TableDetectorAnalyzer absorbs it as the sibling directly above the detected
 # table (RFC 0008 §5.2: the adapter has no way to know they belong together).
+#
+# PyMuPDF's own line grouping is inconsistent row to row: some rows keep a
+# decimal value and its binary value as two separate PDF lines already
+# (clean two cells), others fuse them into one inline ("1 00000001") whose
+# bbox spans both columns. _split_numeric_pair splits any all-digits,
+# whitespace-separated fragment proportionally by character width, so every
+# row ends up with the same four real columns regardless of how the source
+# PDF happened to group that particular line.
 EXPECTED_GRID = [
     ["Decimal", "Binary", "Decimal", "Binary"],
     ["0", "00000000", "32", "00100000"],
-    ["1 00000001", "33", "00100001"],
+    ["1", "00000001", "33", "00100001"],
     ["2", "00000010", "•"],
-    ["3 00000011"],
+    ["3", "00000011"],
     ["4", "00000100"],
-    ["5", "00000101", "63 00111111"],
+    ["5", "00000101", "63", "00111111"],
     ["6", "00000110", "64", "01000000"],
-    ["7", "00000111", "65 01000001"],
-    ["8 00001000"],
+    ["7", "00000111", "65", "01000001"],
+    ["8", "00001000"],
     ["9", "00001001"],
-    ["10", "00001010", "127 01111111"],
-    ["11 00001011", "128 10000000"],
-    ["12", "00001100", "129 10000001"],
-    ["13 00001101"],
+    ["10", "00001010", "127", "01111111"],
+    ["11", "00001011", "128", "10000000"],
+    ["12", "00001100", "129", "10000001"],
+    ["13", "00001101"],
     ["14", "00001110"],
-    ["15 00001111", "•"],
+    ["15", "00001111", "•"],
     ["16", "00010000"],
     ["17", "00010001", "•"],
     ["•"],
     ["•"],
     ["254", "11111110"],
-    ["31 00011111", "255", "11111111"],
+    ["31", "00011111", "255", "11111111"],
 ]
 
 
