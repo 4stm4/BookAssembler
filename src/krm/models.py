@@ -224,8 +224,16 @@ class TableCell(BaseKRMNode):
 class TableBlock(StructuralUnit):
     """
     Structured tabular block composed of a 2D grid of table cells.
+
+    row_count is len(grid); column_count is the widest row (grid is jagged -
+    a row with a real gap in the source has fewer cells than a full row, not
+    a blank filler cell). Both are set by whichever analyzer builds the
+    grid (src/analyzers/table/rules.py) rather than left to callers to
+    recompute, so every consumer sees the same shape without walking grid.
     """
     grid: List[List[TableCell]] = field(default_factory=list)
+    row_count: int = 0
+    column_count: int = 0
     caption_id: Optional[str] = None
 
 

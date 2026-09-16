@@ -245,6 +245,54 @@ def _group_into_rows(
     return grouped
 
 
+_COLUMN_X_TOLERANCE = 0.03  # matches src/assembler/latex_builder.py's _column_bins
+
+
+def _snap_row_to_columns(
+    row: List["TableCell"], grid: List[List["TableCell"]],
+) -> List["TableCell"]:
+    """Realign a row's cells onto the table's own existing column x0s.
+
+    A header label ("Decimal") is shorter than the digits below it and a
+    left-aligned column often starts the label further left than the
+    numbers it heads - close enough to read as one column by eye, but far
+    enough (here: 0.07 of page width) that _column_bins in
+    src/assembler/latex_builder.py clusters it as an extra column instead of
+    reusing the body's. Snapping each cell's x0 to the nearest column x0
+    already established by the table body keeps the header inside the same
+    columns instead of manufacturing new ones.
+    """
+    body_x0s = sorted(
+        c.visual_layout.bounding_box.x0
+        for r in grid for c in r if c.visual_layout
+    )
+    if not body_x0s:
+        return row
+    bins: List[float] = []
+    for x in body_x0s:
+        if bins and x - bins[-1] < _COLUMN_X_TOLERANCE:
+            continue
+        bins.append(x)
+
+    snapped: List[TableCell] = []
+    for cell in row:
+        vl = cell.visual_layout
+        if vl is None or vl.bounding_box is None:
+            snapped.append(cell)
+            continue
+        box = vl.bounding_box
+        nearest = min(bins, key=lambda b: abs(b - box.x0))
+        cell.visual_layout = VisualLayout(
+            bounding_box=NormalizedRect(
+                x0=nearest, y0=box.y0, x1=nearest + box.width, y1=box.y1,
+            ),
+            page_or_screen_index=vl.page_or_screen_index,
+            style=vl.style,
+        )
+        snapped.append(cell)
+    return snapped
+
+
 def _header_row_for_block(block: Any) -> Optional[List["TableCell"]]:
     """The sibling directly above a detected table, read as its header row.
 
@@ -342,6 +390,8 @@ def _table_from_lines(block: Any) -> Optional[TableBlock]:
     cls_conf = min(0.90, 0.50 + len(rows) * 0.05 - col_penalty)
     table = TableBlock(
         grid=grid,
+        row_count=len(grid),
+        column_count=max((len(r) for r in grid), default=0),
         parent_container_id=block.parent_container_id,
         provenance_info=block.provenance_info,
         visual_layout=VisualLayout(
