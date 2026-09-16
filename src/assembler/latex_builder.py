@@ -561,7 +561,25 @@ def _render_table(table: TableBlock) -> str:
     # structural fidelity for something no reader could use (RFC 0021 SS3
     # asks for a hybrid render that stays legible, not just geometrically
     # accurate).
-    lines = ["\\begin{center}", "\\footnotesize", tabular, "\\end{center}", ""]
+    #
+    # \arraystretch's default (1.0) packs rows tighter than a real printed
+    # table's own leading - comparing a rebuilt table to its source page
+    # (tests/e2e/test_visual_overlay.py) measured the source's row band
+    # noticeably taller relative to the table's width than ours at 1.0,
+    # even with every cell's text and position already exactly right.
+    # Measured on the real fixtures in the locked Docker toolchain: 1.3
+    # overshot past the source's own row-height/width ratio (it reads
+    # looser than the source, not closer); 1.15 lands nearer the source's
+    # measured proportions without guessing. \renewcommand here is scoped
+    # to this \begin{center}...\end{center} group, not global.
+    lines = [
+        "\\begin{center}",
+        "\\renewcommand{\\arraystretch}{1.15}",
+        "\\footnotesize",
+        tabular,
+        "\\end{center}",
+        "",
+    ]
     return "\n".join(lines)
 
 
