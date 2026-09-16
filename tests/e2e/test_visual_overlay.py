@@ -2,36 +2,29 @@
 the same table as extracted + reassembled through the real pipeline.
 
 Text assertions (test_krm_roundtrip.py, test_assembled_table_pdf.py) already
-check cell content exactly, row for row. This checks something coarser that
-a text assert can't: does the assembled table's overall SHAPE (row density
-relative to its width) resemble the source table's - by rendering both to
-images, cropping each to its own table's real bounding box, and comparing a
-per-row "ink density" profile (see _row_ink_profile) rather than raw pixels,
-since a raw pixel diff between two mostly-white crops barely moves even when
-real content goes missing.
+check cell content exactly, row for row. This checks what no text assert can:
+lay the rebuilt table on top of the source table and see whether the ink
+actually lands in the same places - by rendering both to images, cropping
+each to its own table's real bounding box, normalizing them to a common
+size, and comparing the two black/white ink matrices pixel by pixel.
 
-What this test can and cannot catch (verified by deliberately reintroducing
-two already-fixed bugs and rerunning it, not assumed):
-  - A GROSS shift - a whole table detected as several disconnected stubs,
-    a column collapsed into the wrong x-band, a badly wrong aspect ratio -
-    moves the score by a large, easily-thresholded margin.
-  - A LOCALIZED shift - one row's cells scattered to the end of an
-    otherwise-correct 20+ row table (the exact bug _absorb_stray_columns in
-    src/analyzers/table/analyzer.py fixes) does NOT reliably move this
-    score: reintroducing that exact bug changed fixture B's similarity by
-    less than 0.01, in the "improves" direction if anything (0.398 fixed
-    vs 0.409 buggy) - noise, not signal. That class of defect is what the
-    exact per-cell assertions in test_krm_roundtrip.py exist to catch;
-    this test is not a substitute for them, only a complement.
+The rule: both crops become a black/white ink matrix, one is laid over the
+other, and more than MAX_MISMATCH of the pixels disagreeing fails the test.
+No per-fixture leniency - a rebuilt table either lands on top of the one it
+was extracted from or it does not.
 
-The thresholds below are the real values measured against the CURRENT,
-verified-correct pipeline output in the locked Docker toolchain (not
-adjusted to make a known bug pass) - fixture A's clean text layer holds a
-tighter floor; fixture B's own text layer is a deliberately noisy OCR
-transcription bolted onto a clean-looking scan (see that fixture's module
-docstring), and its row heights are additionally governed by how many
-lines its long condition cells wrap onto rather than by \\arraystretch
-alone, so its floor is set correspondingly looser.
+This is deliberately strict, and as of writing the pipeline does NOT pass
+it: the reassembled tables overlap their sources by only a few percent of
+their ink (IoU 0.066 for fixture A, 0.040 for fixture B, against 1.0 for a
+control comparing a crop to itself). The source pages carry structure the
+rebuild currently flattens - in fixture B, a `Tj = 25 C` cell spanning two
+condition rows, a `with line`/`with load` sub-column inside CHARACTERISTICS,
+and CONDITIONS holding its own nested two-row block. A red test here is the
+honest state, and the specification for that work.
+
+Two earlier metrics were tried and thrown out for reporting green on this
+same visibly-wrong output; see _mask_mismatch for what they were and why
+they failed.
 """
 
 from pathlib import Path
@@ -101,49 +94,48 @@ def _render_crop(fitz, pdf_path: Path, page_index: int, rect, zoom: float = 2.0)
     return img
 
 
-def _row_ink_profile(img, buckets: int = 60):
-    """Where the ink sits vertically, as a normalized histogram over rows.
+_MASK_SIZE = (400, 600)  # both crops normalized to this before overlaying
+_INK_THRESHOLD = 160     # 0-255 grey level below which a pixel counts as ink
 
-    A raw whole-image pixel diff is mostly comparing WHITE BACKGROUND
-    between two crops that both happen to be mostly white - it barely
-    moves even when a whole row of content is missing or displaced (found
-    while planting a known-fixed bug back in to prove the test could catch
-    it: the raw pixel score moved from 0.7948 to 0.7963, not a real
-    signal). This measures something the raw pixel diff can't drown out:
-    which vertical bands of the crop actually have text in them - which
-    is exactly "does this table have the same row layout", independent of
-    font or glyph differences between a scanned source and a typeset
-    rebuild.
+# Share of pixels allowed to disagree between the two overlaid ink matrices.
+# One number for every fixture on purpose: a rebuilt table either lands on
+# top of the page it came from or it does not, and a per-fixture exception
+# is just a way to keep a failing render green.
+MAX_MISMATCH = 0.03
+
+
+def _ink_mask(img):
+    """Binary "there is ink here" mask, normalized to a common size.
+
+    Both crops are stretched to the same size first, so this compares WHERE
+    the ink lands within each table, independent of the two documents'
+    different page geometry and DPI.
     """
     import numpy as np
-    a = np.array(img.convert("L"), dtype=float)
-    ink = 255.0 - a  # higher = darker = more ink
-    row_sums = ink.sum(axis=1)
-    h = row_sums.shape[0]
-    edges = np.linspace(0, h, buckets + 1).astype(int)
-    profile = np.array([
-        row_sums[edges[i]:edges[i + 1]].mean() if edges[i + 1] > edges[i] else 0.0
-        for i in range(buckets)
-    ])
-    peak = profile.max()
-    return profile / peak if peak > 0 else profile
+    grey = np.array(img.convert("L").resize(_MASK_SIZE), dtype=np.uint8)
+    return grey < _INK_THRESHOLD
 
 
-def _similarity(img_a, img_b) -> float:
-    """Row-ink-profile correlation, mapped from [-1, 1] to [0, 1].
+def _mask_mismatch(img_a, img_b) -> float:
+    """Share of pixels where the two ink masks disagree (0.0 = identical).
 
-    Sensitive to a row being missing, duplicated, or out of order (the
-    profile's peaks shift); insensitive to font/glyph differences within a
-    row that a raw pixel diff would over-penalize between a scan and a
-    typeset rebuild.
+    Both crops become a black/white matrix, laid one over the other; every
+    pixel where one has ink and the other does not counts as a mismatch.
+
+    This replaced two earlier metrics that were thrown out for not actually
+    measuring overlay agreement:
+      - a raw whole-image pixel diff, which mostly compared the white
+        background the two crops share and barely moved when real content
+        differed (0.7948 vs 0.7963 with a known bug reintroduced);
+      - a per-row ink-density profile correlation, same problem at row
+        granularity (0.398 vs 0.409 on that same test).
+    Both let a visibly wrong render pass. This one cannot: misplaced ink is
+    counted twice, once for being absent where the source has it and once
+    for being present where the source does not.
     """
-    import numpy as np
-    pa = _row_ink_profile(img_a)
-    pb = _row_ink_profile(img_b)
-    if pa.std() == 0 or pb.std() == 0:
-        return 0.0
-    corr = float(np.corrcoef(pa, pb)[0, 1])
-    return (corr + 1.0) / 2.0
+    ma = _ink_mask(img_a)
+    mb = _ink_mask(img_b)
+    return float((ma ^ mb).sum()) / float(ma.size)
 
 
 def _build_single_table_pdf(table: TableBlock, work_dir: str, name: str) -> str:
@@ -168,24 +160,16 @@ def _build_single_table_pdf(table: TableBlock, work_dir: str, name: str) -> str:
 
 
 @pytest.mark.parametrize(
-    "fixture_path, source_page, min_similarity",
+    "fixture_path, source_page",
     [
-        # Measured 0.773 against the current, verified-correct pipeline
-        # output (arraystretch=1.15 in latex_builder.py, tuned by measuring
-        # against this exact fixture - see that file's comment). Floor set
-        # with real margin below the measured value, not at it.
-        (FIXTURE_A, 0, 0.65),
-        # Measured 0.398 against current output - fixture B's condition
-        # cells wrap onto multiple lines, so its row height (and thus this
-        # score) is governed by wrapping width more than by arraystretch;
-        # see the module docstring for what this floor can/cannot catch.
-        (FIXTURE_B, 0, 0.30),
+        (FIXTURE_A, 0),
+        (FIXTURE_B, 0),
     ],
 )
-def test_table_visual_overlay_matches_source(tmp_path, fixture_path, source_page, min_similarity):
+def test_table_visual_overlay_matches_source(tmp_path, fixture_path, source_page):
     """Crop the source table and the reassembled table to their own real
-    bounding boxes, overlay them, and assert a minimum pixel similarity -
-    a genuine visual check, not a text-content one."""
+    bounding boxes, lay one ink matrix over the other, and fail if more
+    than MAX_MISMATCH of the pixels disagree."""
     fitz = pytest.importorskip("pymupdf")
     pytest.importorskip("PIL")
 
@@ -201,8 +185,9 @@ def test_table_visual_overlay_matches_source(tmp_path, fixture_path, source_page
     img_source = _render_crop(fitz, fixture_path, source_page, src_rect)
     img_output = _render_crop(fitz, Path(pdf_path), 1, out_rect)
 
-    similarity = _similarity(img_source, img_output)
-    assert similarity >= min_similarity, (
-        f"table visual similarity {similarity:.3f} fell below {min_similarity} - "
-        f"the assembled table's shape/position no longer matches the source page"
+    mismatch = _mask_mismatch(img_source, img_output)
+    assert mismatch <= MAX_MISMATCH, (
+        f"{mismatch:.1%} of pixels disagree between the source table and the "
+        f"reassembled one (limit {MAX_MISMATCH:.0%}) - overlaid, they do not "
+        f"line up: the rebuild is not reproducing the source table's layout"
     )
