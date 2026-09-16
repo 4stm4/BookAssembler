@@ -50,40 +50,111 @@ def _x_overlaps(a: NormalizedRect, b: NormalizedRect) -> bool:
         return False
     return overlap / width >= X_OVERLAP_THRESHOLD
 
-def _find_table_runs(blocks_with_idx: List[Tuple[int, ParagraphBlock]]) -> List[List[Tuple[int, ParagraphBlock]]]:
-    """Find runs of blocks with consistent vertical spacing."""
-    if len(blocks_with_idx) < MIN_TABLE_ROWS:
+_ROW_GROUP_TOLERANCE = 0.003  # matches _ROW_Y_TOLERANCE below - same "one visual row" test
+
+
+def _group_column_by_row(
+    blocks_with_idx: List[Tuple[int, ParagraphBlock]],
+) -> List[List[Tuple[int, ParagraphBlock]]]:
+    """Group column-clustered SIBLING blocks sharing a y0 into one visual row.
+
+    _cluster_columns bands blocks by x-overlap, but a real table row's own
+    label and its condition/value text are often themselves separate PDF
+    blocks whose x-ranges both fall inside the SAME wide x-band (a table's
+    "label" and "condition" sub-columns overlap in x range across
+    different rows, so _cluster_columns can't tell them apart as two bands)
+    - two or more blocks then land side by side at nearly the same y0
+    within one column cluster, not stacked as separate rows (found on the
+    messy voltage-regulator fixture: "Output Voltage" / "5mA<l0UT<1JOA
+    K15W" / "114 124 V" sit 0.0003-0.0004 apart in y0, one visual row split
+    across three sibling blocks). Treating each as its own row let the
+    y-step "continue if two rows are basically at the same y0" guard in
+    the run-builder below silently DROP every block after the first at
+    that y0 instead of keeping them - RFC 0001 SS2.4 exists for exactly
+    this kind of silent loss.
+    """
+    sorted_blocks = sorted(blocks_with_idx, key=lambda t: _bbox(t[1]).y0)
+    groups: List[List[Tuple[int, ParagraphBlock]]] = []
+    for item in sorted_blocks:
+        y0 = _bbox(item[1]).y0
+        if groups and abs(y0 - _bbox(groups[-1][0][1]).y0) < _ROW_GROUP_TOLERANCE:
+            groups[-1].append(item)
+        else:
+            groups.append([item])
+    return groups
+
+
+def _find_table_runs(
+    blocks_with_idx: List[Tuple[int, ParagraphBlock]],
+) -> List[List[List[Tuple[int, ParagraphBlock]]]]:
+    """Find runs of visual ROWS (each row possibly several sibling blocks)
+    with consistent vertical spacing. Each element of a returned run is a
+    row-group from _group_column_by_row, not a single block."""
+    groups = _group_column_by_row(blocks_with_idx)
+    if len(groups) < MIN_TABLE_ROWS:
         return []
 
-    sorted_blocks = sorted(blocks_with_idx, key=lambda t: _bbox(t[1]).y0)
+    def gy0(group: List[Tuple[int, ParagraphBlock]]) -> float:
+        return _bbox(group[0][1]).y0
 
-    runs: List[List[Tuple[int, ParagraphBlock]]] = []
-    current_run: List[Tuple[int, ParagraphBlock]] = [sorted_blocks[0]]
+    runs: List[List[List[Tuple[int, ParagraphBlock]]]] = []
+    current_run: List[List[Tuple[int, ParagraphBlock]]] = [groups[0]]
     current_step: Optional[float] = None
 
-    for i in range(1, len(sorted_blocks)):
-        prev_bb = _bbox(sorted_blocks[i - 1][1])
-        curr_bb = _bbox(sorted_blocks[i][1])
-        step = curr_bb.y0 - prev_bb.y0
+    for i in range(1, len(groups)):
+        step = gy0(groups[i]) - gy0(groups[i - 1])
 
         if step < 0.005:
             continue
 
         if current_step is None:
             current_step = step
-            current_run.append(sorted_blocks[i])
+            current_run.append(groups[i])
         elif abs(step - current_step) < Y_STEP_TOLERANCE:
-            current_run.append(sorted_blocks[i])
+            current_run.append(groups[i])
         else:
             if len(current_run) >= MIN_TABLE_ROWS:
                 runs.append(current_run)
-            current_run = [sorted_blocks[i]]
+            current_run = [groups[i]]
             current_step = None
 
     if len(current_run) >= MIN_TABLE_ROWS:
         runs.append(current_run)
 
     return runs
+
+
+def _rows_from_group(group: List[Tuple[int, Any]]) -> List[List["TableCell"]]:
+    """One visual row's worth of grid rows, from one or more sibling blocks.
+
+    A singleton group (the common case) is just one block - defer to
+    _rows_from_block, which already knows how to split ITS OWN internal
+    lines into columns and detect a real rowspan within them. A group of
+    several sibling blocks sharing a y0 (see _group_column_by_row) merges
+    all of their line-fragments by x0 into one row instead - each block
+    already carries its own column position, geometry, and font.
+    """
+    if len(group) == 1:
+        return _rows_from_block(group[0][1])
+
+    fragments: List[Tuple[str, Optional[NormalizedRect], Optional[Any]]] = []
+    page_idx = None
+    for _, block in group:
+        page_idx = page_idx or _page_idx(block)
+        fragments.extend(item for item in _line_rows(block) if not _looks_like_separator(item[0]))
+
+    if not fragments:
+        cells = [
+            _make_cell(_get_text(block), None, None, None)
+            for _, block in sorted(group, key=lambda t: (_bbox(t[1]).x0 if _bbox(t[1]) else 0.0))
+        ]
+        return [cells]
+
+    sub_rows = _group_into_rows(fragments)
+    return [
+        [_make_cell(t, b, s, page_idx) for t, b, s in row]
+        for row in sub_rows
+    ]
 
 def _line_rows(block: Any) -> List[Tuple[str, Optional[NormalizedRect], Optional[Any]]]:
     """Per-line (text, bbox, style) triples from a block's own inlines.
@@ -239,9 +310,23 @@ def _rows_from_block(block: Any) -> List[List["TableCell"]]:
     rows: List[List[TableCell]] = [[] for _ in sub_rows]
     for col in sorted(by_col):
         occupied = by_col[col]
-        if len(occupied) == 1 and 0 in occupied and len(sub_rows) > 1 and looks_like_continuation:
-            # Populated only in the first sub-row: a real rowspan.
-            text, bbox, style = occupied[0]
+        is_rowspan_col = len(occupied) == 1 and len(sub_rows) > 1 and looks_like_continuation and (
+            0 in occupied
+            # With only two sub-rows, a column populated in sub-row 1 alone
+            # is usually the OTHER kind of block this same path reads: one
+            # header line plus one data line, where a data-only field
+            # (e.g. "Tj - 25*C") must stay on its own row, not be promoted
+            # into the header as a false rowspan. That ambiguity needs a
+            # third sub-row to resolve, so only 3+ sub-rows allow the label
+            # to sit anywhere but first - a vertically-centered label really
+            # can print between the condition rows it covers rather than
+            # above both of them (found on the messy voltage-regulator
+            # fixture: "Load Regulation"/"Tj - 25*C" sits between its two
+            # condition rows' y0s, not above them).
+            or len(sub_rows) >= 3
+        )
+        if is_rowspan_col:
+            (sr_idx, (text, bbox, style)), = occupied.items()
             rows[0].append(_make_cell(text, bbox, style, page_idx, row_span=len(sub_rows)))
             continue
         for sr_idx in sorted(occupied):
@@ -250,7 +335,11 @@ def _rows_from_block(block: Any) -> List[List["TableCell"]]:
 
     for row in rows:
         row.sort(key=lambda c: c.visual_layout.bounding_box.x0 if c.visual_layout else 0.0)
-    return rows
+    # A sub-row whose only content was a label now folded into another row's
+    # rowspan (rows[0]) has nothing left of its own - a real jagged row from
+    # the source never comes out fully empty, so this is purely the rowspan
+    # merge's bookkeeping and would otherwise show up as a blank grid row.
+    return [row for row in rows if row]
 
 
 _ROW_Y_TOLERANCE = 0.003
@@ -302,16 +391,35 @@ def _merge_stray_rows(
     genuine new one, and gets folded into whichever neighbor it sits closer
     to. Rows spaced at or near the typical step are never touched.
     """
-    if len(grouped) < 3:
+    if len(grouped) < 2:
         return grouped
     y0s = [row[0][1].y0 for row in grouped]
     gaps = [y0s[i + 1] - y0s[i] for i in range(len(y0s) - 1)]
     if not gaps:
         return grouped
-    typical_step = sorted(gaps)[len(gaps) // 2]
+    if len(gaps) >= 2:
+        typical_step = sorted(gaps)[len(gaps) // 2]
+        threshold = typical_step * 0.6
+    else:
+        # Only two candidate rows: no gap-to-gap comparison is possible to
+        # tell a genuine second row from baseline jitter on the same line
+        # (found on the messy voltage-regulator fixture: a label
+        # "Line Regulation"/"Tj - 25*C" sits 0.0048 below its own row's data
+        # fragments, closer than the fragments' own 0.0061 line height, so
+        # it reads as a second stacked row when it is really the same
+        # printed line at a slightly different baseline). The fragments'
+        # own line height is the next best proxy here: two groups still
+        # within one line's height of each other are the same printed line,
+        # not a real row step apart (a real row step is a full line height
+        # PLUS the gap between lines, so this stays well clear of genuine
+        # stacked rows).
+        heights = [
+            f[1].y1 - f[1].y0 for row in grouped for f in row if f[1] is not None
+        ]
+        typical_step = sorted(heights)[len(heights) // 2] if heights else gaps[0]
+        threshold = typical_step
     if typical_step <= 0:
         return grouped
-    threshold = typical_step * 0.6
 
     merged: List[List[Tuple[str, Optional[NormalizedRect], Optional[Any]]]] = []
     merged_y0s: List[float] = []
@@ -483,6 +591,50 @@ def _table_from_lines(block: Any) -> Optional[TableBlock]:
     )
     table.id = block.id  # RFC 0001 §2.3: reclassification keeps identity
     return table
+
+
+_STRAY_COLUMN_MAX_SIZE = 3
+_STRAY_COLUMN_Y_MARGIN = 0.01
+
+
+def _absorb_stray_columns(
+    columns: List[List[Tuple[int, ParagraphBlock]]],
+) -> List[List[Tuple[int, ParagraphBlock]]]:
+    """Fold a tiny x-band cluster into a bigger one whose y-range covers it.
+
+    _cluster_columns bands blocks purely by x-overlap, so a table with a
+    row occasionally split across three sibling blocks - a label, a
+    condition, and a value at three different x0s (found on the messy
+    voltage-regulator fixture: "Output Voltage" / "5mA<l0UT<1JOA K15W" /
+    "114 124 V") - can put that value fragment in its own x-band, far
+    enough from the label column's x-range to never merge. Left alone, that
+    tiny cluster (here: 1-2 blocks) becomes its OWN run, detected and
+    inserted as a separate table stub at whatever position IT happens to
+    sit at in the document's children - later concatenated onto the real
+    table by _merge_adjacent_tables in child-index order, not true y-order,
+    scattering that row's own value cells to wherever the stub landed
+    (often the very end). A genuine second table beside this one would
+    have a comparably-sized cluster, not a 1-3-block straggler, and its
+    y-range would extend past the first table's - vertical containment
+    inside an already-substantial cluster is what marks a cluster as a
+    stray column of the SAME table rather than one of its own.
+    """
+    def y_range(column: List[Tuple[int, ParagraphBlock]]) -> Tuple[float, float]:
+        ys = [_bbox(b).y0 for _, b in column]
+        return min(ys), max(ys)
+
+    big = [c for c in columns if len(c) > _STRAY_COLUMN_MAX_SIZE]
+    small = [c for c in columns if len(c) <= _STRAY_COLUMN_MAX_SIZE]
+    for stray in small:
+        s_lo, s_hi = y_range(stray)
+        for host in big:
+            h_lo, h_hi = y_range(host)
+            if h_lo - _STRAY_COLUMN_Y_MARGIN <= s_lo and s_hi <= h_hi + _STRAY_COLUMN_Y_MARGIN:
+                host.extend(stray)
+                break
+        else:
+            big.append(stray)
+    return big
 
 
 def _cluster_columns(

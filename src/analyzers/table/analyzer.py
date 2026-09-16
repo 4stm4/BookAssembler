@@ -18,7 +18,7 @@ from src.krm.models import (
 
 from src.analyzers.caption.signals import _CAPTION_RE
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
-from src.analyzers.table.rules import _bbox, _cluster_columns, _count_columns, _find_table_runs, _get_text, _header_row_for_block, _looks_like_separator, _page_idx, _rows_from_block, _snap_row_to_columns, _table_from_lines
+from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _cluster_columns, _count_columns, _find_table_runs, _get_text, _header_row_for_block, _looks_like_separator, _page_idx, _rows_from_block, _rows_from_group, _snap_row_to_columns, _table_from_lines
 
 class TableDetectorAnalyzer(BaseAnalyzer):
     def __init__(self) -> None:
@@ -90,7 +90,7 @@ class TableDetectorAnalyzer(BaseAnalyzer):
         replacements: Dict[int, TableBlock] = {}
 
         for page_num, page_blocks in pages.items():
-            columns = _cluster_columns(page_blocks)
+            columns = _absorb_stray_columns(_cluster_columns(page_blocks))
 
             for column in columns:
                 runs = _find_table_runs(column)
@@ -98,11 +98,56 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                     if not run:
                         continue
 
-                    first_idx = run[0][0]
+                    # A run's own y-step consistency test doesn't see column
+                    # structure, so an ordinary line of preamble sitting
+                    # directly above a real table - just as evenly spaced as
+                    # the table rows below it - can be collected into the
+                    # same run (found on the messy voltage-regulator
+                    # fixture: "jiA7812 ELECTRICAL CHARACTERISTICS: V,N - 19
+                    # V. ..." AND, once that longer sentence was trimmed, a
+                    # second, shorter stray line "unltSI other**** fpttlf'
+                    # td." that a length ceiling alone can't tell apart from
+                    # a real short table row). What actually distinguishes
+                    # them from real content is column structure elsewhere
+                    # in the SAME run: a genuine single-column table (one
+                    # text block per row, no per-line geometry to split at
+                    # all, as in test_table_detector's synthetic rows) never
+                    # produces a multi-cell row anywhere, so leaving a run
+                    # like that untouched is safe regardless of any one
+                    # row's length. A run that DOES contain real multi-cell
+                    # rows further down is a real table with stray
+                    # single-cell junk stuck to its front, whatever that
+                    # junk's own length - trim every leading single-cell
+                    # block there, of any length, down to the first
+                    # multi-cell one.
+                    # `run` is now a list of ROW-GROUPS (_find_table_runs /
+                    # _group_column_by_row) - one or more sibling blocks
+                    # sharing a visual row, not one block per row. A row's
+                    # own cells come from _rows_from_group, which merges a
+                    # multi-block group's fragments by x0 instead of
+                    # dropping every block after the first at that y0
+                    # (RFC 0001 SS2.4).
+                    group_rows = [(group, _rows_from_group(group)) for group in run]
+                    has_multi_cell_row = any(
+                        len(r) > 1 for _, rows in group_rows for r in rows
+                    )
+                    while (
+                        group_rows
+                        and has_multi_cell_row
+                        and all(len(r) <= 1 for r in group_rows[0][1])
+                    ):
+                        group_rows.pop(0)
+                    run = [group for group, _ in group_rows]
+                    precomputed_rows = [rows for _, rows in group_rows]
+                    if len(run) < MIN_TABLE_ROWS:
+                        continue
+
+                    flat_blocks = [item for group in run for item in group]
+                    first_idx = min(orig_idx for orig_idx, _ in flat_blocks)
 
                     # Accept/reject on the run as clustered (one candidate per
-                    # sibling block) - unaffected by _rows_from_block later
-                    # possibly expanding one sibling into several grid rows
+                    # visual row) - unaffected by _rows_from_group later
+                    # possibly expanding one row into several grid rows
                     # (a rowspan, or a wrapped line). Deciding on the
                     # post-expansion row count let a wrapped 2-line sentence
                     # push an ordinary caption+paragraph+exercise+page-number
@@ -110,39 +155,63 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                     # as a "table" - RFC 0001 §2.4 exists for exactly this
                     # kind of silent misclassification.
                     row_count = len(run)
-                    run_indices = {orig_idx for orig_idx, _ in run}
+                    run_indices = {orig_idx for orig_idx, _ in flat_blocks}
                     has_separators = bool(separator_indices & {i - 1 for i in run_indices} |
                                          separator_indices & {i + 1 for i in run_indices})
 
                     is_single_col = all(
-                        _count_columns(_get_text(b)) <= 1 for _, b in run
+                        _count_columns(_get_text(b)) <= 1 for _, b in flat_blocks
                     )
-                    avg_text_len = sum(len(_get_text(b).strip()) for _, b in run) / max(1, row_count)
+                    avg_text_len = sum(len(_get_text(b).strip()) for _, b in flat_blocks) / max(1, row_count)
                     if is_single_col and row_count < 5 and not has_separators:
                         continue
                     if is_single_col and avg_text_len < 15 and not has_separators:
                         continue
 
                     grid: List[List[TableCell]] = []
-                    for orig_idx, block in run:
-                        grid.extend(_rows_from_block(block))
+                    for rows in precomputed_rows:
+                        grid.extend(rows)
 
                     sep_boost = 0.10 if has_separators else 0.0
                     col_penalty = 0.15 if is_single_col else 0.0
                     cls_conf = min(0.90, 0.50 + row_count * 0.05 + sep_boost - col_penalty)
                     avg_ext = sum(
-                        b.extraction_confidence for _, b in run
-                    ) / len(run)
+                        b.extraction_confidence for _, b in flat_blocks
+                    ) / len(flat_blocks)
+                    first_block = run[0][0][1]
+                    # The table's own box is the union of its cells, not just
+                    # the first accepted row's block wholesale - a cross-block
+                    # table can run to dozens of rows below that first one,
+                    # and using only its bbox left the table's box only as
+                    # tall as a single row (found while building a visual
+                    # diff tool: cropping a table by its own visual_layout
+                    # produced a sliver a few points tall instead of the
+                    # whole table - RFC 0002's TableBlock has always been
+                    # more than that first block's own geometry).
+                    cell_boxes = [
+                        c.visual_layout.bounding_box for r in grid for c in r if c.visual_layout
+                    ]
+                    if cell_boxes:
+                        visual_layout = VisualLayout(
+                            bounding_box=NormalizedRect(
+                                x0=min(b.x0 for b in cell_boxes), y0=min(b.y0 for b in cell_boxes),
+                                x1=max(b.x1 for b in cell_boxes), y1=max(b.y1 for b in cell_boxes),
+                            ),
+                            page_or_screen_index=first_block.visual_layout.page_or_screen_index
+                            if first_block.visual_layout else 0,
+                        )
+                    else:
+                        visual_layout = first_block.visual_layout
                     table = TableBlock(
                         id=derive_composite_id(
-                            "table", *[b.id for _, b in run]
+                            "table", *[b.id for _, b in flat_blocks]
                         ),
                         grid=grid,
                         row_count=len(grid),
                         column_count=max((len(r) for r in grid), default=0),
                         parent_container_id=container.id,
-                        provenance_info=run[0][1].provenance_info,
-                        visual_layout=run[0][1].visual_layout,
+                        provenance_info=first_block.provenance_info,
+                        visual_layout=visual_layout,
                         extraction_confidence=avg_ext,
                         classification_confidence=cls_conf,
                         confidence_score=min(avg_ext, cls_conf),
