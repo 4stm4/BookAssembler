@@ -718,6 +718,20 @@ def _table_from_lines(block: Any) -> Optional[TableBlock]:
 
     col_penalty = 0.15 if is_single_col else 0.0
     cls_conf = min(0.90, 0.50 + len(rows) * 0.05 - col_penalty)
+
+    # Build span_map: track positions occupied by cells with row_span > 1 or col_span > 1
+    span_map = {}
+    ncols = max((len(r) for r in grid), default=0)
+    for row_idx, row in enumerate(grid):
+        for col_idx, cell in enumerate(row):
+            row_span = getattr(cell, "row_span", 1) or 1
+            col_span = getattr(cell, "col_span", 1) or 1
+            # Populate span_map for all positions this cell occupies
+            for r in range(row_idx, min(row_idx + row_span, len(grid))):
+                for c in range(col_idx, min(col_idx + col_span, ncols)):
+                    if (r, c) != (row_idx, col_idx):  # Don't map origin to itself
+                        span_map[(r, c)] = (row_idx, col_idx)
+
     table = TableBlock(
         grid=grid,
         row_count=len(grid),
@@ -731,6 +745,7 @@ def _table_from_lines(block: Any) -> Optional[TableBlock]:
         extraction_confidence=block.extraction_confidence,
         classification_confidence=cls_conf,
         confidence_score=min(block.extraction_confidence, cls_conf),
+        span_map=span_map,
     )
     table.id = block.id  # RFC 0001 §2.3: reclassification keeps identity
     return table
