@@ -478,6 +478,30 @@ def _rows_from_block(block: Any) -> List[List["TableCell"]]:
 
     for row in rows:
         row.sort(key=lambda c: c.visual_layout.bounding_box.x0 if c.visual_layout else 0.0)
+
+    # Detect col_span: if a cell's x-width spans multiple columns, set col_span
+    # Calculate median column width from all cells in all rows
+    col_widths = []
+    for row in rows:
+        for cell in row:
+            if cell.visual_layout and cell.visual_layout.bounding_box:
+                width = cell.visual_layout.bounding_box.x1 - cell.visual_layout.bounding_box.x0
+                if width > 0:
+                    col_widths.append(width)
+
+    if col_widths:
+        median_col_width = sorted(col_widths)[len(col_widths) // 2]
+        # A cell with width significantly larger than median likely spans multiple columns
+        _COLSPAN_THRESHOLD = 1.5  # cell > 1.5x median width suggests col_span
+        for row in rows:
+            for cell in row:
+                if cell.visual_layout and cell.visual_layout.bounding_box:
+                    width = cell.visual_layout.bounding_box.x1 - cell.visual_layout.bounding_box.x0
+                    if width > median_col_width * _COLSPAN_THRESHOLD and median_col_width > 0:
+                        # Estimate col_span based on width ratio
+                        estimated_colspan = max(2, round(width / median_col_width))
+                        cell.col_span = estimated_colspan
+
     # A sub-row whose only content was a label now folded into another row's
     # rowspan (rows[0]) has nothing left of its own - a real jagged row from
     # the source never comes out fully empty, so this is purely the rowspan
