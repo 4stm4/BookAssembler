@@ -234,6 +234,34 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                     for rows in precomputed_rows:
                         grid.extend(rows)
 
+                    # Detect row_span and col_span from jagged grid structure
+                    # When a column is missing in some rows, it likely indicates row_span
+                    if grid:
+                        ncols = max((len(r) for r in grid), default=0)
+
+                        # Detect row_span: if column is present in first row but missing in subsequent rows
+                        for col_idx in range(ncols):
+                            first_cell_idx = None
+                            for row_idx, row in enumerate(grid):
+                                if col_idx < len(row):
+                                    if first_cell_idx is None:
+                                        first_cell_idx = row_idx
+                                else:
+                                    # Column is missing in this row - check if previous row had this cell
+                                    if first_cell_idx is not None and first_cell_idx == row_idx - 1:
+                                        # Previous row had this column, this row doesn't - could be row_span
+                                        # Mark the first cell with appropriate row_span
+                                        if col_idx < len(grid[first_cell_idx]):
+                                            consecutive_missing = 1
+                                            for check_row in range(row_idx + 1, len(grid)):
+                                                if col_idx >= len(grid[check_row]):
+                                                    consecutive_missing += 1
+                                                else:
+                                                    break
+                                            if consecutive_missing > 0:
+                                                cell = grid[first_cell_idx][col_idx]
+                                                cell.row_span = consecutive_missing + 1
+
                     sep_boost = 0.10 if has_separators else 0.0
                     col_penalty = 0.15 if is_single_col else 0.0
                     cls_conf = min(0.90, 0.50 + row_count * 0.05 + sep_boost - col_penalty)
