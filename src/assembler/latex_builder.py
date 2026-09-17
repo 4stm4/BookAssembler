@@ -408,7 +408,29 @@ def render_node(
 _COLUMN_X_TOLERANCE = 0.03
 
 
-def _styled_cell_text(cell: Any, text: str) -> str:
+_SIZE_NOISE_TOLERANCE = 0.12  # within this of the table's median size = same size
+
+
+def _snap_size(size_pt: float, median_pt: float) -> float:
+    """Pull a cell's measured size onto the table's median when it is noise.
+
+    The sizes come from measuring source spans, and that measurement is
+    noisy: on the voltage-regulator fixture the cells of one visually
+    uniform table span 3.12pt to 5.12pt, and setting each cell literally
+    made the page ragged - "K 15 W" and "vqut" stood out from neighbours
+    that are the same size in print. A real size difference in a table (a
+    header set larger than its body) is far bigger than that spread, so
+    anything within a small fraction of the median is treated as the same
+    size and anything beyond it is kept.
+    """
+    if median_pt <= 0 or size_pt <= 0:
+        return size_pt
+    if abs(size_pt - median_pt) <= median_pt * _SIZE_NOISE_TOLERANCE:
+        return median_pt
+    return size_pt
+
+
+def _styled_cell_text(cell: Any, text: str, median_pt: float = 0.0) -> str:
     """Wrap a cell's escaped text in the typography the source printed it in.
 
     Every TableCell carries the StyleDescriptor read off its own source span
@@ -428,7 +450,7 @@ def _styled_cell_text(cell: Any, text: str) -> str:
         return text
 
     prefix = ""
-    size_pt = getattr(style, "font_size_pt", 0.0) or 0.0
+    size_pt = _snap_size(getattr(style, "font_size_pt", 0.0) or 0.0, median_pt)
     if size_pt > 0:
         prefix += f"\\fontsize{{{size_pt:.2f}}}{{{size_pt * 1.2:.2f}}}\\selectfont "
     if getattr(style, "is_monospace", False):
@@ -509,6 +531,18 @@ def _render_table(table: TableBlock) -> str:
     if not grid:
         return ""
 
+    # The table's own median cell size, needed before the cells are built:
+    # each cell is set at its own measured size, snapped onto this median
+    # when the difference is only measurement noise (_snap_size).
+    _sizes = sorted(
+        cell.visual_layout.style.font_size_pt
+        for row in grid for cell in row
+        if cell.visual_layout
+        and cell.visual_layout.style
+        and cell.visual_layout.style.font_size_pt
+    )
+    median_pt = _sizes[len(_sizes) // 2] if _sizes else 0.0
+
     bins = _column_bins(grid)
     # Row-span width, in characters, tracked per cell alongside its text -
     # needed below to give \multirow an explicit column width instead of
@@ -525,7 +559,7 @@ def _render_table(table: TableBlock) -> str:
                 raw = _cell_text(cell)
                 # texts[] keeps the RAW string: column widths are measured
                 # from it below, and font commands are not content.
-                text = _styled_cell_text(cell, _esc(raw))
+                text = _styled_cell_text(cell, _esc(raw), median_pt)
                 texts[col] = raw
                 row_span = getattr(cell, "row_span", 1) or 1
                 if row_span > 1:
@@ -544,7 +578,10 @@ def _render_table(table: TableBlock) -> str:
             return ""
         rendered_rows = []
         for row in grid:
-            styled = [_styled_cell_text(cell, _esc(_cell_text(cell))) for cell in row]
+            styled = [
+                _styled_cell_text(cell, _esc(_cell_text(cell)), median_pt)
+                for cell in row
+            ]
             raws = [_cell_text(cell) for cell in row]
             styled += [""] * (ncols - len(styled))
             raws += [""] * (ncols - len(raws))
@@ -672,25 +709,18 @@ def _render_table(table: TableBlock) -> str:
     # The document default would be far off on its own - the decimal/binary
     # fixture is printed at ~14pt, and \footnotesize, which this used to
     # apply to the whole table, is ~8pt.
-    cell_sizes = sorted(
-        cell.visual_layout.style.font_size_pt
-        for row in grid for cell in row
-        if cell.visual_layout
-        and cell.visual_layout.style
-        and cell.visual_layout.style.font_size_pt
-    )
-    size_pt = cell_sizes[len(cell_sizes) // 2] if cell_sizes else 8.0
+    size_pt = median_pt or 8.0
     size_cmd = f"\\fontsize{{{size_pt:.2f}}}{{{size_pt * 1.2:.2f}}}\\selectfont"
 
-    # LaTeX's default \tabcolsep (6pt each side) pushes the column rules
-    # that far outside the cells' text, so the rebuilt table's rules sit
-    # well outside the span its own text occupies - measured against the
-    # source, whose rules hug the text closely. 2pt keeps them next to the
-    # text without letting the glyphs touch the line.
+    # Keeps the column rules near the text without letting the glyphs touch
+    # them. 2pt was tried and was too tight: "Decimal|Binary" came out with
+    # the letters against the rule, worse than the source, which leaves a
+    # visible gap. 4pt is the compromise - closer than LaTeX's 6pt default,
+    # which pushed the rules well outside the span the text occupies.
     lines = [
         "\\begin{center}",
         "\\renewcommand{\\arraystretch}{1.15}",
-        "\\setlength{\\tabcolsep}{2pt}",
+        "\\setlength{\\tabcolsep}{4pt}",
         size_cmd,
         tabular,
         "\\end{center}",
