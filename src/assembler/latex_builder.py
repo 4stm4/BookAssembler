@@ -544,13 +544,14 @@ def _render_table(table: TableBlock) -> str:
     median_pt = _sizes[len(_sizes) // 2] if _sizes else 0.0
 
     bins = _column_bins(grid)
+    span_map = getattr(table, "span_map", {})
     # Row-span width, in characters, tracked per cell alongside its text -
     # needed below to give \multirow an explicit column width instead of
     # "*" (natural width), which a p{} column can't provide on its own.
     if bins is not None and len(bins) > 1:
         ncols = len(bins)
         rendered_rows = []
-        for row in grid:
+        for row_idx, row in enumerate(grid):
             cells = [""] * ncols
             texts = [""] * ncols
             for cell in row:
@@ -562,22 +563,26 @@ def _render_table(table: TableBlock) -> str:
                 text = _styled_cell_text(cell, _esc(raw), median_pt)
                 texts[col] = raw
                 row_span = getattr(cell, "row_span", 1) or 1
-                if row_span > 1:
-                    # One value shared across several sub-rows of the source
-                    # (e.g. a condition label next to two stacked readings) -
-                    # RFC 0002: TableCell.row_span, set by
-                    # src/analyzers/table/rules.py _rows_from_block. The
-                    # spanned rows below simply have no cell at this column.
-                    cells[col] = ("multirow", row_span, text)
-                else:
-                    cells[col] = text
+                col_span = getattr(cell, "col_span", 1) or 1
+
+                # Build cell tuple with spans and track spanned positions
+                cell_content = text
+                if row_span > 1 or col_span > 1:
+                    cell_content = ("cell", row_span, col_span, text)
+                cells[col] = cell_content
+
+                # Populate span_map for positions occupied by this cell
+                for r in range(row_idx, min(row_idx + row_span, len(grid))):
+                    for c in range(col, min(col + col_span, ncols)):
+                        if (r, c) != (row_idx, col):  # Don't map origin to itself
+                            span_map[(r, c)] = (row_idx, col)
             rendered_rows.append((cells, texts))
     else:
         ncols = max((len(row) for row in grid), default=0)
         if ncols == 0:
             return ""
         rendered_rows = []
-        for row in grid:
+        for row_idx, row in enumerate(grid):
             styled = [
                 _styled_cell_text(cell, _esc(_cell_text(cell)), median_pt)
                 for cell in row
@@ -585,7 +590,23 @@ def _render_table(table: TableBlock) -> str:
             raws = [_cell_text(cell) for cell in row]
             styled += [""] * (ncols - len(styled))
             raws += [""] * (ncols - len(raws))
-            rendered_rows.append((styled, raws))
+
+            # Build styled cells with span info
+            styled_with_spans = []
+            for col, cell in enumerate(row):
+                row_span = getattr(cell, "row_span", 1) or 1
+                col_span = getattr(cell, "col_span", 1) or 1
+                if row_span > 1 or col_span > 1:
+                    styled_with_spans.append(("cell", row_span, col_span, styled[col]))
+                    # Populate span_map
+                    for r in range(row_idx, min(row_idx + row_span, len(grid))):
+                        for c in range(col, min(col + col_span, ncols)):
+                            if (r, c) != (row_idx, col):
+                                span_map[(r, c)] = (row_idx, col)
+                else:
+                    styled_with_spans.append(styled[col])
+            styled_with_spans += [""] * (ncols - len(styled_with_spans))
+            rendered_rows.append((styled_with_spans, raws))
 
     # A column holding whole condition sentences ("145V < VIN < 30V") needs
     # to wrap onto several lines to stay readable at a normal font size; a
@@ -656,10 +677,29 @@ def _render_table(table: TableBlock) -> str:
 
     def _render_cell(cell: Any, col: int) -> str:
         if isinstance(cell, tuple):
-            _, row_span, text = cell
-            width = f"{wide_width_cm:.2f}cm" if is_wide[col] else "*"
-            return f"\\multirow{{{row_span}}}{{{width}}}{{{text}}}"
-        return cell
+            _, row_span, col_span, text = cell
+            if col_span > 1:
+                # Generate \multicolumn{N}{spec}{text}; width spec is derived from wide[] flags
+                col_specs = [
+                    f"p{{{wide_width_cm:.2f}cm}}" if is_wide[c] else "l"
+                    for c in range(col, min(col + col_span, len(is_wide)))
+                ]
+                spec = "".join(col_specs)
+            else:
+                spec = (f"p{{{wide_width_cm:.2f}cm}}" if is_wide[col] else "l")
+
+            if row_span > 1:
+                width = f"{wide_width_cm:.2f}cm" if is_wide[col] else "*"
+                if col_span > 1:
+                    # Both row_span and col_span: \multicolumn{\multirow{...}{...}{...}}
+                    return f"\\multicolumn{{{col_span}}}{{|{spec}|}}{{\\multirow{{{row_span}}}{{{width}}}{{{text}}}}}"
+                else:
+                    return f"\\multirow{{{row_span}}}{{{width}}}{{{text}}}"
+            else:
+                if col_span > 1:
+                    return f"\\multicolumn{{{col_span}}}{{|{spec}|}}{{{text}}}"
+                return text
+        return cell  # Not a span tuple, render as-is
 
     # Which rows carry a rule is the source's decision too, and it is the
     # cells that hold it. An earlier version hardcoded "frame plus a rule
@@ -679,7 +719,11 @@ def _render_table(table: TableBlock) -> str:
             rule = "\\hline" if i < len(grid) and _row_ruled_below(i) else ""
         else:
             rule = "\\hline" if i in (0, len(rendered_rows) - 1) else ""
-        rendered = [_render_cell(c, col) for col, c in enumerate(cells)]
+        # Skip positions occupied by spanned cells from previous rows
+        rendered = []
+        for col, c in enumerate(cells):
+            if (i, col) not in span_map:  # Only render if not spanned from above
+                rendered.append(_render_cell(c, col))
         body_lines.append(" & ".join(rendered) + " \\\\ " + rule)
     body_lines.append("\\end{tabular}")
     tabular = "\n".join(body_lines)

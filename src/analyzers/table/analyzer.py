@@ -264,6 +264,19 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                         )
                     else:
                         visual_layout = first_block.visual_layout
+
+                    # Build span_map for merged cells
+                    span_map = {}
+                    ncols = max((len(r) for r in grid), default=0)
+                    for row_idx, row in enumerate(grid):
+                        for col_idx, cell in enumerate(row):
+                            row_span = getattr(cell, "row_span", 1) or 1
+                            col_span = getattr(cell, "col_span", 1) or 1
+                            for r in range(row_idx, min(row_idx + row_span, len(grid))):
+                                for c in range(col_idx, min(col_idx + col_span, ncols)):
+                                    if (r, c) != (row_idx, col_idx):
+                                        span_map[(r, c)] = (row_idx, col_idx)
+
                     table = TableBlock(
                         id=derive_composite_id(
                             "table", *[b.id for _, b in flat_blocks]
@@ -277,6 +290,7 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                         extraction_confidence=avg_ext,
                         classification_confidence=cls_conf,
                         confidence_score=min(avg_ext, cls_conf),
+                        span_map=span_map,
                     )
                     replacements[first_idx] = table
                     # Only now, with a table to hold them: marking the rows

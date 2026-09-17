@@ -245,11 +245,17 @@ class TableBlock(StructuralUnit):
 
     Which edges the source printed a rule on lives on the cells themselves
     (TableCell.border_*), not here: that is the shape the information has.
+
+    span_map tracks which grid positions (row, col) are occupied by cells that
+    span multiple rows/columns. Maps (row, col) -> (origin_row, origin_col)
+    where (origin_row, origin_col) is the position of the cell that spans this
+    position. Used to skip occupied positions when rendering merged cells.
     """
     grid: List[List[TableCell]] = field(default_factory=list)
     row_count: int = 0
     column_count: int = 0
     caption_id: Optional[str] = None
+    span_map: Dict[Tuple[int, int], Tuple[int, int]] = field(default_factory=dict)
 
 
 @dataclass
