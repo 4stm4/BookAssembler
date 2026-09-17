@@ -421,13 +421,34 @@ def _rows_from_block(block: Any) -> List[List["TableCell"]]:
     # fragments of its own before treating a first-row-only column as shared.
     looks_like_continuation = all(len(r) >= 2 for r in sub_rows[1:])
 
-    bins = _local_column_bins(fragments)
+    # Sub-rows of equal length are parallel rows, not a label with the rows
+    # it spans. A block often holds a table's heading line and its first
+    # data line together, and those two never start at the same x - the
+    # heading sits over the column, the value sits where the digits begin -
+    # so binning by x puts them in different columns, every column comes
+    # back occupied by exactly one sub-row, and the whole rowspan mechanism
+    # fires on a row that shares nothing. That is where the \multirow struck
+    # through the CONDITIONS heading came from. When the sub-rows have the
+    # same number of fragments there is nothing to span: the nth fragment of
+    # each is the nth column.
+    widths = {len(r) for r in sub_rows}
+    parallel_rows = len(widths) == 1
+
     # column index -> {sub_row index -> (text, bbox, style)}
     by_col: Dict[int, Dict[int, Tuple[str, Optional[NormalizedRect], Optional[Any]]]] = {}
-    for sr_idx, sub_row in enumerate(sub_rows):
-        for text, bbox, style in sub_row:
-            col = _nearest_bin(bbox.x0, bins) if bbox is not None else 0
-            by_col.setdefault(col, {})[sr_idx] = (text, bbox, style)
+    if parallel_rows:
+        for sr_idx, sub_row in enumerate(sub_rows):
+            ordered = sorted(
+                sub_row, key=lambda item: item[1].x0 if item[1] is not None else 0.0
+            )
+            for col, (text, bbox, style) in enumerate(ordered):
+                by_col.setdefault(col, {})[sr_idx] = (text, bbox, style)
+    else:
+        bins = _local_column_bins(fragments)
+        for sr_idx, sub_row in enumerate(sub_rows):
+            for text, bbox, style in sub_row:
+                col = _nearest_bin(bbox.x0, bins) if bbox is not None else 0
+                by_col.setdefault(col, {})[sr_idx] = (text, bbox, style)
 
     rows: List[List[TableCell]] = [[] for _ in sub_rows]
     for col in sorted(by_col):
