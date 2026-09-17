@@ -35,7 +35,8 @@ class SlowLoader:
     async def unload(self):
         self.loaded = False
 
-    async def infer(self, image_png, task, prompt=None, max_new_tokens=None):
+    async def infer(self, image_png, task, prompt=None, max_new_tokens=None,
+                    timeout: int = 120):
         self.active += 1
         self.peak = max(self.peak, self.active)
         self.limits.append(max_new_tokens)
