@@ -125,8 +125,10 @@ def pick(role: str) -> Tuple[Optional[str], Optional[str], str]:
     return None, None, "ollama"
 
 
-def _token_for_host(host: str) -> Optional[str]:
+def _token_for_host(host: Optional[str]) -> Optional[str]:
     """Look up Bearer token for a host from agents.json."""
+    if not host:
+        return None
     for a in load_agents():
         if a.get("host", "").rstrip("/") == host.rstrip("/"):
             return a.get("token")
@@ -239,6 +241,15 @@ def call_infer(
         except Exception as exc:
             log.warning("ollama vision %s failed: %s", host, exc)
             return None
+
+    if not host:
+        # pick() returns (None, None, "") when no agent with this role is
+        # reachable, and callers pass that straight through. Without this the
+        # failure surfaced deep inside URL building as
+        # "AttributeError: 'NoneType' object has no attribute 'rstrip'",
+        # which says nothing about the actual cause - the Runner being down.
+        log.error("no agent available for task %r", task)
+        return None
 
     body: dict = {"task": task, "priority": int(clamp_priority(task, priority))}
     if b64 is not None:
