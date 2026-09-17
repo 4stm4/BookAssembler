@@ -49,6 +49,7 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 \usepackage{graphicx}
 \usepackage{array}
 \usepackage{multirow}
+\usepackage{colortbl}  % \cellcolor; xcolor itself arrives via tikz below
 \newtheorem{theorem}{Theorem}[chapter]
 \newtheorem{lemma}[theorem]{Lemma}
 \newtheorem{corollary}[theorem]{Corollary}
@@ -407,6 +408,51 @@ def render_node(
 _COLUMN_X_TOLERANCE = 0.03
 
 
+def _styled_cell_text(cell: Any, text: str) -> str:
+    """Wrap a cell's escaped text in the typography the source printed it in.
+
+    Every TableCell carries the StyleDescriptor read off its own source span
+    (RFC 0002) - size, weight, slant and colour - and the renderer used to
+    drop all of it, setting one median size for the whole table. That is the
+    same defect as summarising borders at table level: the information is
+    measured per cell and then thrown away at the last step.
+
+    The wrapper is scoped to the cell by the braces the caller puts around
+    it, so one heavy or coloured cell cannot leak into its neighbours.
+    """
+    if not text:
+        return text
+    vl = getattr(cell, "visual_layout", None)
+    style = getattr(vl, "style", None) if vl else None
+    if style is None:
+        return text
+
+    prefix = ""
+    size_pt = getattr(style, "font_size_pt", 0.0) or 0.0
+    if size_pt > 0:
+        prefix += f"\\fontsize{{{size_pt:.2f}}}{{{size_pt * 1.2:.2f}}}\\selectfont "
+    if getattr(style, "is_monospace", False):
+        prefix += "\\ttfamily "
+    if getattr(style, "is_bold", False):
+        prefix += "\\bfseries "
+    if getattr(style, "is_italic", False):
+        prefix += "\\itshape "
+
+    body = f"{prefix}{text}" if prefix else text
+
+    colour = getattr(style, "text_color_rgb", None)
+    if colour and tuple(colour) != (0, 0, 0):
+        r, g, b = (max(0, min(255, int(c))) for c in colour)
+        body = f"\\textcolor[RGB]{{{r},{g},{b}}}{{{body}}}"
+
+    fill = getattr(style, "background_color_rgb", None)
+    if fill:
+        r, g, b = (max(0, min(255, int(c))) for c in fill)
+        # \cellcolor has to come first in the cell, before any content.
+        body = f"\\cellcolor[RGB]{{{r},{g},{b}}}{body}"
+    return body
+
+
 def _cell_text(cell: Any) -> str:
     text = ""
     for content in getattr(cell, "content", []):
@@ -477,7 +523,9 @@ def _render_table(table: TableBlock) -> str:
                 x0 = _cell_x0(cell)
                 col = min(range(ncols), key=lambda i: abs(bins[i] - x0))
                 raw = _cell_text(cell)
-                text = _esc(raw)
+                # texts[] keeps the RAW string: column widths are measured
+                # from it below, and font commands are not content.
+                text = _styled_cell_text(cell, _esc(raw))
                 texts[col] = raw
                 row_span = getattr(cell, "row_span", 1) or 1
                 if row_span > 1:
@@ -496,9 +544,11 @@ def _render_table(table: TableBlock) -> str:
             return ""
         rendered_rows = []
         for row in grid:
+            styled = [_styled_cell_text(cell, _esc(_cell_text(cell))) for cell in row]
             raws = [_cell_text(cell) for cell in row]
+            styled += [""] * (ncols - len(styled))
             raws += [""] * (ncols - len(raws))
-            rendered_rows.append(([_esc(r) for r in raws], raws))
+            rendered_rows.append((styled, raws))
 
     # A column holding whole condition sentences ("145V < VIN < 30V") needs
     # to wrap onto several lines to stay readable at a normal font size; a
@@ -615,14 +665,13 @@ def _render_table(table: TableBlock) -> str:
     # looser than the source, not closer); 1.15 lands nearer the source's
     # measured proportions without guessing. \renewcommand here is scoped
     # to this \begin{center}...\end{center} group, not global.
-    # Set the table at the size it was printed at, not at a fixed
-    # \footnotesize. Every TableCell carries the StyleDescriptor read off
-    # its own source span (RFC 0002), so the size is known rather than
-    # guessed - and the guess was far off: the decimal/binary fixture is
-    # printed at ~14pt while \footnotesize is ~8pt, so every glyph came out
-    # near half the size it should be. The median cell size is used because
-    # one stray span (a footnote marker, an OCR artifact) should not set the
-    # size for the whole table.
+    # Baseline size for anything the per-cell styling in _styled_cell_text
+    # cannot set - a cell that reached here without a StyleDescriptor. The
+    # median of the cells that do have one is the safe choice: one stray
+    # span (a footnote marker, an OCR artifact) should not size the table.
+    # The document default would be far off on its own - the decimal/binary
+    # fixture is printed at ~14pt, and \footnotesize, which this used to
+    # apply to the whole table, is ~8pt.
     cell_sizes = sorted(
         cell.visual_layout.style.font_size_pt
         for row in grid for cell in row
