@@ -9,6 +9,7 @@ modules. `EchoLoader` is used by tests and dev-mode notebooks — no GPU needed.
 from typing import Callable, Dict, List
 
 from src.agents.runner.loaders.base import EchoLoader, ModelLoader
+from src.agents.runner.loaders.got_ocr import GotOcrLoader
 from src.agents.runner.loaders.qwen_vl import QwenVLLoader
 from src.agents.runner.loaders.qwen_text import QwenTextLoader
 
@@ -17,6 +18,7 @@ from src.agents.runner.loaders.qwen_text import QwenTextLoader
 # Kaggle notebook can flip between models without shipping code.
 LOADER_REGISTRY: Dict[str, Callable[[], ModelLoader]] = {
     "echo": lambda: EchoLoader(),
+    "got_ocr": lambda: GotOcrLoader(),
     "qwen_vl": lambda: QwenVLLoader(),
     "qwen_text": lambda: QwenTextLoader(),
 }
@@ -39,6 +41,6 @@ def build_loaders(slugs: List[str]) -> List[ModelLoader]:
 
 
 __all__ = [
-    "ModelLoader", "EchoLoader", "QwenVLLoader", "QwenTextLoader",
+    "ModelLoader", "EchoLoader", "GotOcrLoader", "QwenVLLoader", "QwenTextLoader",
     "LOADER_REGISTRY", "build_loaders",
 ]
