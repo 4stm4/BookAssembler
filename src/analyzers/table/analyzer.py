@@ -21,6 +21,81 @@ from src.analyzers.source_io import resolve_source_path
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
 from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _cluster_columns, _count_columns, _find_table_runs, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _page_idx, _rows_from_block, _rows_from_group, _snap_row_to_columns, _table_from_lines
 
+
+def _cell_x0(cell: "TableCell") -> float:
+    vl = getattr(cell, "visual_layout", None)
+    bb = getattr(vl, "bounding_box", None) if vl else None
+    return bb.x0 if bb is not None else 0.0
+
+
+def _cell_y0(cell: "TableCell") -> float:
+    vl = getattr(cell, "visual_layout", None)
+    bb = getattr(vl, "bounding_box", None) if vl else None
+    return bb.y0 if bb is not None else 0.0
+
+
+def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]:
+    """Fold a single-cell grid row into the nearest fuller row's cell.
+
+    A multi-line CONDITIONS-style cell whose lines the source printed as
+    separate PDF blocks at different y0 (e.g. "15.5V<VIN<27V" /
+    "5mA<IOUT<1.0A" / "P<15W" around one "Output Voltage" data row) each
+    become their own row-group in _find_table_runs, so each line arrives
+    as its own sparse grid row instead of extra lines inside one cell.
+    _rows_from_block's own rowspan detection never sees this - it only
+    looks at sub-rows sharing ONE PDF block.
+
+    A naive fix keyed on list position (comparing grid[row][col_idx]
+    across rows) breaks here: a 1-cell row's only cell sits at list index
+    0 regardless of which real column it belongs to, so it can't be
+    matched against a fuller row by position. Matching by each cell's own
+    x0 - the position the source actually printed it at - is what every
+    other column-assignment path in this module already uses, and it is
+    the only thing that identifies a column correctly when rows are
+    jagged.
+
+    Which full row an orphan belongs to is also not always "the nearest by
+    row count": a condition can wrap onto a line ABOVE its data row and
+    onto another BELOW it in the very same block (RFC 0001 SS2.4's
+    "Output Voltage" fixture: "15.5V<VIN<27V" prints above, "P<15W" below,
+    both around one data row that already absorbed the middle line via
+    _rows_from_block's own rowspan). Row-count distance can't tell "one
+    line above THIS row" apart from "one line above the NEXT row" - actual
+    print position can. Matching each candidate row by the y0 of its own
+    nearest-x0 cell (the same column the orphan would join) picks the row
+    whose column entry the orphan is physically adjacent to, not just
+    whichever row happens to be fewer grid rows away.
+    """
+    if len(grid) < 3:
+        return grid
+
+    full_indices = [i for i, row in enumerate(grid) if len(row) > 1]
+    if not full_indices:
+        return grid
+
+    orphan_indices = set()
+    for i, row in enumerate(grid):
+        if len(row) != 1:
+            continue
+        orphan_cell = row[0]
+        orphan_y0 = _cell_y0(orphan_cell)
+
+        def _target_cell(row_idx: int) -> "TableCell":
+            return min(grid[row_idx], key=lambda c: abs(_cell_x0(c) - _cell_x0(orphan_cell)))
+
+        nearest = min(full_indices, key=lambda j: abs(_cell_y0(_target_cell(j)) - orphan_y0))
+        target_cell = _target_cell(nearest)
+        if nearest > i:
+            target_cell.content = list(orphan_cell.content) + list(target_cell.content)
+        else:
+            target_cell.content = list(target_cell.content) + list(orphan_cell.content)
+        orphan_indices.add(i)
+
+    if not orphan_indices:
+        return grid
+    return [row for i, row in enumerate(grid) if i not in orphan_indices]
+
+
 class TableDetectorAnalyzer(BaseAnalyzer):
     def __init__(self) -> None:
         super().__init__(
@@ -233,6 +308,8 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                     grid: List[List[TableCell]] = []
                     for rows in precomputed_rows:
                         grid.extend(rows)
+
+                    grid = _merge_orphan_rows(grid)
 
                     # Detect row_span and col_span from jagged grid structure
                     # When a column is missing in some rows, it likely indicates row_span

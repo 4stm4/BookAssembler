@@ -476,11 +476,27 @@ def _styled_cell_text(cell: Any, text: str, median_pt: float = 0.0) -> str:
 
 
 def _cell_text(cell: Any) -> str:
-    text = ""
-    for content in getattr(cell, "content", []):
-        if isinstance(content, ParagraphBlock):
-            text += _para_text(content)
-    return text
+    parts = [
+        _para_text(content)
+        for content in getattr(cell, "content", [])
+        if isinstance(content, ParagraphBlock)
+    ]
+    return "\n".join(parts)
+
+
+def _latex_linebreaks(escaped_text: str) -> str:
+    """Turn a cell's internal "\n" separators (multiple source lines folded
+    into one cell - a real rowspan, or lines merged across row-groups by
+    _merge_orphan_rows) into LaTeX line breaks.
+
+    Run AFTER _esc() so the literal backslash a real line break needs is
+    never itself escaped. "\\\\ " (not bare "\\\\") keeps LaTeX from reading
+    the next line's first token as an optional vertical-space argument to
+    \\\\. Inside a p{} column this breaks the line within that cell, not the
+    table row - \\\\'s row-ending meaning only applies at the tabular's own
+    top level, not inside a nested parbox.
+    """
+    return escaped_text.replace("\n", "\\\\ ")
 
 
 def _cell_x0(cell: Any) -> Optional[float]:
@@ -499,7 +515,28 @@ def _column_bins(grid: List[List[Any]]) -> Optional[List[float]]:
     left of where it belongs. Clustering every cell's own x0 (kept on
     TableCell.visual_layout since src/analyzers/table/rules.py stopped
     discarding it) recovers which column each cell actually belongs to.
+
+    The header row is the one row a real table always has exactly one cell
+    per real column in - a value cell's x0 drifts with its own digit count
+    and right/left alignment (a 1-digit "V" and a 3-digit "120" in the same
+    UNITS-adjacent column do not share an x0), which is measurement noise,
+    not a new column. Accumulating bins from every cell in the grid lets
+    that noise cascade: a string of small sub-tolerance gaps in the value
+    columns walks the running bin edge far enough from its start that a
+    later, still-adjacent value gets read as its own column - measured on
+    the voltage-regulator fixture, this split 6 real columns into 8.
+    Anchoring on the header's own x0s (when it looks like a real header:
+    more than one cell) sidesteps that drift entirely, since every other
+    row already snaps each cell to its NEAREST bin by x0 (see the
+    `_render_table` call site), not to where that row's own values happen
+    to fall.
     """
+    header = grid[0] if grid else []
+    if len(header) > 1:
+        header_x0s = [_cell_x0(cell) for cell in header]
+        if all(x0 is not None for x0 in header_x0s):
+            return sorted(header_x0s)
+
     x0s = []
     for row in grid:
         for cell in row:
@@ -560,7 +597,7 @@ def _render_table(table: TableBlock) -> str:
                 raw = _cell_text(cell)
                 # texts[] keeps the RAW string: column widths are measured
                 # from it below, and font commands are not content.
-                text = _styled_cell_text(cell, _esc(raw), median_pt)
+                text = _styled_cell_text(cell, _esc(raw).replace("\n", " "), median_pt)
                 texts[col] = raw
                 row_span = getattr(cell, "row_span", 1) or 1
                 col_span = getattr(cell, "col_span", 1) or 1
@@ -584,7 +621,7 @@ def _render_table(table: TableBlock) -> str:
         rendered_rows = []
         for row_idx, row in enumerate(grid):
             styled = [
-                _styled_cell_text(cell, _esc(_cell_text(cell)), median_pt)
+                _styled_cell_text(cell, _esc(_cell_text(cell)).replace("\n", " "), median_pt)
                 for cell in row
             ]
             raws = [_cell_text(cell) for cell in row]
@@ -623,8 +660,30 @@ def _render_table(table: TableBlock) -> str:
     is_wide = [n > _WIDE_CHAR_THRESHOLD for n in col_max_len]
     # RFC 0021 SS3: a4paper with 2.2cm margins leaves ~16.6cm of \textwidth;
     # 16cm stays safely inside it once the table's own vertical rules are
-    # accounted for.
-    _PAGE_WIDTH_CM = 16.0
+    # accounted for. That upper bound is a SAFETY CAP, not the table's
+    # actual target width: always filling it regardless of how wide the
+    # source printed the table made every rebuilt table wider, proportionally
+    # to its own page, than its source - a visual-overlay comparison
+    # (tests/e2e/test_visual_overlay.py) measured the voltage-regulator
+    # fixture's rebuilt table 31% wider than its source crop's own
+    # proportions, which by itself was enough to misalign every row's ink
+    # after both crops are normalized to a common size for comparison.
+    # table.visual_layout.bounding_box carries the fraction of the SOURCE
+    # page's own full width the table actually occupied there (RFC 0002);
+    # scaling by the SAME fraction of a full a4 page's width reproduces that
+    # proportion instead of always spending the whole safe budget.
+    _A4_FULL_WIDTH_CM = 21.0
+    _MAX_TABLE_WIDTH_CM = 16.0
+    _MIN_TABLE_WIDTH_CM = 6.0
+    vl = getattr(table, "visual_layout", None)
+    bb = getattr(vl, "bounding_box", None) if vl else None
+    if bb is not None:
+        target_width_cm = max(
+            _MIN_TABLE_WIDTH_CM,
+            min(_MAX_TABLE_WIDTH_CM, (bb.x1 - bb.x0) * _A4_FULL_WIDTH_CM),
+        )
+    else:
+        target_width_cm = _MAX_TABLE_WIDTH_CM
     _CHAR_WIDTH_CM = 0.17  # footnotesize average glyph advance, roughtly
     narrow_total_cm = sum(
         min(n, _WIDE_CHAR_THRESHOLD) * _CHAR_WIDTH_CM + 0.3
@@ -632,7 +691,7 @@ def _render_table(table: TableBlock) -> str:
     )
     wide_count = sum(is_wide)
     wide_width_cm = (
-        max(2.2, (_PAGE_WIDTH_CM - narrow_total_cm) / wide_count) if wide_count else 0.0
+        max(2.2, (target_width_cm - narrow_total_cm) / wide_count) if wide_count else 0.0
     )
 
     col_spec_parts = [
@@ -679,12 +738,17 @@ def _render_table(table: TableBlock) -> str:
         if isinstance(cell, tuple):
             _, row_span, col_span, text = cell
             if col_span > 1:
-                # Generate \multicolumn{N}{spec}{text}; width spec is derived from wide[] flags
-                col_specs = [
-                    f"p{{{wide_width_cm:.2f}cm}}" if is_wide[c] else "l"
-                    for c in range(col, min(col + col_span, len(is_wide)))
-                ]
-                spec = "".join(col_specs)
+                # \multicolumn{N}{spec}{...} takes exactly ONE column-spec
+                # for the merged cell as a whole - concatenating one spec
+                # per spanned column ("ll" for col_span=2) is not valid
+                # LaTeX ("Only one column-spec. allowed.") and halts the
+                # whole compile. If any spanned column is wide, size the
+                # merged cell to their combined width; otherwise "l".
+                spanned = range(col, min(col + col_span, len(is_wide)))
+                if any(is_wide[c] for c in spanned):
+                    spec = f"p{{{wide_width_cm * col_span:.2f}cm}}"
+                else:
+                    spec = "l"
             else:
                 spec = (f"p{{{wide_width_cm:.2f}cm}}" if is_wide[col] else "l")
 
