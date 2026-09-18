@@ -505,6 +505,12 @@ def _cell_x0(cell: Any) -> Optional[float]:
     return box.x0 if box is not None else None
 
 
+def _cell_x1(cell: Any) -> Optional[float]:
+    vl = getattr(cell, "visual_layout", None)
+    box = getattr(vl, "bounding_box", None) if vl else None
+    return box.x1 if box is not None else None
+
+
 def _column_bins(grid: List[List[Any]]) -> Optional[List[float]]:
     """Canonical column x0 positions, or None if any cell lacks geometry.
 
@@ -582,18 +588,38 @@ def _render_table(table: TableBlock) -> str:
 
     bins = _column_bins(grid)
     span_map = getattr(table, "span_map", {})
+    # Populated below only when bins are available (real per-column source
+    # geometry); stays None otherwise so the fallback path further down
+    # knows to fall back to the old content-length-driven estimate.
+    col_min_x0: Optional[List[Optional[float]]] = None
+    col_max_x1: Optional[List[Optional[float]]] = None
     # Row-span width, in characters, tracked per cell alongside its text -
     # needed below to give \multirow an explicit column width instead of
     # "*" (natural width), which a p{} column can't provide on its own.
     if bins is not None and len(bins) > 1:
         ncols = len(bins)
         rendered_rows = []
+        # Real per-column width, in source page-width fractions: the widest
+        # extent ANY cell in this column reaches, header included - not
+        # the gap between two adjacent headers' own x0s (tried first, and
+        # wrong whenever a header label is itself wider than the data
+        # under it: "Decimal" over single-digit values measured a narrower
+        # gap than "Decimal" itself needs, overflowing the column). This
+        # is measured directly from the source geometry every cell already
+        # carries, so it can't fall short of what actually has to fit.
+        col_min_x0 = [None] * ncols
+        col_max_x1 = [None] * ncols
         for row_idx, row in enumerate(grid):
             cells = [""] * ncols
             texts = [""] * ncols
             for cell in row:
                 x0 = _cell_x0(cell)
                 col = min(range(ncols), key=lambda i: abs(bins[i] - x0))
+                x1 = _cell_x1(cell)
+                if x0 is not None:
+                    col_min_x0[col] = x0 if col_min_x0[col] is None else min(col_min_x0[col], x0)
+                if x1 is not None:
+                    col_max_x1[col] = x1 if col_max_x1[col] is None else max(col_max_x1[col], x1)
                 raw = _cell_text(cell)
                 # texts[] keeps the RAW string: column widths are measured
                 # from it below, and font commands are not content.
@@ -694,17 +720,49 @@ def _render_table(table: TableBlock) -> str:
         max(2.2, (target_width_cm - narrow_total_cm) / wide_count) if wide_count else 0.0
     )
 
+    # Real per-column width: each column's own max_x1 - min_x0, gathered
+    # above from every cell actually assigned to it (header included) -
+    # not a character-count guess, and not the gap between two headers'
+    # x0s (that broke whenever one header, like "Decimal", is itself
+    # wider than the values printed under it). Scaled by the same
+    # full-a4-page factor target_width_cm already uses, so a column's
+    # width and the table's own overall width stay on the same scale.
+    # A content-length floor stays only as a defensive minimum - real
+    # geometry should always be at least that wide, since the header
+    # cell that set col_max_len is itself one of the cells col_max_x1/
+    # col_min_x0 were measured from.
+    col_width_cm: Optional[List[float]] = None
+    if col_min_x0 is not None and col_max_x1 is not None:
+        fractions = [
+            (col_max_x1[i] - col_min_x0[i])
+            if col_min_x0[i] is not None and col_max_x1[i] is not None else None
+            for i in range(ncols)
+        ]
+        if all(f is not None and f > 0 for f in fractions):
+            col_width_cm = [
+                max(f * _A4_FULL_WIDTH_CM, narrow_total_cm and (
+                    min(col_max_len[i], _WIDE_CHAR_THRESHOLD) * _CHAR_WIDTH_CM + 0.3
+                ))
+                for i, f in enumerate(fractions)
+            ]
+
     # Narrow columns hold short numeric-ish values (MIN/TYP/MAX/UNITS) that
     # the source right-aligns, not the wide CHARACTERISTICS/CONDITIONS text
     # columns (those stay p{}, left/paragraph-set as the source sets them).
-    # "l" here made every value column left-edge-aligned against the
-    # source's right-aligned numbers - visibly wrong regardless of any
-    # row/column-position fix, since it shifts where each value's ink sits
-    # within its own column on every single row.
-    col_spec_parts = [
-        f"p{{{wide_width_cm:.2f}cm}}" if wide else "r"
-        for wide in is_wide
-    ]
+    # Plain "r"/"l" (LaTeX auto-width) ignored the source's real column
+    # width entirely; >{\raggedleft} (from \usepackage{array}, already in
+    # the preamble) right-aligns within an explicit-width p{} column
+    # instead, when a real measured width is available.
+    if col_width_cm is not None:
+        col_spec_parts = [
+            f"p{{{col_width_cm[i]:.2f}cm}}" if wide else f">{{\\raggedleft}}p{{{col_width_cm[i]:.2f}cm}}"
+            for i, wide in enumerate(is_wide)
+        ]
+    else:
+        col_spec_parts = [
+            f"p{{{wide_width_cm:.2f}cm}}" if wide else "r"
+            for wide in is_wide
+        ]
     # Borders come from the source, not from a house style: each cell
     # carries the edges the source actually printed a rule on
     # (TableCell.border_*, set by src/analyzers/table/rules.py
@@ -749,19 +807,35 @@ def _render_table(table: TableBlock) -> str:
                 # for the merged cell as a whole - concatenating one spec
                 # per spanned column ("ll" for col_span=2) is not valid
                 # LaTeX ("Only one column-spec. allowed.") and halts the
-                # whole compile. If any spanned column is wide, size the
-                # merged cell to their combined width; otherwise "r" (see
-                # col_spec_parts above for why narrow columns are "r").
+                # whole compile. Size the merged cell to the real combined
+                # width of the columns it spans when known (col_width_cm),
+                # falling back to the is_wide-driven budget otherwise; a
+                # spanned narrow column still needs >{\raggedleft} (see
+                # col_spec_parts above) to right-align like its neighbors.
                 spanned = range(col, min(col + col_span, len(is_wide)))
-                if any(is_wide[c] for c in spanned):
+                if col_width_cm is not None:
+                    combined_cm = sum(col_width_cm[c] for c in spanned)
+                    spec = (
+                        f"p{{{combined_cm:.2f}cm}}" if any(is_wide[c] for c in spanned)
+                        else f">{{\\raggedleft}}p{{{combined_cm:.2f}cm}}"
+                    )
+                elif any(is_wide[c] for c in spanned):
                     spec = f"p{{{wide_width_cm * col_span:.2f}cm}}"
                 else:
                     spec = "r"
+            elif col_width_cm is not None:
+                spec = (
+                    f"p{{{col_width_cm[col]:.2f}cm}}" if is_wide[col]
+                    else f">{{\\raggedleft}}p{{{col_width_cm[col]:.2f}cm}}"
+                )
             else:
                 spec = (f"p{{{wide_width_cm:.2f}cm}}" if is_wide[col] else "r")
 
             if row_span > 1:
-                width = f"{wide_width_cm:.2f}cm" if is_wide[col] else "*"
+                if col_width_cm is not None:
+                    width = f"{col_width_cm[col]:.2f}cm"
+                else:
+                    width = f"{wide_width_cm:.2f}cm" if is_wide[col] else "*"
                 if col_span > 1:
                     # Both row_span and col_span: \multicolumn{\multirow{...}{...}{...}}
                     return f"\\multicolumn{{{col_span}}}{{|{spec}|}}{{\\multirow{{{row_span}}}{{{width}}}{{{text}}}}}"
@@ -805,7 +879,15 @@ def _render_table(table: TableBlock) -> str:
         for col, c in enumerate(cells):
             if (i, col) not in span_map:  # Only render if not spanned from above
                 rendered.append(_render_cell(c, col))
-        body_lines.append(" & ".join(rendered) + " \\\\ " + rule)
+        # \tabularnewline, not bare "\\ " - a row ending in a p{} column
+        # (every column can be p{} now that narrow columns get a measured
+        # width too) can make a plain "\\" behave like the paragraph-
+        # internal line break \raggedleft's own p{} box gives it rather
+        # than the table's row separator; followed immediately by \hline
+        # that surfaces as "Misplaced \noalign" and kills the compile.
+        # \tabularnewline is array's own fix - unambiguously ends the ROW
+        # regardless of what column type precedes it.
+        body_lines.append(" & ".join(rendered) + " \\tabularnewline " + rule)
     body_lines.append("\\end{tabular}")
     tabular = "\n".join(body_lines)
 
