@@ -990,6 +990,33 @@ def _render_table(table: TableBlock) -> str:
     _baseline_rh = min(_valid_rh) if _valid_rh else None
     _base_line_pt = (median_pt or 8.0) * 1.2 * 1.15  # matches size_cmd + arraystretch above
 
+    # Each row's raw extra (an unscaled ratio-based guess) summed across
+    # every row overshot the table's own real total height by ~24% on
+    # the decimal/binary fixture, confirmed by measuring the COMPILED
+    # PDF's own first/last row y-positions against the source bbox's
+    # proportional height - adding real space for a genuinely tall row
+    # without any budget compounds into a table taller than the source
+    # ever was, which is exactly an ACCUMULATING drift top to bottom,
+    # not the constant offset a simple per-row fix would produce. The
+    # fix is the same one target_width_cm already applies to width:
+    # scale the raw extras so they SUM to the table's own real height
+    # budget, not whatever raw per-row ratios happen to add up to.
+    _A4_FULL_HEIGHT_CM = 29.7
+    raw_extra_pt = [0.0] * len(row_heights)
+    if _baseline_rh:
+        for i, rh in enumerate(row_heights):
+            if rh:
+                ratio = rh / _baseline_rh
+                if ratio > 1.15:
+                    raw_extra_pt[i] = _base_line_pt * (ratio - 1.0)
+    _raw_extra_total = sum(raw_extra_pt)
+    _extra_scale = 1.0
+    if _raw_extra_total > 0 and bb is not None:
+        target_height_pt = (bb.y1 - bb.y0) * _A4_FULL_HEIGHT_CM * 28.3465
+        natural_total_pt = len(rendered_rows) * _base_line_pt
+        budget_pt = max(0.0, target_height_pt - natural_total_pt)
+        _extra_scale = min(1.0, budget_pt / _raw_extra_total)
+
     for i, (cells, _) in enumerate(rendered_rows):
         if has_any_border:
             rule = "\\hline" if i < len(grid) and _row_ruled_below(i) else ""
@@ -1001,10 +1028,8 @@ def _render_table(table: TableBlock) -> str:
             if (i, col) not in span_map:  # Only render if not spanned from above
                 rendered.append(_render_cell(c, col))
         extra = ""
-        if _baseline_rh and i < len(row_heights) and row_heights[i]:
-            ratio = row_heights[i] / _baseline_rh
-            if ratio > 1.15:  # a hair above 1.0 is measurement noise, not real height
-                extra = f"[{_base_line_pt * (ratio - 1.0):.2f}pt]"
+        if i < len(raw_extra_pt) and raw_extra_pt[i] > 0:
+            extra = f"[{raw_extra_pt[i] * _extra_scale:.2f}pt]"
         # \tabularnewline, not bare "\\ " - a row ending in a p{} column
         # (every column can be p{} now that narrow columns get a measured
         # width too) can make a plain "\\" behave like the paragraph-
