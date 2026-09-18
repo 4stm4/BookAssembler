@@ -831,11 +831,24 @@ def _render_table(table: TableBlock) -> str:
             # every cell) needs.
             _TABCOLSEP_CM = 4.0 / 28.3465
             _char_width_scaled_cm = 0.17 * ((median_pt or 8.0) / 8.0)
+            # The content floor only makes sense for a NARROW column -
+            # one that renders unwrapped, so its width has to fit its
+            # longest cell on one line. A WIDE column already wraps
+            # (p{}), so col_max_len - a raw character count, with no
+            # idea the cell will wrap - is not a real width requirement
+            # for it: confirmed directly on the voltage-regulator
+            # fixture, where merging a multi-line CONDITIONS cell
+            # (_merge_orphan_rows) produced one long combined string,
+            # and applying this floor to a WIDE column inflated it past
+            # its own real rule-measured width (4.96cm declared vs a
+            # source column that measures much narrower) - the opposite
+            # of what subtracting tabcolsep was trying to fix.
             col_width_cm = [
                 max(
                     col_max_len[i] * _char_width_scaled_cm + 0.3,
                     f * _A4_FULL_WIDTH_CM - 2 * _TABCOLSEP_CM,
-                )
+                ) if not is_wide[i] else
+                max(2.2, f * _A4_FULL_WIDTH_CM - 2 * _TABCOLSEP_CM)
                 for i, f in enumerate(fractions)
             ]
             if col_x0_sum is not None and col_x1_sum is not None and col_count is not None:
