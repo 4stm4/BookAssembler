@@ -988,7 +988,25 @@ def _render_table(table: TableBlock) -> str:
     row_heights = [_row_height_fraction(row) for row in grid]
     _valid_rh = [h for h in row_heights if h is not None and h > 0]
     _baseline_rh = min(_valid_rh) if _valid_rh else None
-    _base_line_pt = (median_pt or 8.0) * 1.2 * 1.15  # matches size_cmd + arraystretch above
+
+    # \arraystretch was a fixed 1.15 for every table (measured once, on
+    # fixtures with a particular font size and row density, then baked
+    # in) - confirmed wrong for this fixture specifically: font 14.15pt
+    # * 1.2 leading * 1.15 stretch = 19.53pt/row, but the source's own
+    # bbox fits 23 rows into 350pt, 15.24pt/row - a fixed constant tuned
+    # on one table's density has no reason to hold on another's. Solving
+    # for the stretch that makes THIS table's own row count exactly fill
+    # its own real height budget (target_height_cm, the same measurement
+    # width already uses) replaces the constant with a per-table value.
+    _A4_FULL_HEIGHT_CM = 29.7
+    _ARRAYSTRETCH_DEFAULT = 1.15
+    dynamic_arraystretch = _ARRAYSTRETCH_DEFAULT
+    if bb is not None and rendered_rows:
+        target_height_pt = (bb.y1 - bb.y0) * _A4_FULL_HEIGHT_CM * 28.3465
+        unstretched_pt = len(rendered_rows) * (median_pt or 8.0) * 1.2
+        if unstretched_pt > 0:
+            dynamic_arraystretch = max(0.8, min(1.5, target_height_pt / unstretched_pt))
+    _base_line_pt = (median_pt or 8.0) * 1.2 * dynamic_arraystretch
 
     # Each row's raw extra (an unscaled ratio-based guess) summed across
     # every row overshot the table's own real total height by ~24% on
@@ -1077,7 +1095,7 @@ def _render_table(table: TableBlock) -> str:
     # which pushed the rules well outside the span the text occupies.
     lines = [
         "\\begin{center}",
-        "\\renewcommand{\\arraystretch}{1.15}",
+        f"\\renewcommand{{\\arraystretch}}{{{dynamic_arraystretch:.3f}}}",
         "\\setlength{\\tabcolsep}{4pt}",
         size_cmd,
         tabular,
