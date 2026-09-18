@@ -66,18 +66,19 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 \setmainfont{DejaVu Serif}
 \newfontfamily\cyrillicfont{DejaVu Serif}
 \setmonofont{DejaVu Sans Mono}
-% Latin Modern Roman has no Cyrillic glyphs at all (confirmed: xelatex
-% reports "Missing character" for every Cyrillic codepoint under it), so
-% it cannot replace DejaVu Serif as the document's main font - the
-% source stays multilingual (RFC 0021, polyglossia/russian). But a
-% source page that IS purely Latin (an English-language technical
-% table, digits, ASCII punctuation) was itself typeset in a Times-like
-% serif, not DejaVu Serif's - visibly different glyph shapes on a
-% rebuilt table's own visual-overlay comparison. Cells whose text has no
-% non-Latin characters switch to this family instead (see
-% _is_latin_only below), leaving DejaVu Serif as the fallback for
-% anything that needs it.
-\newfontfamily\latinfont{Latin Modern Roman}
+% TeX Gyre Termes (fonts-texgyre, installed in the Docker image
+% specifically for this) is a metric-compatible OTF clone of Times -
+% much closer to a scanned source page's own Times-Roman than either
+% DejaVu Serif or Latin Modern Roman (tried first: a real font, but a
+% Computer Modern derivative, not Times-shaped at all). It has no
+% Cyrillic glyphs either (confirmed: xelatex reports "Missing
+% character" for every Cyrillic codepoint under it) - same gap Latin
+% Modern had - so it cannot replace DejaVu Serif as the document's main
+% font; the source stays multilingual (RFC 0021, polyglossia/russian).
+% Cells whose text has no non-Latin characters switch to this family
+% instead (see _is_latin_only below), leaving DejaVu Serif as the
+% fallback for anything that needs it.
+\newfontfamily\latinfont{TeX Gyre Termes}
 \sloppy
 \begin{document}
 """
