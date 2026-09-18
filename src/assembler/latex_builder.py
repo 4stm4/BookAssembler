@@ -593,6 +593,9 @@ def _render_table(table: TableBlock) -> str:
     # knows to fall back to the old content-length-driven estimate.
     col_min_x0: Optional[List[Optional[float]]] = None
     col_max_x1: Optional[List[Optional[float]]] = None
+    col_x0_sum: Optional[List[float]] = None
+    col_x1_sum: Optional[List[float]] = None
+    col_count: Optional[List[int]] = None
     # Row-span width, in characters, tracked per cell alongside its text -
     # needed below to give \multirow an explicit column width instead of
     # "*" (natural width), which a p{} column can't provide on its own.
@@ -609,6 +612,14 @@ def _render_table(table: TableBlock) -> str:
         # carries, so it can't fall short of what actually has to fit.
         col_min_x0 = [None] * ncols
         col_max_x1 = [None] * ncols
+        # Typical (mean) position, not the extremes above - needed to tell
+        # whether a column's content hugs its LEFT drawn edge (a binary
+        # code, conventionally left-set) or its RIGHT one (a number,
+        # conventionally right-set): whichever side has the smaller
+        # average padding from that column's own rule boundary.
+        col_x0_sum = [0.0] * ncols
+        col_x1_sum = [0.0] * ncols
+        col_count = [0] * ncols
         for row_idx, row in enumerate(grid):
             cells = [""] * ncols
             texts = [""] * ncols
@@ -618,8 +629,11 @@ def _render_table(table: TableBlock) -> str:
                 x1 = _cell_x1(cell)
                 if x0 is not None:
                     col_min_x0[col] = x0 if col_min_x0[col] is None else min(col_min_x0[col], x0)
+                    col_x0_sum[col] += x0
+                    col_count[col] += 1
                 if x1 is not None:
                     col_max_x1[col] = x1 if col_max_x1[col] is None else max(col_max_x1[col], x1)
+                    col_x1_sum[col] += x1
                 raw = _cell_text(cell)
                 # texts[] keeps the RAW string: column widths are measured
                 # from it below, and font commands are not content.
@@ -732,12 +746,36 @@ def _render_table(table: TableBlock) -> str:
     # as table.metadata["column_rule_x"] - the real boundary BETWEEN two
     # columns, independent of how far either one's own content reaches.
     col_width_cm: Optional[List[float]] = None
+    # Which side of ITS OWN column a narrow column's content hugs - a
+    # binary code ("00000000") sits flush against its column's LEFT
+    # rule, a decimal number sits flush against its RIGHT one, and
+    # "narrow column = right-align" (tried first, borrowed from how
+    # MIN/TYP/MAX/UNITS behave) turned out not to hold for binary data:
+    # confirmed on the decimal/binary fixture's own overlay, where a
+    # blanket right-align shifted every "Binary" column's ink well past
+    # where the source actually printed it. Read straight from the
+    # SOURCE's own geometry per column - never assumed from what the
+    # values look like - by comparing each column's average padding to
+    # its own left vs right drawn boundary; whichever is smaller is the
+    # edge the source set this column's text against.
+    col_is_right: Optional[List[bool]] = None
     rule_x = (getattr(table, "metadata", None) or {}).get("column_rule_x")
     if bb is not None and rule_x and len(rule_x) == ncols - 1:
         boundaries = [bb.x0] + list(rule_x) + [bb.x1]
         fractions = [boundaries[i + 1] - boundaries[i] for i in range(ncols)]
         if all(f > 0 for f in fractions):
             col_width_cm = [f * _A4_FULL_WIDTH_CM for f in fractions]
+            if col_x0_sum is not None and col_x1_sum is not None and col_count is not None:
+                col_is_right = []
+                for i in range(ncols):
+                    if col_count[i] > 0:
+                        avg_x0 = col_x0_sum[i] / col_count[i]
+                        avg_x1 = col_x1_sum[i] / col_count[i]
+                        pad_left = avg_x0 - boundaries[i]
+                        pad_right = boundaries[i + 1] - avg_x1
+                        col_is_right.append(pad_right < pad_left)
+                    else:
+                        col_is_right.append(True)
 
     # Fallback when the source printed no rules to read (a borderless
     # table) or the count doesn't line up with this table's own column
@@ -764,9 +802,13 @@ def _render_table(table: TableBlock) -> str:
     # width entirely; >{\raggedleft} (from \usepackage{array}, already in
     # the preamble) right-aligns within an explicit-width p{} column
     # instead, when a real measured width is available.
+    def _narrow_align_prefix(i: int) -> str:
+        return "" if col_is_right is not None and not col_is_right[i] else "\\raggedleft"
+
     if col_width_cm is not None:
         col_spec_parts = [
-            f"p{{{col_width_cm[i]:.2f}cm}}" if wide else f">{{\\raggedleft}}p{{{col_width_cm[i]:.2f}cm}}"
+            f"p{{{col_width_cm[i]:.2f}cm}}" if wide
+            else f">{{{_narrow_align_prefix(i)}}}p{{{col_width_cm[i]:.2f}cm}}"
             for i, wide in enumerate(is_wide)
         ]
     else:
@@ -821,14 +863,15 @@ def _render_table(table: TableBlock) -> str:
                 # whole compile. Size the merged cell to the real combined
                 # width of the columns it spans when known (col_width_cm),
                 # falling back to the is_wide-driven budget otherwise; a
-                # spanned narrow column still needs >{\raggedleft} (see
-                # col_spec_parts above) to right-align like its neighbors.
+                # spanned narrow column still needs the same per-column
+                # alignment as col_spec_parts above (a binary code's own
+                # column stays left-set, a number's stays right-set).
                 spanned = range(col, min(col + col_span, len(is_wide)))
                 if col_width_cm is not None:
                     combined_cm = sum(col_width_cm[c] for c in spanned)
                     spec = (
                         f"p{{{combined_cm:.2f}cm}}" if any(is_wide[c] for c in spanned)
-                        else f">{{\\raggedleft}}p{{{combined_cm:.2f}cm}}"
+                        else f">{{{_narrow_align_prefix(col)}}}p{{{combined_cm:.2f}cm}}"
                     )
                 elif any(is_wide[c] for c in spanned):
                     spec = f"p{{{wide_width_cm * col_span:.2f}cm}}"
@@ -837,7 +880,7 @@ def _render_table(table: TableBlock) -> str:
             elif col_width_cm is not None:
                 spec = (
                     f"p{{{col_width_cm[col]:.2f}cm}}" if is_wide[col]
-                    else f">{{\\raggedleft}}p{{{col_width_cm[col]:.2f}cm}}"
+                    else f">{{{_narrow_align_prefix(col)}}}p{{{col_width_cm[col]:.2f}cm}}"
                 )
             else:
                 spec = (f"p{{{wide_width_cm:.2f}cm}}" if is_wide[col] else "r")
