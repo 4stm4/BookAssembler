@@ -66,6 +66,18 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 \setmainfont{DejaVu Serif}
 \newfontfamily\cyrillicfont{DejaVu Serif}
 \setmonofont{DejaVu Sans Mono}
+% Latin Modern Roman has no Cyrillic glyphs at all (confirmed: xelatex
+% reports "Missing character" for every Cyrillic codepoint under it), so
+% it cannot replace DejaVu Serif as the document's main font - the
+% source stays multilingual (RFC 0021, polyglossia/russian). But a
+% source page that IS purely Latin (an English-language technical
+% table, digits, ASCII punctuation) was itself typeset in a Times-like
+% serif, not DejaVu Serif's - visibly different glyph shapes on a
+% rebuilt table's own visual-overlay comparison. Cells whose text has no
+% non-Latin characters switch to this family instead (see
+% _is_latin_only below), leaving DejaVu Serif as the fallback for
+% anything that needs it.
+\newfontfamily\latinfont{Latin Modern Roman}
 \sloppy
 \begin{document}
 """
@@ -430,7 +442,26 @@ def _snap_size(size_pt: float, median_pt: float) -> float:
     return size_pt
 
 
-def _styled_cell_text(cell: Any, text: str, median_pt: float = 0.0) -> str:
+_CYRILLIC_RE = re.compile(r"[Ѐ-ӿ]")
+
+
+def _is_latin_only(text: str) -> bool:
+    """True when text has no Cyrillic - safe to set in a Latin-only font.
+
+    DejaVu Serif is the document's main font because the source is
+    multilingual (polyglossia/russian, RFC 0021) and needs Cyrillic
+    glyphs everywhere else in the document; Latin Modern Roman has none
+    at all (confirmed directly: xelatex reports "Missing character" for
+    every Cyrillic codepoint tried under it). A cell with no Cyrillic in
+    it is never at risk from that gap, and the source page it came from
+    was typeset in a Times-like serif, not DejaVu Serif's - a rebuilt
+    table's own visual-overlay comparison showed visibly different
+    glyph shapes as a direct result.
+    """
+    return bool(text) and not _CYRILLIC_RE.search(text)
+
+
+def _styled_cell_text(cell: Any, text: str, median_pt: float = 0.0, raw: str = "") -> str:
     """Wrap a cell's escaped text in the typography the source printed it in.
 
     Every TableCell carries the StyleDescriptor read off its own source span
@@ -446,10 +477,13 @@ def _styled_cell_text(cell: Any, text: str, median_pt: float = 0.0) -> str:
         return text
     vl = getattr(cell, "visual_layout", None)
     style = getattr(vl, "style", None) if vl else None
-    if style is None:
-        return text
 
-    prefix = ""
+    font_prefix = "\\latinfont " if _is_latin_only(raw or text) else ""
+
+    if style is None:
+        return f"{font_prefix}{text}" if font_prefix else text
+
+    prefix = font_prefix
     size_pt = _snap_size(getattr(style, "font_size_pt", 0.0) or 0.0, median_pt)
     if size_pt > 0:
         prefix += f"\\fontsize{{{size_pt:.2f}}}{{{size_pt * 1.2:.2f}}}\\selectfont "
@@ -637,7 +671,7 @@ def _render_table(table: TableBlock) -> str:
                 raw = _cell_text(cell)
                 # texts[] keeps the RAW string: column widths are measured
                 # from it below, and font commands are not content.
-                text = _styled_cell_text(cell, _esc(raw).replace("\n", " "), median_pt)
+                text = _styled_cell_text(cell, _esc(raw).replace("\n", " "), median_pt, raw=raw)
                 texts[col] = raw
                 row_span = getattr(cell, "row_span", 1) or 1
                 col_span = getattr(cell, "col_span", 1) or 1
@@ -661,7 +695,9 @@ def _render_table(table: TableBlock) -> str:
         rendered_rows = []
         for row_idx, row in enumerate(grid):
             styled = [
-                _styled_cell_text(cell, _esc(_cell_text(cell)).replace("\n", " "), median_pt)
+                _styled_cell_text(
+                    cell, _esc(_cell_text(cell)).replace("\n", " "), median_pt, raw=_cell_text(cell)
+                )
                 for cell in row
             ]
             raws = [_cell_text(cell) for cell in row]
