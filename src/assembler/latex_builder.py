@@ -817,9 +817,26 @@ def _render_table(table: TableBlock) -> str:
             # that bug regressed an earlier attempt at this same fix)
             # keeps the actually-rendered width matching what was
             # measured from the source.
+            # A flat 0.3cm floor here (tried first) is not tied to what
+            # any COLUMN actually needs - confirmed directly on this
+            # fixture's own overlay: subtracting tabcolsep left one
+            # column narrower than its own "Decimal"/"Binary" header
+            # text, and the header visibly overlapped its neighbor's
+            # ("DecBinary", the two headers' ink literally overlaid).
+            # The real per-column floor already exists for the fallback
+            # path below (col_max_len chars * a font-scaled advance
+            # width + padding) - reused here so subtracting tabcolsep
+            # can never shrink a column past what ITS OWN longest cell
+            # (header included, since col_max_len is measured over
+            # every cell) needs.
             _TABCOLSEP_CM = 4.0 / 28.3465
+            _char_width_scaled_cm = 0.17 * ((median_pt or 8.0) / 8.0)
             col_width_cm = [
-                max(0.3, f * _A4_FULL_WIDTH_CM - 2 * _TABCOLSEP_CM) for f in fractions
+                max(
+                    col_max_len[i] * _char_width_scaled_cm + 0.3,
+                    f * _A4_FULL_WIDTH_CM - 2 * _TABCOLSEP_CM,
+                )
+                for i, f in enumerate(fractions)
             ]
             if col_x0_sum is not None and col_x1_sum is not None and col_count is not None:
                 col_is_right = []
