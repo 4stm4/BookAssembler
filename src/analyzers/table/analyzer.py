@@ -89,6 +89,22 @@ def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]
             target_cell.content = list(orphan_cell.content) + list(target_cell.content)
         else:
             target_cell.content = list(target_cell.content) + list(orphan_cell.content)
+
+        # The merged cell now holds text that, in the source, spanned both
+        # cells' own y-range - a taller cell than either alone. Widening
+        # target_cell's own bounding_box to that union is what lets a
+        # later per-row height calculation (RFC 0021 SS3, latex_builder's
+        # row-height struts) see this row as genuinely taller instead of
+        # only as tall as whichever single line target_cell started as.
+        t_vl = getattr(target_cell, "visual_layout", None)
+        o_vl = getattr(orphan_cell, "visual_layout", None)
+        t_bb = getattr(t_vl, "bounding_box", None) if t_vl else None
+        o_bb = getattr(o_vl, "bounding_box", None) if o_vl else None
+        if t_vl is not None and t_bb is not None and o_bb is not None:
+            t_vl.bounding_box = NormalizedRect(
+                x0=min(t_bb.x0, o_bb.x0), y0=min(t_bb.y0, o_bb.y0),
+                x1=max(t_bb.x1, o_bb.x1), y1=max(t_bb.y1, o_bb.y1),
+            )
         orphan_indices.add(i)
 
     if not orphan_indices:
