@@ -73,18 +73,52 @@ def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]
     if not full_indices:
         return grid
 
-    orphan_indices = set()
+    def _target_cell(row_idx: int, orphan_cell: "TableCell") -> "TableCell":
+        return min(grid[row_idx], key=lambda c: abs(_cell_x0(c) - _cell_x0(orphan_cell)))
+
+    # Pass 1: decide every orphan's target row using each candidate row's
+    # ORIGINAL geometry, before any merge below has a chance to widen a
+    # target cell's bounding_box. Deciding and applying in the same pass
+    # let an EARLIER orphan's merge shift its target's bbox (see the
+    # widening below) before a LATER orphan's distance to that same row
+    # was measured - on the voltage-regulator fixture, merging
+    # "15.5V<VIN<27V" into "Output Voltage" first pulled that row's own
+    # y0 up to match it, so "P<15W" (which also belongs there, printed
+    # AFTER the row) then measured closer to the NEXT row ("Quiescent
+    # Current") than to its real, now-relocated target. Locking in every
+    # decision from the untouched grid first removes that ordering
+    # dependency entirely.
+    decisions: List[Tuple[int, int]] = []
     for i, row in enumerate(grid):
         if len(row) != 1:
             continue
         orphan_cell = row[0]
         orphan_y0 = _cell_y0(orphan_cell)
+        distances = {j: abs(_cell_y0(_target_cell(j, orphan_cell)) - orphan_y0) for j in full_indices}
+        min_dist = min(distances.values())
+        # A full row's own "anchor" cell (nearest by x0) is not always the
+        # FIRST line of its own multi-line block - _rows_from_block can
+        # pick a middle line as a row-group's representative (confirmed on
+        # the voltage-regulator fixture: "Output Voltage"'s anchor is its
+        # SECOND condition line, "5mA<IOUT<1.0A", one line further from an
+        # earlier orphan than that orphan's true row - "15.5V<VIN<27V" -
+        # sits from the PREVIOUS row's own last line). That makes the two
+        # real candidates' distances near-equal by construction, not an
+        # edge case tolerance can ignore: within one line-height of each
+        # other (_TIE_EPS), prefer the LATER row, since a condition line's
+        # own first line reads as the start of ITS entry, not the tail of
+        # the entry printed just above it.
+        _TIE_EPS = 0.006  # roughly half a line's y0-to-y0 step on this fixture
+        nearest = max(j for j, d in distances.items() if d <= min_dist + _TIE_EPS)
+        decisions.append((i, nearest))
 
-        def _target_cell(row_idx: int) -> "TableCell":
-            return min(grid[row_idx], key=lambda c: abs(_cell_x0(c) - _cell_x0(orphan_cell)))
-
-        nearest = min(full_indices, key=lambda j: abs(_cell_y0(_target_cell(j)) - orphan_y0))
-        target_cell = _target_cell(nearest)
+    # Pass 2: apply the merges (content + bbox widening) using pass 1's
+    # decisions - now safe to mutate as we go, since nothing downstream
+    # re-measures distance against a row whose bbox this loop changes.
+    orphan_indices = set()
+    for i, nearest in decisions:
+        orphan_cell = grid[i][0]
+        target_cell = _target_cell(nearest, orphan_cell)
         if nearest > i:
             target_cell.content = list(orphan_cell.content) + list(target_cell.content)
         else:
