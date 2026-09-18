@@ -923,6 +923,37 @@ def _render_table(table: TableBlock) -> str:
     body_lines = [f"\\begin{{tabular}}{{{col_spec}}}"]
     if has_any_border and grid and _any_border(grid[0], "border_top"):
         body_lines.append("\\hline")
+
+    # Each row's real height, from the same per-cell geometry used for
+    # column measurement above (min y0 to max y1 across that row's own
+    # cells) - not assumed uniform, which \arraystretch's single constant
+    # forces every row into regardless of whether the source's own line
+    # was one row-band tall or three (confirmed on the voltage-regulator
+    # overlay: every row measured the SAME 7.94pt height there, and on
+    # this fixture's own overlay, rows drift steadily further from
+    # source the further down the table they are - a uniform-height
+    # renderer accumulating error one row at a time). Distributing extra
+    # \\[space] AFTER a row that measured taller than the table's own
+    # baseline (its shortest row - nothing prints shorter than one line)
+    # - not a \rule strut BEFORE the row's content, tried twice before
+    # and regressed the overlay test both times - lets a genuinely
+    # multi-line row claim the height its own content needs without
+    # forcing every other row to match it.
+    def _row_height_fraction(row: List[Any]) -> Optional[float]:
+        y0s, y1s = [], []
+        for cell in row:
+            vl = getattr(cell, "visual_layout", None)
+            cbb = getattr(vl, "bounding_box", None) if vl else None
+            if cbb is not None:
+                y0s.append(cbb.y0)
+                y1s.append(cbb.y1)
+        return (max(y1s) - min(y0s)) if y0s else None
+
+    row_heights = [_row_height_fraction(row) for row in grid]
+    _valid_rh = [h for h in row_heights if h is not None and h > 0]
+    _baseline_rh = min(_valid_rh) if _valid_rh else None
+    _base_line_pt = (median_pt or 8.0) * 1.2 * 1.15  # matches size_cmd + arraystretch above
+
     for i, (cells, _) in enumerate(rendered_rows):
         if has_any_border:
             rule = "\\hline" if i < len(grid) and _row_ruled_below(i) else ""
@@ -933,6 +964,11 @@ def _render_table(table: TableBlock) -> str:
         for col, c in enumerate(cells):
             if (i, col) not in span_map:  # Only render if not spanned from above
                 rendered.append(_render_cell(c, col))
+        extra = ""
+        if _baseline_rh and i < len(row_heights) and row_heights[i]:
+            ratio = row_heights[i] / _baseline_rh
+            if ratio > 1.15:  # a hair above 1.0 is measurement noise, not real height
+                extra = f"[{_base_line_pt * (ratio - 1.0):.2f}pt]"
         # \tabularnewline, not bare "\\ " - a row ending in a p{} column
         # (every column can be p{} now that narrow columns get a measured
         # width too) can make a plain "\\" behave like the paragraph-
@@ -941,7 +977,7 @@ def _render_table(table: TableBlock) -> str:
         # that surfaces as "Misplaced \noalign" and kills the compile.
         # \tabularnewline is array's own fix - unambiguously ends the ROW
         # regardless of what column type precedes it.
-        body_lines.append(" & ".join(rendered) + " \\tabularnewline " + rule)
+        body_lines.append(" & ".join(rendered) + f" \\tabularnewline{extra} " + rule)
     body_lines.append("\\end{tabular}")
     tabular = "\n".join(body_lines)
 
