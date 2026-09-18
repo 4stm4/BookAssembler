@@ -801,7 +801,26 @@ def _render_table(table: TableBlock) -> str:
         boundaries = [bb.x0] + list(rule_x) + [bb.x1]
         fractions = [boundaries[i + 1] - boundaries[i] for i in range(ncols)]
         if all(f > 0 for f in fractions):
-            col_width_cm = [f * _A4_FULL_WIDTH_CM for f in fractions]
+            # \tabcolsep (4pt, set below) pads BOTH sides of every p{}
+            # column with space the declared width doesn't include -
+            # confirmed by measuring the COMPILED PDF's own rule
+            # positions directly: a column declared p{1.80cm} rendered
+            # 59.4pt wide, not the 51.02pt asked for, an 8.4pt overshoot
+            # matching 2*4pt almost exactly. Left uncorrected, each
+            # internal boundary drifts further right than the one
+            # before it - confirmed directly too, comparing real rule
+            # positions in source vs compiled PDF as a fraction of the
+            # table's own width: 4.8%/5.8%/7.0% off at the 1st/2nd/3rd
+            # boundary, growing, not constant. Subtracting the known
+            # overshoot from each column's OWN declared width (not from
+            # a cumulative running boundary, which double-counts it -
+            # that bug regressed an earlier attempt at this same fix)
+            # keeps the actually-rendered width matching what was
+            # measured from the source.
+            _TABCOLSEP_CM = 4.0 / 28.3465
+            col_width_cm = [
+                max(0.3, f * _A4_FULL_WIDTH_CM - 2 * _TABCOLSEP_CM) for f in fractions
+            ]
             if col_x0_sum is not None and col_x1_sum is not None and col_count is not None:
                 col_is_right = []
                 for i in range(ncols):
