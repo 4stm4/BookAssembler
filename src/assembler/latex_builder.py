@@ -694,8 +694,15 @@ def _render_table(table: TableBlock) -> str:
         max(2.2, (target_width_cm - narrow_total_cm) / wide_count) if wide_count else 0.0
     )
 
+    # Narrow columns hold short numeric-ish values (MIN/TYP/MAX/UNITS) that
+    # the source right-aligns, not the wide CHARACTERISTICS/CONDITIONS text
+    # columns (those stay p{}, left/paragraph-set as the source sets them).
+    # "l" here made every value column left-edge-aligned against the
+    # source's right-aligned numbers - visibly wrong regardless of any
+    # row/column-position fix, since it shifts where each value's ink sits
+    # within its own column on every single row.
     col_spec_parts = [
-        f"p{{{wide_width_cm:.2f}cm}}" if wide else "l"
+        f"p{{{wide_width_cm:.2f}cm}}" if wide else "r"
         for wide in is_wide
     ]
     # Borders come from the source, not from a house style: each cell
@@ -743,14 +750,15 @@ def _render_table(table: TableBlock) -> str:
                 # per spanned column ("ll" for col_span=2) is not valid
                 # LaTeX ("Only one column-spec. allowed.") and halts the
                 # whole compile. If any spanned column is wide, size the
-                # merged cell to their combined width; otherwise "l".
+                # merged cell to their combined width; otherwise "r" (see
+                # col_spec_parts above for why narrow columns are "r").
                 spanned = range(col, min(col + col_span, len(is_wide)))
                 if any(is_wide[c] for c in spanned):
                     spec = f"p{{{wide_width_cm * col_span:.2f}cm}}"
                 else:
-                    spec = "l"
+                    spec = "r"
             else:
-                spec = (f"p{{{wide_width_cm:.2f}cm}}" if is_wide[col] else "l")
+                spec = (f"p{{{wide_width_cm:.2f}cm}}" if is_wide[col] else "r")
 
             if row_span > 1:
                 width = f"{wide_width_cm:.2f}cm" if is_wide[col] else "*"
