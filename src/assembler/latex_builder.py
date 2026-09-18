@@ -775,6 +775,15 @@ def _render_table(table: TableBlock) -> str:
         below = grid[index + 1] if index + 1 < len(grid) else []
         return _any_border(grid[index], "border_bottom") or _any_border(below, "border_top")
 
+    # Per-row height correction via \rule{}{}  struts was tried here in two
+    # independent forms - correcting only the tallest outlier row against
+    # the table's median row height, and correcting every row against the
+    # table's shortest row - and BOTH measured WORSE on the visual-overlay
+    # test than doing nothing (~26.2% either way, up from the 24.5%
+    # baseline without any height correction). Two differently-reasoned
+    # attempts regressing by the same margin is evidence against the
+    # technique itself in this measurement pipeline, not against either
+    # attempt's specific choice of baseline - not attempted further here.
     body_lines = [f"\\begin{{tabular}}{{{col_spec}}}"]
     if has_any_border and grid and _any_border(grid[0], "border_top"):
         body_lines.append("\\hline")
