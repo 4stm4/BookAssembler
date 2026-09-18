@@ -720,19 +720,30 @@ def _render_table(table: TableBlock) -> str:
         max(2.2, (target_width_cm - narrow_total_cm) / wide_count) if wide_count else 0.0
     )
 
-    # Real per-column width: each column's own max_x1 - min_x0, gathered
-    # above from every cell actually assigned to it (header included) -
-    # not a character-count guess, and not the gap between two headers'
-    # x0s (that broke whenever one header, like "Decimal", is itself
-    # wider than the values printed under it). Scaled by the same
-    # full-a4-page factor target_width_cm already uses, so a column's
-    # width and the table's own overall width stay on the same scale.
-    # A content-length floor stays only as a defensive minimum - real
-    # geometry should always be at least that wide, since the header
-    # cell that set col_max_len is itself one of the cells col_max_x1/
-    # col_min_x0 were measured from.
+    # A column's real width is where the source actually RULED it, not
+    # where its own text happens to reach - a right-aligned "120" in a
+    # column drawn 2cm wide only occupies that column's right half, so
+    # measuring from glyphs alone (col_min_x0/col_max_x1, tried first)
+    # systematically undersizes exactly that kind of column. rules.py's
+    # _mark_cell_borders already finds every vertical rule the source
+    # actually printed (reading the page's own pixels, since these
+    # sources are scans with no vector strokes to read instead) and
+    # keeps the ones strictly between the table's own left/right edges
+    # as table.metadata["column_rule_x"] - the real boundary BETWEEN two
+    # columns, independent of how far either one's own content reaches.
     col_width_cm: Optional[List[float]] = None
-    if col_min_x0 is not None and col_max_x1 is not None:
+    rule_x = (getattr(table, "metadata", None) or {}).get("column_rule_x")
+    if bb is not None and rule_x and len(rule_x) == ncols - 1:
+        boundaries = [bb.x0] + list(rule_x) + [bb.x1]
+        fractions = [boundaries[i + 1] - boundaries[i] for i in range(ncols)]
+        if all(f > 0 for f in fractions):
+            col_width_cm = [f * _A4_FULL_WIDTH_CM for f in fractions]
+
+    # Fallback when the source printed no rules to read (a borderless
+    # table) or the count doesn't line up with this table's own column
+    # count: each column's own text extent, at least a defensive
+    # content-length floor wide.
+    if col_width_cm is None and col_min_x0 is not None and col_max_x1 is not None:
         fractions = [
             (col_max_x1[i] - col_min_x0[i])
             if col_min_x0[i] is not None and col_max_x1[i] is not None else None

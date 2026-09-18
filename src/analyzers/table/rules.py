@@ -94,6 +94,25 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
     rule_x = [to_page(run, clip.x0, page_w) for run in vertical]
     rule_y = [to_page(run, clip.y0, page_h) for run in horizontal]
 
+    # The INTERNAL vertical rules - the ones strictly between the table's
+    # own left and right edges - are the real column boundaries the
+    # source actually drew, in the same page-fraction units the rest of
+    # this pipeline uses. A cell's own text extent is not this: a
+    # right-aligned "120" in a column drawn 2cm wide only occupies the
+    # right half of it, and measuring from glyphs alone (tried in
+    # src/assembler/latex_builder.py) systematically undersizes exactly
+    # that kind of column. _RULE_PAD_PT's search margin means a table's
+    # OUTER edges sometimes get detected too, just outside bbox.x0/x1 -
+    # excluding anything not strictly inside the table's own box is what
+    # keeps only the boundaries BETWEEN columns.
+    internal_rule_x = sorted(x for x in rule_x if bbox.x0 < x < bbox.x1)
+    if internal_rule_x:
+        md = getattr(table, "metadata", None)
+        if md is None:
+            md = {}
+            table.metadata = md
+        md["column_rule_x"] = internal_rule_x
+
     placed = [
         cell for row in table.grid for cell in row
         if cell.visual_layout is not None and cell.visual_layout.bounding_box is not None
