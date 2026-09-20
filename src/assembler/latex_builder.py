@@ -1120,6 +1120,17 @@ def _render_table(table: TableBlock) -> str:
     _extra_scale = 1.0
     if _raw_extra_total > 0 and bb is not None:
         target_height_pt = (bb.y1 - bb.y0) * _A4_FULL_HEIGHT_CM * 28.3465
+        # Tried total_lines (the wrap-aware per-row line count used for the
+        # arraystretch solve above) here instead of len(rendered_rows), on
+        # the theory that a wrapped row was drawing from this same height
+        # budget twice. Measured on the real pipeline: overall table height
+        # DID improve (voltage-regulator overshoot 10.5% -> 5.3%), but the
+        # actual ink-overlay mismatch got WORSE (24.1% -> 27.7%) - the rows
+        # that need this extra space are specific ones (multirow/merged
+        # headers), and cutting everyone's share uniformly to hit a global
+        # height target starves exactly the rows the mismatch is most
+        # sensitive to. Reverted; total height is not what this metric is
+        # most sensitive to, per-row placement is.
         natural_total_pt = len(rendered_rows) * _base_line_pt
         budget_pt = max(0.0, target_height_pt - natural_total_pt)
         _extra_scale = min(1.0, budget_pt / _raw_extra_total)
