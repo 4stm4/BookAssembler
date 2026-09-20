@@ -279,21 +279,42 @@ def _rows_from_group(group: List[Tuple[int, Any]]) -> List[List["TableCell"]]:
         return _rows_from_block(group[0][1])
 
     fragments: List[Tuple[str, Optional[NormalizedRect], Optional[Any]]] = []
+    # Which sibling block each fragment's bbox came from, keyed by the
+    # bbox object's own identity - _group_into_rows and _make_cell both
+    # keep passing (text, bbox, style) triples around unchanged, so this
+    # side table is how a fragment's origin block survives the trip
+    # without widening that shared tuple shape everywhere it is unpacked.
+    # Needed for the same reason _rows_from_block now tags its own cells:
+    # a fragment split off into its own grid row for having no sibling
+    # value at its y0 (see _merge_orphan_rows) still came from the same
+    # source block as another fragment that DID land in a full row, and
+    # that fact should settle where it belongs instead of a y0-distance
+    # guess.
+    fragment_block_id: Dict[int, str] = {}
     page_idx = None
     for _, block in group:
         page_idx = page_idx or _page_idx(block)
-        fragments.extend(item for item in _line_rows(block) if not _looks_like_separator(item[0]))
+        block_id = getattr(block, "id", None)
+        for item in _line_rows(block):
+            if _looks_like_separator(item[0]):
+                continue
+            fragments.append(item)
+            if item[1] is not None and block_id is not None:
+                fragment_block_id[id(item[1])] = block_id
 
     if not fragments:
         cells = [
-            _make_cell(_get_text(block), None, None, None)
+            _make_cell(_get_text(block), None, None, None, source_block_id=getattr(block, "id", None))
             for _, block in sorted(group, key=lambda t: (_bbox(t[1]).x0 if _bbox(t[1]) else 0.0))
         ]
         return [cells]
 
     sub_rows = _group_into_rows(fragments)
     return [
-        [_make_cell(t, b, s, page_idx) for t, b, s in row]
+        [
+            _make_cell(t, b, s, page_idx, source_block_id=fragment_block_id.get(id(b)) if b is not None else None)
+            for t, b, s in row
+        ]
         for row in sub_rows
     ]
 
@@ -366,8 +387,9 @@ def _split_numeric_pair(
 def _make_cell(
     text: str, bbox: Optional[NormalizedRect], style: Optional[Any],
     page_idx: Optional[int], row_span: int = 1,
+    source_block_id: Optional[str] = None,
 ) -> "TableCell":
-    return TableCell(
+    cell = TableCell(
         row_span=row_span,
         content=[ParagraphBlock(
             inlines=[TextLineInline(spans=[StyledTextSpan(text=text)])],
@@ -376,6 +398,20 @@ def _make_cell(
             bounding_box=bbox, page_or_screen_index=page_idx or 0, style=style,
         ) if bbox is not None else None,
     )
+    # Which source PdfSourceAdapter block this cell's text came from - a
+    # block whose own lines land in different grid rows (_group_into_rows
+    # splits them apart by y0 whenever nothing else lines up beside them,
+    # e.g. a condition cell's trailing line with no sibling MIN/TYP/MAX
+    # value of its own) still came from the SAME printed paragraph as its
+    # sibling lines. _merge_orphan_rows uses this to recognize that link
+    # directly instead of only guessing it back from y0 proximity, which
+    # cannot tell a trailing continuation of the row above it apart from
+    # a leading continuation of the row below (RFC 0001 SS2.4's "P<15W"
+    # fixture: nearest-by-y0 alone ties 0.0088 vs 0.0104 between the two
+    # and picks the wrong one).
+    if source_block_id is not None:
+        cell.metadata["source_block_id"] = source_block_id
+    return cell
 
 
 def _local_column_bins(
@@ -420,9 +456,10 @@ def _rows_from_block(block: Any) -> List[List["TableCell"]]:
     falls back to a single row holding the whole block's text.
     """
     fragments = [item for item in _line_rows(block) if not _looks_like_separator(item[0])]
+    block_id = getattr(block, "id", None)
     if not fragments:
         text = _get_text(block)
-        return [[_make_cell(text, None, None, None)]]
+        return [[_make_cell(text, None, None, None, source_block_id=block_id)]]
 
     page_idx = _page_idx(block)
     sub_rows = _group_into_rows(fragments)
@@ -430,7 +467,7 @@ def _rows_from_block(block: Any) -> List[List["TableCell"]]:
     if len(sub_rows) <= 1:
         row = sub_rows[0] if sub_rows else fragments
         row = sorted(row, key=lambda item: item[1].x0 if item[1] is not None else 0.0)
-        return [[_make_cell(t, b, s, page_idx) for t, b, s in row]]
+        return [[_make_cell(t, b, s, page_idx, source_block_id=block_id) for t, b, s in row]]
 
     # A real rowspan needs the LATER sub-rows to be genuine multi-column data
     # rows continuing this one, not just the next unrelated line of prose
@@ -489,11 +526,13 @@ def _rows_from_block(block: Any) -> List[List["TableCell"]]:
         )
         if is_rowspan_col:
             (sr_idx, (text, bbox, style)), = occupied.items()
-            rows[0].append(_make_cell(text, bbox, style, page_idx, row_span=len(sub_rows)))
+            rows[0].append(_make_cell(
+                text, bbox, style, page_idx, row_span=len(sub_rows), source_block_id=block_id,
+            ))
             continue
         for sr_idx in sorted(occupied):
             text, bbox, style = occupied[sr_idx]
-            rows[sr_idx].append(_make_cell(text, bbox, style, page_idx))
+            rows[sr_idx].append(_make_cell(text, bbox, style, page_idx, source_block_id=block_id))
 
     for row in rows:
         row.sort(key=lambda c: c.visual_layout.bounding_box.x0 if c.visual_layout else 0.0)
