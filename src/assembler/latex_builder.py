@@ -1051,9 +1051,39 @@ def _render_table(table: TableBlock) -> str:
     _A4_FULL_HEIGHT_CM = 29.7
     _ARRAYSTRETCH_DEFAULT = 1.15
     dynamic_arraystretch = _ARRAYSTRETCH_DEFAULT
+
+    # A row isn't always one line tall before any stretch is applied -
+    # _merge_orphan_rows folds several source lines into one cell, and
+    # that combined text WRAPS inside its wide p{} column instead of
+    # collapsing to one line. Confirmed directly on the voltage-
+    # regulator fixture: the merged "Output Voltage" condition cell
+    # renders as two separate physical lines (124.3-129.8pt, then
+    # 134.3-139.7pt) in the compiled PDF. Treating every row as exactly
+    # one line (tried first) understates how tall the UNSTRETCHED table
+    # already is, so solving for arraystretch from that undercount
+    # asks for MORE stretch than needed and the wrapped rows' own extra
+    # lines add height on top that the formula never budgeted for -
+    # confirmed too: a table using the one-line-per-row estimate still
+    # rendered 10% taller than the source proportion it was solved for.
+    # Estimating each wide cell's own wrap count from its real width
+    # (already measured, col_width_cm) and taking the tallest cell in
+    # each row gives a real per-row line count instead of assuming 1.
+    def _row_line_count(row_idx: int) -> int:
+        if col_width_cm is None or row_idx >= len(rendered_rows):
+            return 1
+        _, texts = rendered_rows[row_idx]
+        best = 1
+        for col, raw in enumerate(texts):
+            if col < len(is_wide) and is_wide[col] and raw and col < len(col_width_cm):
+                chars_per_line = max(1.0, col_width_cm[col] / max(_CHAR_WIDTH_CM, 0.01))
+                lines = max(1, -(-len(raw) // int(chars_per_line)))
+                best = max(best, lines)
+        return best
+
     if bb is not None and rendered_rows:
         target_height_pt = (bb.y1 - bb.y0) * _A4_FULL_HEIGHT_CM * 28.3465
-        unstretched_pt = len(rendered_rows) * (median_pt or 8.0) * 1.2
+        total_lines = sum(_row_line_count(i) for i in range(len(rendered_rows)))
+        unstretched_pt = total_lines * (median_pt or 8.0) * 1.2
         if unstretched_pt > 0:
             dynamic_arraystretch = max(0.8, min(1.5, target_height_pt / unstretched_pt))
     _base_line_pt = (median_pt or 8.0) * 1.2 * dynamic_arraystretch
