@@ -1068,6 +1068,15 @@ def _render_table(table: TableBlock) -> str:
     # Estimating each wide cell's own wrap count from its real width
     # (already measured, col_width_cm) and taking the tallest cell in
     # each row gives a real per-row line count instead of assuming 1.
+    # _CHAR_WIDTH_CM (0.17) was calibrated at an 8pt (footnotesize)
+    # baseline - this table's own median_pt can be much smaller (5.48pt
+    # on the voltage-regulator fixture), where real glyphs are
+    # narrower and more of them fit per line than the unscaled constant
+    # assumes. Same scaling already used for the tabcolsep content
+    # floor, recomputed here rather than relying on that floor's local
+    # variable, which only exists when real column rules were found.
+    _wrap_char_width_cm = 0.17 * ((median_pt or 8.0) / 8.0)
+
     def _row_line_count(row_idx: int) -> int:
         if col_width_cm is None or row_idx >= len(rendered_rows):
             return 1
@@ -1075,7 +1084,7 @@ def _render_table(table: TableBlock) -> str:
         best = 1
         for col, raw in enumerate(texts):
             if col < len(is_wide) and is_wide[col] and raw and col < len(col_width_cm):
-                chars_per_line = max(1.0, col_width_cm[col] / max(_CHAR_WIDTH_CM, 0.01))
+                chars_per_line = max(1.0, col_width_cm[col] / max(_wrap_char_width_cm, 0.01))
                 lines = max(1, -(-len(raw) // int(chars_per_line)))
                 best = max(best, lines)
         return best
