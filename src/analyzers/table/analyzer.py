@@ -96,20 +96,45 @@ def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]
         orphan_y0 = _cell_y0(orphan_cell)
         distances = {j: abs(_cell_y0(_target_cell(j, orphan_cell)) - orphan_y0) for j in full_indices}
         min_dist = min(distances.values())
-        # A full row's own "anchor" cell (nearest by x0) is not always the
-        # FIRST line of its own multi-line block - _rows_from_block can
-        # pick a middle line as a row-group's representative (confirmed on
-        # the voltage-regulator fixture: "Output Voltage"'s anchor is its
-        # SECOND condition line, "5mA<IOUT<1.0A", one line further from an
-        # earlier orphan than that orphan's true row - "15.5V<VIN<27V" -
-        # sits from the PREVIOUS row's own last line). That makes the two
-        # real candidates' distances near-equal by construction, not an
-        # edge case tolerance can ignore: within one line-height of each
-        # other (_TIE_EPS), prefer the LATER row, since a condition line's
-        # own first line reads as the start of ITS entry, not the tail of
-        # the entry printed just above it.
-        _TIE_EPS = 0.006  # roughly half a line's y0-to-y0 step on this fixture
-        nearest = max(j for j, d in distances.items() if d <= min_dist + _TIE_EPS)
+
+        # y0 proximity alone cannot tell a TRAILING continuation line
+        # (belongs to the row printed just ABOVE it) apart from a LEADING
+        # one (belongs to the row printed just BELOW it) when the orphan
+        # sits almost exactly between two candidate rows - confirmed on
+        # the voltage-regulator fixture's "P<15W" line: 0.0088 to the row
+        # below vs 0.0104 to its real row above, a tie any epsilon worth
+        # having will also catch. But _rows_from_block already knows,
+        # directly from the source PDF, which block each cell's text came
+        # from - "P<15W" and "Output Voltage"'s own "5mA<IOUT<1.0A" cell
+        # are literally two lines of the SAME PdfSourceAdapter block,
+        # split apart only because nothing else printed beside "P<15W"'s
+        # own line for _group_into_rows to pair it with. A shared
+        # source_block_id is a direct fact about the source, not a
+        # distance estimate, so it overrides any y0-based guess outright.
+        orphan_block_id = orphan_cell.metadata.get("source_block_id")
+        block_id_matches = [
+            j for j in full_indices
+            if orphan_block_id is not None
+            and any(c.metadata.get("source_block_id") == orphan_block_id for c in grid[j])
+        ]
+        if block_id_matches:
+            nearest = min(block_id_matches, key=lambda j: distances[j])
+        else:
+            # A full row's own "anchor" cell (nearest by x0) is not always
+            # the FIRST line of its own multi-line block - _rows_from_block
+            # can pick a middle line as a row-group's representative
+            # (confirmed on the voltage-regulator fixture: "Output
+            # Voltage"'s anchor is its SECOND condition line,
+            # "5mA<IOUT<1.0A", one line further from an earlier orphan
+            # than that orphan's true row - "15.5V<VIN<27V" - sits from
+            # the PREVIOUS row's own last line). That makes the two real
+            # candidates' distances near-equal by construction, not an
+            # edge case tolerance can ignore: within one line-height of
+            # each other (_TIE_EPS), prefer the LATER row, since a
+            # condition line's own first line reads as the start of ITS
+            # entry, not the tail of the entry printed just above it.
+            _TIE_EPS = 0.006  # roughly half a line's y0-to-y0 step on this fixture
+            nearest = max(j for j, d in distances.items() if d <= min_dist + _TIE_EPS)
         decisions.append((i, nearest))
 
     # Pass 2: apply the merges (content + bbox widening) using pass 1's
