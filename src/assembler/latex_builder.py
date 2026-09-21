@@ -1133,6 +1133,29 @@ def _render_table(table: TableBlock) -> str:
     _valid_rh = [h for h in row_heights if h is not None and h > 0]
     _baseline_rh = min(_valid_rh) if _valid_rh else None
 
+    # Real per-row y0-to-y0 step to the NEXT row (not this row's own
+    # content span) - used below, unthresholded this time (every row's
+    # own real deviation from the table's tightest step, not just the
+    # ones over some outlier cutoff), on rows other than 0 (see the
+    # comment further down for why row 0's own transition is excluded).
+    def _row_min_y0(row: List[Any]) -> Optional[float]:
+        y0s = [
+            cbb.y0
+            for cell in row
+            for cbb in [getattr(getattr(cell, "visual_layout", None), "bounding_box", None)]
+            if cbb is not None
+        ]
+        return min(y0s) if y0s else None
+
+    _row_y0s = [_row_min_y0(row) for row in grid]
+    row_gaps: List[Optional[float]] = [None] * len(grid)
+    for i in range(len(grid) - 1):
+        y0, y1 = _row_y0s[i], _row_y0s[i + 1]
+        if y0 is not None and y1 is not None:
+            row_gaps[i] = y1 - y0
+    _valid_gaps = [g for g in row_gaps if g is not None and g > 0]
+    _baseline_gap = min(_valid_gaps) if _valid_gaps else None
+
     # Tried a SECOND signal here, alongside row_heights: each row's own
     # y0-to-y0 STEP to the next row (not its own content span), on the
     # theory that a header-to-body transition can have a genuinely bigger
@@ -1244,12 +1267,37 @@ def _render_table(table: TableBlock) -> str:
     # below is what that fixture already measures best against, so a
     # table with any wrapping keeps using it unchanged.
     _extra_ratio = [0.0] * len(row_heights)
-    if not _any_wrapping and _baseline_rh:
-        for i, rh in enumerate(row_heights):
-            if rh:
-                ratio = rh / _baseline_rh
-                if ratio > 1.15:
-                    _extra_ratio[i] = ratio - 1.0
+    if not _any_wrapping:
+        if _baseline_rh:
+            for i, rh in enumerate(row_heights):
+                if rh:
+                    ratio = rh / _baseline_rh
+                    if ratio > 1.15:
+                        _extra_ratio[i] = ratio - 1.0
+        # Unthresholded this time: EVERY row's own real gap to the next
+        # row, relative to the table's tightest gap - not just the ones
+        # crossing some outlier cutoff. A table with no wrapping columns
+        # at all can still have its data rows' own steps vary by a few
+        # percent from each other (confirmed on the decimal/binary
+        # fixture: 0.0170-0.0181, a real ~6% spread, not noise - every
+        # value repeats across multiple row pairs, it is not one-off
+        # jitter), and while any single row's share of that is tiny, 21
+        # of them compounding in the SAME direction is exactly the kind
+        # of one-row-at-a-time accumulating drift the visual overlay
+        # keeps showing growing down the table. row 0's own transition
+        # is excluded (see the comment above this function) - proven to
+        # double-count against the test's own crop padding there, a
+        # fact about THAT one row's relationship to the test, not about
+        # every other row's real, if small, deviation from the rest.
+        if _baseline_gap:
+            for i in range(len(row_gaps)):
+                if i == 0:
+                    continue
+                g = row_gaps[i]
+                if g:
+                    ratio = g / _baseline_gap
+                    if ratio > 1.0:
+                        _extra_ratio[i] = max(_extra_ratio[i], ratio - 1.0)
     _extra_ratio_total = sum(_extra_ratio)
 
     if bb is not None and rendered_rows:
