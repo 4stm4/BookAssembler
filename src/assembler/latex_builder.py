@@ -796,6 +796,12 @@ def _render_table(table: TableBlock) -> str:
     # its own left vs right drawn boundary; whichever is smaller is the
     # edge the source set this column's text against.
     col_is_right: Optional[List[bool]] = None
+    # Per-column: does ONLY the header cell (row 0) sit centered over this
+    # column, independent of how the data cells beneath it are set? See
+    # the real check further down, inside the real-column-rule branch -
+    # defaults to "no" everywhere else, since that check needs the same
+    # real rule boundaries col_width_cm does.
+    header_is_centered: List[bool] = [False] * ncols
     rule_x = (getattr(table, "metadata", None) or {}).get("column_rule_x")
     if bb is not None and rule_x and len(rule_x) == ncols - 1:
         boundaries = [bb.x0] + list(rule_x) + [bb.x1]
@@ -862,6 +868,42 @@ def _render_table(table: TableBlock) -> str:
                         col_is_right.append(pad_right < pad_left)
                     else:
                         col_is_right.append(True)
+
+            # A column-group header ("CONDITIONS") can be CENTERED over its
+            # own wide column even though every DATA cell below it sets
+            # left (a binary code, a wrapped sentence) - confirmed directly
+            # on the voltage-regulator fixture: "CONDITIONS"'s own x0 sits
+            # at 0.6146 of the page, almost exactly the midpoint of its
+            # column's real rule boundaries (0.5355-0.7534, center 0.6445)
+            # minus half the word's own width, while "CHARACTERISTICS" (the
+            # OTHER wide column) sits flush against ITS column's left rule
+            # (pad_left = 0) - a genuine row-label column, not a centered
+            # group heading. col_is_right above blends the header row's own
+            # padding into the SAME average as all the data rows beneath
+            # it (col_x0_sum/col_x1_sum accumulate every row including row
+            # 0), so a lone centered header among many left-set data rows
+            # never shows up there - it needs its own, row-0-only check:
+            # padding roughly EQUAL on both sides (not flush against
+            # either edge) is what "centered" actually looks like
+            # geometrically, distinct from "left-set" or "right-set" where
+            # one side's padding is near zero.
+            if grid:
+                for cell in grid[0]:
+                    hx0 = _cell_x0(cell)
+                    hx1 = _cell_x1(cell)
+                    if hx0 is None or hx1 is None:
+                        continue
+                    hcol = min(range(ncols), key=lambda i: abs(bins[i] - hx0))
+                    col_w = boundaries[hcol + 1] - boundaries[hcol]
+                    if col_w <= 0:
+                        continue
+                    pad_left = hx0 - boundaries[hcol]
+                    pad_right = boundaries[hcol + 1] - hx1
+                    if (
+                        min(pad_left, pad_right) > 0.15 * col_w
+                        and abs(pad_left - pad_right) < 0.25 * col_w
+                    ):
+                        header_is_centered[hcol] = True
 
     # Fallback when the source printed no rules to read (a borderless
     # table) or the count doesn't line up with this table's own column
@@ -936,9 +978,33 @@ def _render_table(table: TableBlock) -> str:
             part + seps[i + 1] for i, part in enumerate(col_spec_parts)
         )
     else:
+        # Every column gets a pipe on both sides here (the fallback grid),
+        # so a header \multicolumn override needs the same on both sides
+        # too, not just the span-cell convention's own unconditional "|".
+        seps = ["|"] * (ncols + 1)
         col_spec = "|" + "|".join(col_spec_parts) + "|"
 
-    def _render_cell(cell: Any, col: int) -> str:
+    def _render_cell(cell: Any, col: int, row_idx: int = -1) -> str:
+        if (
+            row_idx == 0
+            and col < len(header_is_centered)
+            and header_is_centered[col]
+            and not isinstance(cell, tuple)
+        ):
+            # This column's OWN data cells stay in col_spec_parts' left/
+            # right setting (a binary code or a wrapped sentence, still
+            # set the way the source set it) - only the group-heading text
+            # in row 0 itself is centered, via a one-cell \multicolumn
+            # that overrides just this cell's column type without
+            # touching col_spec for every other row in the same column.
+            if col_width_cm is not None:
+                width = f"{col_width_cm[col]:.2f}cm"
+                cspec = f">{{\\centering\\arraybackslash}}p{{{width}}}" if is_wide[col] else "c"
+            else:
+                cspec = "c"
+            left_bar = seps[col] if col < len(seps) else ""
+            right_bar = seps[col + 1] if col + 1 < len(seps) else ""
+            return f"\\multicolumn{{1}}{{{left_bar}{cspec}{right_bar}}}{{{cell}}}"
         if isinstance(cell, tuple):
             _, row_span, col_span, text = cell
             if col_span > 1:
@@ -1144,7 +1210,7 @@ def _render_table(table: TableBlock) -> str:
         rendered = []
         for col, c in enumerate(cells):
             if (i, col) not in span_map:  # Only render if not spanned from above
-                rendered.append(_render_cell(c, col))
+                rendered.append(_render_cell(c, col, row_idx=i))
         extra = ""
         if i < len(raw_extra_pt) and raw_extra_pt[i] > 0:
             extra = f"[{raw_extra_pt[i] * _extra_scale:.2f}pt]"
