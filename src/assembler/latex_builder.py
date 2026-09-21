@@ -1133,6 +1133,33 @@ def _render_table(table: TableBlock) -> str:
     _valid_rh = [h for h in row_heights if h is not None and h > 0]
     _baseline_rh = min(_valid_rh) if _valid_rh else None
 
+    # Tried a SECOND signal here, alongside row_heights: each row's own
+    # y0-to-y0 STEP to the next row (not its own content span), on the
+    # theory that a header-to-body transition can have a genuinely bigger
+    # gap than any data-row-to-data-row step even when the header's own
+    # content is exactly one line tall. That theory is real - confirmed
+    # directly from the decimal/binary fixture's own extracted grid
+    # geometry (not text search): every data-row step measures ~0.0175 of
+    # page height, the header-to-row-1 step measures 0.02655, 52% bigger.
+    # Reproducing it via the same extra-space mechanism as row_heights
+    # measured WORSE, not better: row 1 in the compiled PDF moved from
+    # 2.3pp off source's proportional position to 4.4pp, because
+    # _output_table_rect (the stop-listed test's own crop heuristic)
+    # already pads the top of its crop by one row's height BECAUSE the
+    # header sits above everything else - adding this row's own real
+    # extra gap on top of that unrelated, test-side padding double-counts
+    # in the same direction. Excluding just row 0 from the new signal and
+    # keeping it for every other row still regressed the voltage-
+    # regulator fixture (24.2% -> 24.5%): that fixture's own row-to-row
+    # gaps flagged several OTHER outliers (one row measuring 3x the
+    # table's baseline step), and in the wrapping-column branch the
+    # extra-space budget is a single proportional pool shared by every
+    # outlier row (see raw_extra_pt below) - a big new demand from the
+    # gap signal shrank the share every row_heights-driven outlier had
+    # already been correctly getting, a net loss even where the new
+    # signal's own row deserved more. Reverted entirely; row_heights
+    # alone is what both fixtures already measure best against.
+
     # \arraystretch was a fixed 1.15 for every table (measured once, on
     # fixtures with a particular font size and row density, then baked
     # in) - confirmed wrong for this fixture specifically: font 14.15pt
