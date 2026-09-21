@@ -849,6 +849,19 @@ def _render_table(table: TableBlock) -> str:
             # its own real rule-measured width (4.96cm declared vs a
             # source column that measures much narrower) - the opposite
             # of what subtracting tabcolsep was trying to fix.
+            # Tried replacing this char-count estimate with the real
+            # measured extent (col_max_x1[i]-col_min_x0[i], already
+            # computed above) on the theory that an estimate calibrated
+            # on one table's font size (0.17cm/char at 8pt) shouldn't be
+            # trusted to hold on every other one. Measured on the real
+            # pipeline: it DID help the decimal/binary fixture (15.7% ->
+            # 15.5%, that table's own header text is exactly what the
+            # estimate had been overestimating), but regressed the
+            # voltage-regulator fixture (24.2% -> 24.5%) - its narrow
+            # MIN/TYP/MAX/UNITS columns shrank 32-36% under the real
+            # extent, more than the header case gained. Net negative
+            # across both fixtures; reverted rather than kept for a
+            # single-fixture win.
             col_width_cm = [
                 max(
                     col_max_len[i] * _char_width_scaled_cm + 0.3,
