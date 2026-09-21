@@ -611,14 +611,30 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                     ):
                         header_row = _header_row_for_block(header_block)
                         if header_row is not None:
-                            header_row = _snap_row_to_columns(header_row, table.grid)
-                            table.grid.insert(0, header_row)
-                            table.row_count = len(table.grid)
-                            table.column_count = max(table.column_count, len(header_row))
+                            # The table's own box has to reflect where the
+                            # header actually printed in the SOURCE, not
+                            # where _snap_row_to_columns relocates it for
+                            # LaTeX column-binning - confirmed directly on
+                            # the decimal/binary fixture: "Decimal"'s real
+                            # glyph sits at x0=0.3013, snapping moves that
+                            # cell's OWN bbox to the nearest body column
+                            # (0.3563, 5.5pt of page width away) so LaTeX
+                            # groups it with the right output column, but
+                            # using that SAME relocated box for the table's
+                            # bounding_box quietly shrank it by that same
+                            # 5.5pt - and every consumer that crops the
+                            # SOURCE page by this table's own bbox (the
+                            # visual-overlay test included) then crops off
+                            # part of the header before ever comparing
+                            # anything. Snapshot the true boxes first.
                             header_boxes = [
                                 c.visual_layout.bounding_box for c in header_row
                                 if c.visual_layout
                             ]
+                            header_row = _snap_row_to_columns(header_row, table.grid)
+                            table.grid.insert(0, header_row)
+                            table.row_count = len(table.grid)
+                            table.column_count = max(table.column_count, len(header_row))
                             if header_boxes and table.visual_layout:
                                 old = table.visual_layout.bounding_box
                                 table.visual_layout = VisualLayout(
