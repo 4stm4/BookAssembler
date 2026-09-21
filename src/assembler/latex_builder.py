@@ -1155,51 +1155,82 @@ def _render_table(table: TableBlock) -> str:
                 best = max(best, lines)
         return best
 
-    if bb is not None and rendered_rows:
-        target_height_pt = (bb.y1 - bb.y0) * _A4_FULL_HEIGHT_CM * 28.3465
-        total_lines = sum(_row_line_count(i) for i in range(len(rendered_rows)))
-        unstretched_pt = total_lines * (median_pt or 8.0) * 1.2
-        if unstretched_pt > 0:
-            dynamic_arraystretch = max(0.8, min(1.5, target_height_pt / unstretched_pt))
-    _base_line_pt = (median_pt or 8.0) * 1.2 * dynamic_arraystretch
+    _total_lines = sum(_row_line_count(i) for i in range(len(rendered_rows))) if rendered_rows else 0
+    _any_wrapping = _total_lines > len(rendered_rows)
 
-    # Each row's raw extra (an unscaled ratio-based guess) summed across
-    # every row overshot the table's own real total height by ~24% on
-    # the decimal/binary fixture, confirmed by measuring the COMPILED
-    # PDF's own first/last row y-positions against the source bbox's
-    # proportional height - adding real space for a genuinely tall row
-    # without any budget compounds into a table taller than the source
-    # ever was, which is exactly an ACCUMULATING drift top to bottom,
-    # not the constant offset a simple per-row fix would produce. The
-    # fix is the same one target_width_cm already applies to width:
-    # scale the raw extras so they SUM to the table's own real height
-    # budget, not whatever raw per-row ratios happen to add up to.
-    _A4_FULL_HEIGHT_CM = 29.7
-    raw_extra_pt = [0.0] * len(row_heights)
-    if _baseline_rh:
+    # A row's SHARE of the extra-space budget (see raw_extra_pt below) is
+    # a ratio, independent of how tall a single baseline line actually
+    # ends up. When NOTHING in this table wraps (_total_lines exactly
+    # equals the row count), fold that ratio into the SAME solve that
+    # sizes dynamic_arraystretch, so the baseline it picks already leaves
+    # room for it - solving arraystretch from total_lines alone and only
+    # THEN handing out extra space (the general case below) leaves no
+    # room for it in this specific case: with every row exactly 1 line,
+    # a naive len(rendered_rows)*_base_line_pt is mathematically EQUAL to
+    # target_height_pt by construction, a zero budget for every table
+    # without a wrapping column no matter how tall one of its rows
+    # actually measures. Confirmed directly on the decimal/binary
+    # fixture (no wide columns at all): row 16 ("00001111") measures 34%
+    # taller than the table's own shortest row, but extra_scale still
+    # came out exactly 0.0 under the general-case formula, so every row
+    # rendered at the identical uniform height.
+    #
+    # Once a table has even one wrapping row, this same fold-in makes
+    # things WORSE, not better: a wrapped cell's source bbox is already
+    # taller than the baseline BECAUSE it wraps, so _total_lines already
+    # reserves height for it, and folding its own row_heights ratio in
+    # too double-budgets that one row. Confirmed directly on the
+    # voltage-regulator fixture (which does have wrapping columns): the
+    # fold-in regressed its overlay mismatch twice, once unconditionally
+    # (24.2% -> 25.4%) and once even after skipping wrapped rows'  own
+    # ratio (24.2% -> 27.0%, since OTHER single-line outlier rows in
+    # that same table then got the full unscaled ratio the old
+    # proportional scale-down used to temper). The general-case formula
+    # below is what that fixture already measures best against, so a
+    # table with any wrapping keeps using it unchanged.
+    _extra_ratio = [0.0] * len(row_heights)
+    if not _any_wrapping and _baseline_rh:
         for i, rh in enumerate(row_heights):
             if rh:
                 ratio = rh / _baseline_rh
                 if ratio > 1.15:
-                    raw_extra_pt[i] = _base_line_pt * (ratio - 1.0)
-    _raw_extra_total = sum(raw_extra_pt)
-    _extra_scale = 1.0
-    if _raw_extra_total > 0 and bb is not None:
+                    _extra_ratio[i] = ratio - 1.0
+    _extra_ratio_total = sum(_extra_ratio)
+
+    if bb is not None and rendered_rows:
         target_height_pt = (bb.y1 - bb.y0) * _A4_FULL_HEIGHT_CM * 28.3465
-        # Tried total_lines (the wrap-aware per-row line count used for the
-        # arraystretch solve above) here instead of len(rendered_rows), on
-        # the theory that a wrapped row was drawing from this same height
-        # budget twice. Measured on the real pipeline: overall table height
-        # DID improve (voltage-regulator overshoot 10.5% -> 5.3%), but the
-        # actual ink-overlay mismatch got WORSE (24.1% -> 27.7%) - the rows
-        # that need this extra space are specific ones (multirow/merged
-        # headers), and cutting everyone's share uniformly to hit a global
-        # height target starves exactly the rows the mismatch is most
-        # sensitive to. Reverted; total height is not what this metric is
-        # most sensitive to, per-row placement is.
-        natural_total_pt = len(rendered_rows) * _base_line_pt
-        budget_pt = max(0.0, target_height_pt - natural_total_pt)
-        _extra_scale = min(1.0, budget_pt / _raw_extra_total)
+        unstretched_pt = (_total_lines + _extra_ratio_total) * (median_pt or 8.0) * 1.2
+        if unstretched_pt > 0:
+            dynamic_arraystretch = max(0.8, min(1.5, target_height_pt / unstretched_pt))
+    _base_line_pt = (median_pt or 8.0) * 1.2 * dynamic_arraystretch
+
+    if _any_wrapping:
+        # General case (any wrapping column): the extra-space ratio is
+        # computed AFTER the baseline, using every outlier row
+        # regardless of wrap state, then scaled down to whatever budget
+        # is actually left once the (wrap-aware, but not outlier-aware)
+        # baseline has claimed its own share - see the comment above for
+        # why this table doesn't use the fold-in solve instead.
+        raw_extra_pt = [0.0] * len(row_heights)
+        if _baseline_rh:
+            for i, rh in enumerate(row_heights):
+                if rh:
+                    ratio = rh / _baseline_rh
+                    if ratio > 1.15:
+                        raw_extra_pt[i] = _base_line_pt * (ratio - 1.0)
+        _raw_extra_total = sum(raw_extra_pt)
+        _extra_scale = 1.0
+        if _raw_extra_total > 0 and bb is not None:
+            target_height_pt = (bb.y1 - bb.y0) * _A4_FULL_HEIGHT_CM * 28.3465
+            natural_total_pt = len(rendered_rows) * _base_line_pt
+            budget_pt = max(0.0, target_height_pt - natural_total_pt)
+            _extra_scale = min(1.0, budget_pt / _raw_extra_total)
+    else:
+        # No wrapping: the fold-in solve above already sized _base_line_pt
+        # to leave exactly this much room, so raw_extra_pt falls straight
+        # out with no separate scale-down.
+        raw_extra_pt = [_base_line_pt * r for r in _extra_ratio]
+        _extra_scale = 1.0
 
     for i, (cells, _) in enumerate(rendered_rows):
         if has_any_border:
