@@ -849,22 +849,37 @@ def _render_table(table: TableBlock) -> str:
             # its own real rule-measured width (4.96cm declared vs a
             # source column that measures much narrower) - the opposite
             # of what subtracting tabcolsep was trying to fix.
-            # Tried replacing this char-count estimate with the real
+            # Replacing the char-count estimate outright with the real
             # measured extent (col_max_x1[i]-col_min_x0[i], already
-            # computed above) on the theory that an estimate calibrated
-            # on one table's font size (0.17cm/char at 8pt) shouldn't be
-            # trusted to hold on every other one. Measured on the real
-            # pipeline: it DID help the decimal/binary fixture (15.7% ->
-            # 15.5%, that table's own header text is exactly what the
-            # estimate had been overestimating), but regressed the
-            # voltage-regulator fixture (24.2% -> 24.5%) - its narrow
-            # MIN/TYP/MAX/UNITS columns shrank 32-36% under the real
-            # extent, more than the header case gained. Net negative
-            # across both fixtures; reverted rather than kept for a
-            # single-fixture win.
+            # computed above) helped the decimal/binary fixture (15.7% ->
+            # 15.5%: its "Decimal" header is exactly what the estimate had
+            # been overestimating, 2.40cm declared vs 1.80cm real) but
+            # regressed the voltage-regulator fixture (24.2% -> 24.5%):
+            # its narrow MIN/TYP/MAX/UNITS columns shrank 32-36% under the
+            # real extent alone, with zero safety margin, more than the
+            # header case gained. Capping the estimate at the real extent
+            # PLUS a small margin - never LARGER than the old estimate,
+            # only ever pulled down toward real geometry when the
+            # estimate overshoots it by more than that margin - keeps the
+            # win without that regression: it cannot inflate a column
+            # beyond what the char-count formula already asked for, and it
+            # cannot starve one that real geometry says needs more than
+            # the margin covers alone.
+            _CONTENT_FLOOR_MARGIN_CM = 0.15
+
+            def _content_floor_cm(i: int) -> float:
+                estimate = col_max_len[i] * _char_width_scaled_cm + 0.3
+                if (
+                    col_min_x0 is not None and col_max_x1 is not None
+                    and col_min_x0[i] is not None and col_max_x1[i] is not None
+                ):
+                    real = (col_max_x1[i] - col_min_x0[i]) * _A4_FULL_WIDTH_CM
+                    return min(estimate, real + _CONTENT_FLOOR_MARGIN_CM)
+                return estimate
+
             col_width_cm = [
                 max(
-                    col_max_len[i] * _char_width_scaled_cm + 0.3,
+                    _content_floor_cm(i),
                     f * _A4_FULL_WIDTH_CM - 2 * _TABCOLSEP_CM,
                 ) if not is_wide[i] else
                 max(2.2, f * _A4_FULL_WIDTH_CM - 2 * _TABCOLSEP_CM)
