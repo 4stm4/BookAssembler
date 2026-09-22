@@ -999,6 +999,24 @@ def _render_table(table: TableBlock) -> str:
                     and col_min_x0[i] is not None and col_max_x1[i] is not None
                 ):
                     real = (col_max_x1[i] - col_min_x0[i]) * _A4_FULL_WIDTH_CM
+                    # Both of this column's boundaries are rules the source
+                    # actually printed, so the width they give is not an
+                    # estimate to be hedged against - it IS the measurement.
+                    # The only thing a floor still has to guarantee there is
+                    # that the column's own ink fits, which is exactly the
+                    # glyph extent and not a hand's breadth more: the margin
+                    # is what kept the decimal/binary fixture's last column
+                    # at 2.69cm (extent 2.54 + 0.15) where its own rules say
+                    # 2.54, leaving it +3.3pt wide after tabcolsep was
+                    # already measured from the source. Columns whose outer
+                    # boundary fell back to the text box keep the margin -
+                    # there the width is a guess and the hedge is earned.
+                    _real_edges = (
+                        (i > 0 or _outer_left is not None)
+                        and (i < ncols - 1 or _outer_right is not None)
+                    )
+                    if _real_edges:
+                        return min(estimate, real)
                     return min(estimate, real + _CONTENT_FLOOR_MARGIN_CM)
                 return estimate
 
