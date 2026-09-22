@@ -1354,7 +1354,16 @@ def _render_table(table: TableBlock) -> str:
 
     if bb is not None and rendered_rows:
         target_height_pt = (bb.y1 - bb.y0) * _A4_FULL_HEIGHT_CM * 28.3465
-        unstretched_pt = (_total_lines + _extra_ratio_total) * (median_pt or 8.0) * 1.2
+        # The row_gaps-driven _extra_ratio (above) sums one term per
+        # GAP (len(rendered_rows)-1 of them - there is no "trailing
+        # gap" after the last row), but _total_lines counts one unit
+        # per ROW (len(rendered_rows) of them) - a genuine, if subtle,
+        # unit mismatch: only when _extra_ratio_total is actually
+        # nonzero (the no-wrapping branch with real row-gap data) does
+        # the -1 correction apply, keeping wrapping tables (whose
+        # _extra_ratio_total is always 0) on the untouched formula.
+        _line_count_units = _total_lines - 1 if _extra_ratio_total > 0 else _total_lines
+        unstretched_pt = (_line_count_units + _extra_ratio_total) * (median_pt or 8.0) * 1.2
         if unstretched_pt > 0:
             dynamic_arraystretch = max(0.8, min(1.5, target_height_pt / unstretched_pt))
     _base_line_pt = (median_pt or 8.0) * 1.2 * dynamic_arraystretch
