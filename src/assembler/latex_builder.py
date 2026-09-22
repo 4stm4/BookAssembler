@@ -1270,6 +1270,33 @@ def _render_table(table: TableBlock) -> str:
     _total_lines = sum(_row_line_count(i) for i in range(len(rendered_rows))) if rendered_rows else 0
     _any_wrapping = _total_lines > len(rendered_rows)
 
+    # For wrapping tables specifically: a row's row_heights ratio (its
+    # own real source content span vs the table's tightest row) can
+    # exceed what its own _row_line_count already accounts for - a
+    # merged multi-line cell (_merge_orphan_rows) that happens to fit on
+    # ONE rendered line once this table's column width and font size
+    # allow it, but whose SOURCE printed the same content across several
+    # real physical lines. Folding ONLY that excess into the SAME solve
+    # _base_line_pt comes from (below) reserves real room for it, rather
+    # than the after-the-fact budget/scale-down further down, which -
+    # confirmed directly on the voltage-regulator fixture - starved a
+    # real outlier to ~18% of its actual need: row 6's merged "Output
+    # Voltage" condition cell (source: three separate condition lines,
+    # this rendering: one line, since the column is wide enough and the
+    # font small enough to fit all three) needed ~28pt of real extra
+    # space, and the unaware solve's own budget only had ~5pt left for
+    # it once its own "row count already ==row count, nothing wraps by
+    # width" arraystretch had already spent the rest.
+    _wrap_row_extra_units = [0.0] * len(row_heights)
+    if _any_wrapping and _baseline_rh:
+        for i, rh in enumerate(row_heights):
+            if rh:
+                ratio = rh / _baseline_rh
+                if ratio > 1.15:
+                    own_lines = _row_line_count(i) if i < len(rendered_rows) else 1
+                    _wrap_row_extra_units[i] = max(0.0, ratio - own_lines)
+    _wrap_extra_units_total = sum(_wrap_row_extra_units)
+
     # A row's SHARE of the extra-space budget (see raw_extra_pt below) is
     # a ratio, independent of how tall a single baseline line actually
     # ends up. When NOTHING in this table wraps (_total_lines exactly
@@ -1363,32 +1390,20 @@ def _render_table(table: TableBlock) -> str:
         # the -1 correction apply, keeping wrapping tables (whose
         # _extra_ratio_total is always 0) on the untouched formula.
         _line_count_units = _total_lines - 1 if _extra_ratio_total > 0 else _total_lines
-        unstretched_pt = (_line_count_units + _extra_ratio_total) * (median_pt or 8.0) * 1.2
+        unstretched_pt = (
+            _line_count_units + _extra_ratio_total + _wrap_extra_units_total
+        ) * (median_pt or 8.0) * 1.2
         if unstretched_pt > 0:
             dynamic_arraystretch = max(0.8, min(1.5, target_height_pt / unstretched_pt))
     _base_line_pt = (median_pt or 8.0) * 1.2 * dynamic_arraystretch
 
     if _any_wrapping:
-        # General case (any wrapping column): the extra-space ratio is
-        # computed AFTER the baseline, using every outlier row
-        # regardless of wrap state, then scaled down to whatever budget
-        # is actually left once the (wrap-aware, but not outlier-aware)
-        # baseline has claimed its own share - see the comment above for
-        # why this table doesn't use the fold-in solve instead.
-        raw_extra_pt = [0.0] * len(row_heights)
-        if _baseline_rh:
-            for i, rh in enumerate(row_heights):
-                if rh:
-                    ratio = rh / _baseline_rh
-                    if ratio > 1.15:
-                        raw_extra_pt[i] = _base_line_pt * (ratio - 1.0)
-        _raw_extra_total = sum(raw_extra_pt)
+        # _wrap_row_extra_units (computed above, before the solve) already
+        # reserved real room in target_height_pt/_base_line_pt for exactly
+        # this - no separate budget/scale-down needed, same as the
+        # no-wrapping branch below.
+        raw_extra_pt = [_base_line_pt * u for u in _wrap_row_extra_units]
         _extra_scale = 1.0
-        if _raw_extra_total > 0 and bb is not None:
-            target_height_pt = (bb.y1 - bb.y0) * _A4_FULL_HEIGHT_CM * 28.3465
-            natural_total_pt = len(rendered_rows) * _base_line_pt
-            budget_pt = max(0.0, target_height_pt - natural_total_pt)
-            _extra_scale = min(1.0, budget_pt / _raw_extra_total)
     else:
         # No wrapping: the fold-in solve above already sized _base_line_pt
         # to leave exactly this much room, so raw_extra_pt falls straight
