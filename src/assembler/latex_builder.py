@@ -867,6 +867,26 @@ def _render_table(table: TableBlock) -> str:
             # the margin covers alone.
             _CONTENT_FLOOR_MARGIN_CM = 0.15
 
+            # Tried subtracting 2*tabcolsep from this floor too (the
+            # fraction branch below already does, so its own FINAL
+            # rendered width - once LaTeX adds that padding back - lands
+            # on the source's real rule-to-rule width; this floor never
+            # got the same treatment). The theory measured out true:
+            # confirmed on the voltage-regulator fixture that its narrow
+            # MIN/TYP/MAX/UNITS columns (floor-dominated, real glyph
+            # extent close to the source column's own real width, i.e.
+            # printed with almost no padding at all) summed 24.9pt over
+            # source width, matching the table's own total overshoot
+            # (25.8pt) almost exactly. But applying the subtraction
+            # (clamped to never shrink below the real glyph extent)
+            # regressed that same fixture's overlay mismatch (24.2% ->
+            # 24.5%) even though it improved the decimal/binary one
+            # slightly (15.4% -> 15.3%) - net negative once both are
+            # weighed together, the third time narrowing this fixture's
+            # narrow columns has done that (see the two comments above).
+            # Reverted; the column WIDTH being more geometrically correct
+            # doesn't reliably translate into a better ink-mask match for
+            # this specific table.
             def _content_floor_cm(i: int) -> float:
                 estimate = col_max_len[i] * _char_width_scaled_cm + 0.3
                 if (
