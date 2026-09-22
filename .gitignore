@@ -52,6 +52,7 @@ scratchpad/
 # рабочий клон и лог раннера — не часть репозитория
 repo/
 kae-gpu-runner.log
+debug_output/
 
 # Промпт-заметки для новой сессии — рабочий черновик, не документация продукта
 docs/deploy/testing-the-pipeline.md
