@@ -137,6 +137,76 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
     outer_left = max((x for x in rule_x if x <= bbox.x0), default=None)
     outer_right = min((x for x in rule_x if x >= bbox.x1), default=None)
 
+    # How far each column's own ink actually sits from its rules. The
+    # assembler needs this to reproduce the indent the source printed
+    # (LaTeX otherwise sets every column exactly \tabcolsep from its
+    # rule, while this fixture's columns are indented 5.2-8.2pt), and it
+    # CANNOT derive it from the KRM cell boxes: measured against the
+    # pixels, a per-column median of those boxes is off by 33-39pt on a
+    # right-set column (each row's number has its own digit count, so the
+    # ragged side is not stable) and comes out NEGATIVE on another, since
+    # some cells' boxes cross a rule outright. Ink is the only honest
+    # source, and this function already has it rendered.
+    _bands = (
+        [outer_left if outer_left is not None else bbox.x0]
+        + internal_rule_x
+        + [outer_right if outer_right is not None else bbox.x1]
+    )
+    ink_x0: List[Optional[float]] = []
+    ink_x1: List[Optional[float]] = []
+    # Horizontal rules have to come out of this first. A rule inks EVERY
+    # pixel column it crosses, so asking "does this column have any ink"
+    # over the raw band answers yes everywhere and the measurement
+    # collapses onto whatever margin is kept clear of the vertical rules
+    # - measured, it returned a flat 1.3-1.7pt for every column of both
+    # fixtures, where the real indents range 5.2-19.9pt.
+    _row_keep = np.ones(height, dtype=bool)
+    for _r0, _r1 in horizontal:
+        _row_keep[_r0:_r1 + 1] = False
+    # "Any ink at all in this pixel column" is useless on a scan: a
+    # speckle lands in practically every column, so the first inked
+    # column is always the very first one and the measurement collapses
+    # onto whatever margin is kept clear of the rules (it returned a flat
+    # 1.3-1.7pt for every column of both fixtures). Profiled on the
+    # decimal/binary fixture's first column band, the separation is
+    # wide and unambiguous: noise sits at a median of 12 inked rows per
+    # column, real glyph columns reach 425, and requiring 1% of the
+    # band's rows puts the first content at 13.67pt where an
+    # independent word-box measurement says 13.7. 1.5% is taken rather
+    # than 1% to stand clear of that noise median on dirtier scans; it
+    # costs about 0.3pt against indents that run 3.6-6.6pt.
+    _rows_kept = ink[_row_keep] if _row_keep.any() else ink
+    _MIN_INK_ROW_SHARE = 0.015
+    _col_ink_rows = _rows_kept.sum(axis=0)
+    _inked_cols = _col_ink_rows > (_MIN_INK_ROW_SHARE * max(1, _rows_kept.shape[0]))
+    for _i in range(len(_bands) - 1):
+        # Keep clear of both rules so their own pixels are not read as
+        # the column's content. 1.5pt was not enough: profiled on the
+        # decimal/binary fixture, a printed rule is about 10px wide at
+        # this zoom (~3.3pt, so ~1.7pt each side of the position stored
+        # for it), and the leading flank landed inside the old margin -
+        # three of that table's four columns then reported their right
+        # padding as exactly the margin (1.5pt) instead of the real
+        # 5.6/8.2/11.8pt, because the rule itself was being read as the
+        # column's own ink. The fourth only escaped because it happens
+        # to have 19pt of clear space before its rule.
+        _RULE_CLEARANCE_PT = 3.0
+        _lo = int(((_bands[_i] * page_w + _RULE_CLEARANCE_PT) - clip.x0) * _RULE_ZOOM)
+        _hi = int(((_bands[_i + 1] * page_w - _RULE_CLEARANCE_PT) - clip.x0) * _RULE_ZOOM)
+        _lo = max(0, min(width - 1, _lo))
+        _hi = max(0, min(width, _hi))
+        if _hi <= _lo:
+            ink_x0.append(None)
+            ink_x1.append(None)
+            continue
+        _cols = np.nonzero(_inked_cols[_lo:_hi])[0]
+        if _cols.size == 0:
+            ink_x0.append(None)
+            ink_x1.append(None)
+            continue
+        ink_x0.append((clip.x0 + (_lo + int(_cols[0])) / _RULE_ZOOM) / page_w)
+        ink_x1.append((clip.x0 + (_lo + int(_cols[-1]) + 1) / _RULE_ZOOM) / page_w)
+
     if internal_rule_x or outer_left is not None or outer_right is not None:
         md = getattr(table, "metadata", None)
         if md is None:
@@ -148,6 +218,9 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
             md["table_rule_x0"] = outer_left
         if outer_right is not None:
             md["table_rule_x1"] = outer_right
+        if any(v is not None for v in ink_x0):
+            md["column_ink_x0"] = ink_x0
+            md["column_ink_x1"] = ink_x1
 
     placed = [
         cell for row in table.grid for cell in row
