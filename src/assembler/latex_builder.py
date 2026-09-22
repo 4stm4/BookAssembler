@@ -1531,6 +1531,35 @@ def _render_table(table: TableBlock) -> str:
     # proportional scale-down used to temper). The general-case formula
     # below is what that fixture already measures best against, so a
     # table with any wrapping keeps using it unchanged.
+    # The gate below keeps the gap signal away from wrapping tables. It
+    # has been opened and measured, and the starvation it causes is real:
+    # reading the per-row \tabularnewline[Xpt] out of the
+    # voltage-regulator fixture's own tex, 6 rows of 19 got any extra at
+    # all, eight rows needing ~4.4-4.9pt each got 0.00, and the one row
+    # genuinely needing 20.5pt got 14.85 - which is why that table
+    # renders 27pt shorter than its source. Opening the gate fixed
+    # exactly that (those rows went to 5.6-6.3pt, row 6 to 26.31).
+    #
+    # It still measured worse, twice, and the second attempt is the
+    # informative one. The first overshot by ~30% (119.7pt granted
+    # against 92.3pt of real need) because a gap ratio is in units of
+    # the tightest GAP while its multiplier is a base LINE - 4.1pt
+    # against 6.58pt on that fixture. Converting the signal into
+    # unstretched-line units brought it to 76.7pt granted, only two
+    # rows out by more than 1.5pt across both fixtures, and the table's
+    # height from 27pt short to 14.8pt short. Both fixtures still lost:
+    # fair 24.8% -> 26.5% and official 25.9% -> 26.6% on this one,
+    # 16.1% -> 16.2% and 17.3% -> 17.6% on the other, with its row
+    # drift going -1.8pt -> +16.1pt.
+    #
+    # The tell in both runs: arraystretch pinned against its 0.8 floor.
+    # The solve wants to shrink further and cannot, so the extra space
+    # these rows correctly ask for has nowhere to come from and every
+    # row is squeezed instead. That is the same wall the last two
+    # attempts hit - one global stretch factor, a hard clamp, and a
+    # target height that is short by construction (see target_height_pt
+    # below). Reopening this gate without fixing that first will fail
+    # the same way a fourth time.
     _extra_ratio = [0.0] * len(row_heights)
     if not _any_wrapping:
         if _baseline_rh:
