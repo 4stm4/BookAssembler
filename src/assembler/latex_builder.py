@@ -709,6 +709,19 @@ def _render_table(table: TableBlock) -> str:
                 # currently vanishes) for that upstream investigation
                 # rather than patched here where fixing it regresses the
                 # very metric this file is measured against.
+                #
+                # Also tried tracking which rows hit this collision and
+                # refusing to hand THEM extra vertical space later (their
+                # row_heights span is contaminated by the overwritten
+                # cell's own real bbox, so the ratio-based outlier checks
+                # further down read them as taller than their rendered
+                # content justifies) - measured WORSE on both the
+                # official and a fair (no test-padding) comparison
+                # (voltage-regulator: 25.2% -> 26.1%, 25.5% -> 27.8%).
+                # Source really did print extra vertical space around
+                # that row even though this rendering lost part of its
+                # text, so refusing the height entirely just traded one
+                # inaccuracy for a bigger one. Not attempted further.
                 cells[col] = cell_content
 
                 # Populate span_map for positions occupied by this cell
