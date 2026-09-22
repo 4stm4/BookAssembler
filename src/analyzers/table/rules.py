@@ -623,10 +623,43 @@ def _merge_stray_rows(
     if typical_step <= 0:
         return grouped
 
+    # A row with only ONE fragment folding into a neighbor that ALREADY
+    # has several of its own is a different situation than two groups
+    # that are each a small piece of the SAME printed line (the
+    # documented "Line Regulation"/"Tj - 25*C" case: 2 fragments merging
+    # into another group). A bare, isolated single fragment sitting near
+    # an already-complete data row (own label + condition + value + unit)
+    # reads instead as a genuine, if tightly-spaced, NEW row - confirmed
+    # directly on the same fixture: "Quiescent Current Change" (1
+    # fragment, nothing else at its own y0) sits 0.0045 below "with
+    # line"'s own already-4-fragment group ("with line" + its condition +
+    # value + unit), a gap barely different from "Line Regulation"'s
+    # documented 0.0048 - geometry alone can't tell these apart, but
+    # fragment count can: "Line Regulation" only ever merges because it
+    # is ITSELF paired with "Tj - 25*C" (2 fragments) before this
+    # function runs, never as a lone fragment on its own line the way
+    # "Quiescent Current Change" is. Merging it here silently dropped
+    # "Quiescent Current Change" from the rendered table entirely
+    # (overwritten by "with line" once both landed in the same grid row -
+    # see src/assembler/latex_builder.py's own collision handling).
+    # A bare stray dot/ellipsis ("•", the ORIGINAL case this function
+    # was built for - RFC 0001 SS2.4's Fig. 1.2 fixture) is also a lone
+    # fragment, and still needs to merge exactly as before: the
+    # fragment-count rule above only means to distinguish "a real label
+    # with substantial text of its own" from "a piece of the row it's
+    # merging into" - a one-or-two-character placeholder mark is
+    # neither. _looks_like_separator requires 3+ repeated characters
+    # (it recognizes a drawn rule line like "───", not a single glyph),
+    # so it does not fire for "•" alone - a direct length check is what
+    # actually distinguishes a placeholder mark from a real word here.
     merged: List[List[Tuple[str, Optional[NormalizedRect], Optional[Any]]]] = []
     merged_y0s: List[float] = []
     for row, y0 in zip(grouped, y0s):
-        if merged and (y0 - merged_y0s[-1]) < threshold:
+        is_lone_label = (
+            len(row) == 1 and len(merged[-1] if merged else []) > 1
+            and len(row[0][0].strip()) > 2
+        )
+        if merged and (y0 - merged_y0s[-1]) < threshold and not is_lone_label:
             merged[-1] = merged[-1] + row
             continue
         merged.append(row)
