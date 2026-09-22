@@ -91,6 +91,111 @@ def _is_monospace(font_name: str) -> bool:
     return any(m in lower for m in MONOSPACE_FAMILIES)
 
 
+# A scanned page's own invisible OCR text layer reports whatever the OCR
+# engine's font model happened to name and flag - confirmed on a real
+# fixture (RFC 0001 §2.4's decimal/binary table): every span reads
+# "Times-Roman", flags=4 (serif only, no bold bit), even though the page's
+# own pixels print visibly heavier strokes than that. flags-based is_bold
+# (below) has nothing real to read on a page like that - not a bug in the
+# flag check, the signal simply does not exist there. A scanned page is
+# detected the same way a table on one was found to be scanned earlier in
+# this project (get_images()/get_drawings()): one or more raster images and
+# not a single vector line - a real digitally-typeset PDF always draws at
+# least some vector content even when it also embeds photos.
+#
+# Kept even though it measures WORSE on the stop-listed visual-overlay
+# test's own pixel-diff metric (both fixtures: see the commit that added
+# this) - that metric squeezes every crop to a fixed mask size and counts
+# raw ink disagreement, which does not distinguish "closer to the source's
+# real print weight" from "wider glyphs shifted the layout". Kept per
+# explicit user judgement, made by eye against the real source scan, that
+# matching the source's own print weight reads as closer to the original
+# than the metric's own number reflects.
+_STROKE_INK_THRESHOLD = 160
+_STROKE_BOLD_PT = 1.7  # calibrated against two real scanned fixtures - see below
+
+
+def _is_scanned_page(page: Any) -> bool:
+    try:
+        images = page.get_images()
+    except Exception:
+        return False
+    if not images:
+        return False
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        drawings = []
+    return len(drawings) == 0
+
+
+def _measure_stroke_pt(page: Any, rect: "fitz.Rect", zoom: float = 8.0) -> Optional[float]:
+    """Median glyph stroke width within rect, in points, from real pixels.
+
+    A row-wide crop's horizontal scan crosses table border lines, which
+    contribute short runs that swamp real glyph strokes once text is
+    sparse - confirmed measuring row-wide crops gave a noisy, backwards
+    signal (a visibly thin-printed fixture measured "thicker" than a
+    visibly bold one). Restricting the measurement to one line's own tight
+    bbox (no border geometry inside it) removes that contamination - the
+    same fix, one level up, as this project's own conclusion that a
+    row's real height has to be measured per rendered COLUMN, not across
+    unrelated content sharing a row by coincidence.
+    """
+    try:
+        import numpy as np
+
+        pix = page.get_pixmap(clip=rect, matrix=fitz.Matrix(zoom, zoom))
+    except Exception:
+        return None
+    if pix.width <= 0 or pix.height <= 0:
+        return None
+    arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+    grey = (
+        (arr[:, :, 0].astype(np.int32) + arr[:, :, 1] + arr[:, :, 2]) // 3
+        if pix.n >= 3 else arr[:, :, 0].astype(np.int32)
+    )
+    ink = grey < _STROKE_INK_THRESHOLD
+    runs: List[int] = []
+    for row in ink:
+        run = 0
+        for v in row:
+            if v:
+                run += 1
+            else:
+                if run > 0:
+                    runs.append(run)
+                run = 0
+        if run > 0:
+            runs.append(run)
+    if not runs:
+        return None
+    return float(np.median(runs)) / zoom
+
+
+def _measure_is_bold(page: Any, line_bbox: Any) -> Optional[bool]:
+    """Real, pixel-measured fallback for a scanned page's untrustworthy flags.
+
+    Threshold is an ABSOLUTE stroke width in points, not normalised by
+    font size: normalising by size was tried first and measured backwards
+    on real fixtures too - a table set at 5.48pt rounds its own thin
+    strokes up to whole rendered pixels even at 8x zoom, so the ratio
+    reads as artificially heavier than a 14pt table's genuinely bold
+    print. 1.7pt sits between the two real fixtures this was calibrated
+    against: ~1.9pt measured on RFC 0001 §2.4's visibly bold decimal/
+    binary table, ~1.3-1.5pt on the voltage-regulator fixture's
+    normal-weight print.
+    """
+    try:
+        rect = fitz.Rect(line_bbox)
+    except Exception:
+        return None
+    stroke_pt = _measure_stroke_pt(page, rect)
+    if stroke_pt is None:
+        return None
+    return stroke_pt > _STROKE_BOLD_PT
+
+
 def _detect_heading_threshold(all_sizes: List[float]) -> float:
     if not all_sizes:
         return 999.0
@@ -188,6 +293,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
 
         for page_idx in range(min(max_pages, len(pdf_doc))):
             page = pdf_doc.load_page(page_idx)
+            page_is_scanned = _is_scanned_page(page)
             pw = float(page.rect.width) or 1.0
             ph = float(page.rect.height) or 1.0
             # Every bbox is normalised to its page, so the page's own size is
@@ -307,12 +413,17 @@ class PdfSourceAdapter(BaseSourceAdapter):
                     if joined_line:
                         line_texts.append(joined_line)
                         first = line.get("spans", [{}])[0] if line.get("spans") else {}
+                        line_bold = bool(first.get("flags", 0) & (1 << 4))
+                        if not line_bold and page_is_scanned and line.get("bbox"):
+                            measured = _measure_is_bold(page, line["bbox"])
+                            if measured is not None:
+                                line_bold = measured
                         line_records.append({
                             "text": joined_line,
                             "bbox": line.get("bbox"),
                             "font": first.get("font", ""),
                             "size": first.get("size", 12.0),
-                            "bold": bool(first.get("flags", 0) & (1 << 4)),
+                            "bold": line_bold,
                             "italic": bool(first.get("flags", 0) & (1 << 1)),
                             "mono": _is_monospace(first.get("font", "")),
                         })
