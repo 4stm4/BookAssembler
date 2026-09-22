@@ -1354,14 +1354,24 @@ def _render_table(table: TableBlock) -> str:
         # both times the voltage-regulator fixture lost far more than
         # the other gained: fair 24.8% -> 27.2% and official 25.9% ->
         # 26.4%, against 16.1% -> 15.7% fair and 17.3% -> 17.6%
-        # official on the decimal/binary one. The reason is visible in
-        # its arraystretch, which rises 1.045 -> 1.099: those stacked
-        # cells do NOT share an x0 bin, so grouping splits them, the
-        # solve sees less height demanded than the rows really need,
-        # and it stretches everything to compensate. Until column
-        # assignment puts those two cells in the same group, this
-        # measures worse than the envelope's known flaw. Do not try a
-        # third time without fixing that first.
+        # official on the decimal/binary one.
+        #
+        # Why, measured rather than assumed: the stacked CONDITIONS
+        # cells DO share a bin (x0 0.5422 and 0.5959 both land in
+        # column 1), so grouping keeps those stacks intact - rows 2 and
+        # 6 come out identical either way. What grouping actually
+        # changes are rows whose cells sit in DIFFERENT columns a
+        # couple of thousandths apart in y: row 11 measures 1.37x under
+        # the envelope and 1.00x grouped, row 4 1.13x. Collapsing them
+        # is the more honest reading of those rows, and the fixture
+        # still gets worse - because arraystretch is solved from the
+        # TOTAL demanded height, so removing inflation those rows never
+        # needed leaves the solve stretching everything else to fill
+        # the same table (1.045 -> 1.099). The envelope's flaw and this
+        # fixture's layout happen to cancel; the honest formula does
+        # not. That makes this a problem with the global solve, not
+        # with either height formula, and swapping formulas alone
+        # cannot fix it.
         y0s, y1s = [], []
         for cell in row:
             vl = getattr(cell, "visual_layout", None)
