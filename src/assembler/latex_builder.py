@@ -1329,6 +1329,39 @@ def _render_table(table: TableBlock) -> str:
     # multi-line row claim the height its own content needs without
     # forcing every other row to match it.
     def _row_height_fraction(row: List[Any]) -> Optional[float]:
+        # The outer envelope, deliberately, though it is measurably the
+        # wrong idea on one fixture and the right one on the other.
+        #
+        # Wrong on the decimal/binary fixture: its two halves are
+        # independent number sequences, so row 16 carries a stray
+        # ellipsis mark 5pt below "15"/"00001111"'s baseline, and the
+        # envelope reads that GAP as 1.34x the tightest row's height
+        # when the row's own tallest cell is exactly one line. That row
+        # then wins space it does not need (+4.9pt of step against the
+        # source).
+        #
+        # Right on the voltage-regulator fixture: it splits a two-line
+        # CONDITIONS entry into two separate TableCells inside ONE row,
+        # and those really do stack, so their union IS that column's
+        # height.
+        #
+        # Grouping by rendered column - union within a column, max
+        # across columns - should satisfy both, and it does fix the
+        # first: rows 15-18 all step +0.6pt afterwards instead of one
+        # row jumping +4.9pt. It has now been measured twice anyway,
+        # the second time after \tabcolsep and the per-column indents
+        # were corrected (the confounders blamed the first time), and
+        # both times the voltage-regulator fixture lost far more than
+        # the other gained: fair 24.8% -> 27.2% and official 25.9% ->
+        # 26.4%, against 16.1% -> 15.7% fair and 17.3% -> 17.6%
+        # official on the decimal/binary one. The reason is visible in
+        # its arraystretch, which rises 1.045 -> 1.099: those stacked
+        # cells do NOT share an x0 bin, so grouping splits them, the
+        # solve sees less height demanded than the rows really need,
+        # and it stretches everything to compensate. Until column
+        # assignment puts those two cells in the same group, this
+        # measures worse than the envelope's known flaw. Do not try a
+        # third time without fixing that first.
         y0s, y1s = [], []
         for cell in row:
             vl = getattr(cell, "visual_layout", None)
