@@ -1182,10 +1182,10 @@ def _render_table(table: TableBlock) -> str:
     _baseline_rh = min(_valid_rh) if _valid_rh else None
 
     # Real per-row y0-to-y0 step to the NEXT row (not this row's own
-    # content span) - used below, unthresholded this time (every row's
-    # own real deviation from the table's tightest step, not just the
-    # ones over some outlier cutoff), on rows other than 0 (see the
-    # comment further down for why row 0's own transition is excluded).
+    # content span) - used below, unthresholded (every row's own real
+    # deviation from the table's tightest step, not just the ones over
+    # some outlier cutoff), row 0 included (see the comment further down
+    # for the real tradeoff that decision carries).
     def _row_min_y0(row: List[Any]) -> Optional[float]:
         y0s = [
             cbb.y0
@@ -1204,32 +1204,18 @@ def _render_table(table: TableBlock) -> str:
     _valid_gaps = [g for g in row_gaps if g is not None and g > 0]
     _baseline_gap = min(_valid_gaps) if _valid_gaps else None
 
-    # Tried a SECOND signal here, alongside row_heights: each row's own
-    # y0-to-y0 STEP to the next row (not its own content span), on the
-    # theory that a header-to-body transition can have a genuinely bigger
-    # gap than any data-row-to-data-row step even when the header's own
-    # content is exactly one line tall. That theory is real - confirmed
-    # directly from the decimal/binary fixture's own extracted grid
-    # geometry (not text search): every data-row step measures ~0.0175 of
-    # page height, the header-to-row-1 step measures 0.02655, 52% bigger.
-    # Reproducing it via the same extra-space mechanism as row_heights
-    # measured WORSE, not better: row 1 in the compiled PDF moved from
-    # 2.3pp off source's proportional position to 4.4pp, because
-    # _output_table_rect (the stop-listed test's own crop heuristic)
-    # already pads the top of its crop by one row's height BECAUSE the
-    # header sits above everything else - adding this row's own real
-    # extra gap on top of that unrelated, test-side padding double-counts
-    # in the same direction. Excluding just row 0 from the new signal and
-    # keeping it for every other row still regressed the voltage-
-    # regulator fixture (24.2% -> 24.5%): that fixture's own row-to-row
-    # gaps flagged several OTHER outliers (one row measuring 3x the
-    # table's baseline step), and in the wrapping-column branch the
-    # extra-space budget is a single proportional pool shared by every
-    # outlier row (see raw_extra_pt below) - a big new demand from the
-    # gap signal shrank the share every row_heights-driven outlier had
-    # already been correctly getting, a net loss even where the new
-    # signal's own row deserved more. Reverted entirely; row_heights
-    # alone is what both fixtures already measure best against.
+    # A second signal alongside row_heights: each row's own y0-to-y0 STEP
+    # to the next row (not its own content span). On tables with a
+    # wrapping column (voltage-regulator), this signal regressed the
+    # overlay test every way it was tried (see the "fold-in" and
+    # "unthresholded" write-ups below and further up this file for the
+    # exact numbers) - that fixture's own row-to-row gaps flag several
+    # outliers (one row measuring 3x the table's baseline step) that
+    # compete for the SAME proportional extra-space budget row_heights'
+    # own outliers already use, so a big new demand from this signal
+    # starves rows row_heights was already correctly handling. Gated to
+    # the no-wrapping branch only (below); row_heights alone is what the
+    # wrapping fixture measures best against.
 
     # \arraystretch was a fixed 1.15 for every table (measured once, on
     # fixtures with a particular font size and row density, then baked
@@ -1332,15 +1318,33 @@ def _render_table(table: TableBlock) -> str:
         # jitter), and while any single row's share of that is tiny, 21
         # of them compounding in the SAME direction is exactly the kind
         # of one-row-at-a-time accumulating drift the visual overlay
-        # keeps showing growing down the table. row 0's own transition
-        # is excluded (see the comment above this function) - proven to
-        # double-count against the test's own crop padding there, a
-        # fact about THAT one row's relationship to the test, not about
-        # every other row's real, if small, deviation from the rest.
+        # keeps showing growing down the table.
+        #
+        # row 0's own transition (header-to-row-1) is included here on
+        # purpose, after measuring both sides of that decision. Excluding
+        # it (an earlier version of this comment) was chosen because
+        # reproducing that one row's real, 52%-bigger-than-typical gap
+        # measured WORSE against the stop-listed visual-overlay test
+        # (15.4% -> 15.8%) - _output_table_rect, that test's own crop
+        # heuristic, already pads the top of the ASSEMBLED crop by one
+        # row's height (nothing on the source side gets the same
+        # padding), and adding this row's own real extra gap on top of
+        # that unrelated, test-side padding doubled up in the same
+        # direction there. But measured against the SAME comparison with
+        # that one-sided padding removed from both crops (a fair,
+        # same-method-both-sides crop, built to check whether the padding
+        # itself was hiding a real remaining defect - see the "fair
+        # crop" debug tooling), including row 0 is a clear net
+        # improvement (16.5% -> 15.2%) - the constant gap the earlier,
+        # excluded version left behind is real, source-side geometry, not
+        # an artifact of anyone's crop math. Kept here at the cost of a
+        # small, known, accepted regression on the stop-listed test's own
+        # number (15.4% -> 15.6%) because the fair comparison is the
+        # truer measure of whether the rendered table actually matches
+        # the source, and that test's padding asymmetry - not this row -
+        # is what was distorting the 15.4% in the first place.
         if _baseline_gap:
             for i in range(len(row_gaps)):
-                if i == 0:
-                    continue
                 g = row_gaps[i]
                 if g:
                     ratio = g / _baseline_gap
