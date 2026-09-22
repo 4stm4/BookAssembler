@@ -17,7 +17,15 @@ from src.krm.models import (
 )
 
 _RULE_ZOOM = 3.0          # render scale for rule detection
-_RULE_PAD_PT = 12.0       # printed rules sit outside the cells' own text boxes
+_RULE_PAD_PT = 20.0       # printed rules sit outside the cells' own text boxes
+# 12.0 was not enough to reach a table's OUTER rules, only its internal
+# ones: measured directly on RFC 0001 SS2.4's decimal/binary fixture, that
+# table's left rule sits 13.9pt outside its own bounding box (165.4pt vs
+# bbox.x0 at 179.3pt) - the box being the union of the CELLS' boxes, a
+# text extent, which a right-aligned column's glyphs never fill out to
+# the rule. Scanning a strip 30pt wide on each side of both fixtures
+# found nothing but those tables' own rules, so reaching further does
+# not risk sweeping in a neighbour's.
 _RULE_INK_LEVEL = 160     # 0-255 grey below which a pixel counts as ink
 _RULE_SPAN = 0.60         # a rule crosses most of the table, text never does
 
@@ -106,12 +114,40 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
     # excluding anything not strictly inside the table's own box is what
     # keeps only the boundaries BETWEEN columns.
     internal_rule_x = sorted(x for x in rule_x if bbox.x0 < x < bbox.x1)
-    if internal_rule_x:
+
+    # The table's own OUTER rules, when it drew any: the nearest rule at
+    # or beyond each edge of its box. These were detected all along (the
+    # search pad reaches past the box on purpose) and then dropped,
+    # leaving src/assembler/latex_builder.py to substitute bbox.x0/bbox.x1
+    # for them when it splits the table into columns. That substitution is
+    # not like-for-like: every INTERNAL boundary it uses is a real printed
+    # rule, while the two outer ones came from the box, which is the union
+    # of the CELLS' boxes - a TEXT extent. A column's glyphs never reach
+    # its rule (a right-aligned number sits against one edge only), so the
+    # error landed entirely on the first and last column. Measured on RFC
+    # 0001 SS2.4's decimal/binary fixture: 13.9pt of real width missing on
+    # the left, 7.6pt on the right, while both INTERNAL columns came out
+    # within 1.3pt of the source.
+    #
+    # Not every table has them - the voltage-regulator fixture draws no
+    # outer rules at all (its rightmost column has no right edge printed,
+    # confirmed by scanning 30pt past the box on both sides and finding
+    # only that table's five internal rules), so this stays optional and
+    # that table keeps using its box, exactly as before.
+    outer_left = max((x for x in rule_x if x <= bbox.x0), default=None)
+    outer_right = min((x for x in rule_x if x >= bbox.x1), default=None)
+
+    if internal_rule_x or outer_left is not None or outer_right is not None:
         md = getattr(table, "metadata", None)
         if md is None:
             md = {}
             table.metadata = md
-        md["column_rule_x"] = internal_rule_x
+        if internal_rule_x:
+            md["column_rule_x"] = internal_rule_x
+        if outer_left is not None:
+            md["table_rule_x0"] = outer_left
+        if outer_right is not None:
+            md["table_rule_x1"] = outer_right
 
     placed = [
         cell for row in table.grid for cell in row
