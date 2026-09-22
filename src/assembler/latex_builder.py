@@ -681,6 +681,34 @@ def _render_table(table: TableBlock) -> str:
                 cell_content = text
                 if row_span > 1 or col_span > 1:
                     cell_content = ("cell", row_span, col_span, text)
+                # A collision here (cells[col] already set by an earlier
+                # cell in THIS row, both nearest to the same bin) silently
+                # overwrites rather than merges - confirmed a REAL case on
+                # the voltage-regulator fixture: grid row 8 holds both
+                # "Quiescent Current Change" (x0 nearest column 0) and
+                # "with line" (x0 also nearest column 0, since it's
+                # indented under the label rather than sitting in the
+                # CONDITIONS column), and "with line" - processed second -
+                # overwrites the row's own CHARACTERISTICS label entirely,
+                # so it never appears in the rendered table at all.
+                # Tried stacking both texts into one cell (a real \\ line
+                # break, scoped to column 0 only - the same collision in
+                # the CONDITIONS column, e.g. "Tj - 25*C" / "145V<VIN<30V"
+                # on that fixture's "Line Regulation" row, already has a
+                # working jagged-row convention that stacking breaks
+                # instead), with the row's own line-count budget updated
+                # to know about the forced break. Measured worse even so
+                # (24.2% -> 26.6%): grid row 8 already merges two SOURCE
+                # rows that print as visually distinct lines (confirmed:
+                # source shows "Quiescent Current Change" on one line,
+                # "with line" on the next, not stacked in one cell) - the
+                # real bug is upstream, in whichever analyzer step grouped
+                # those two source rows into one grid row to begin with,
+                # not in how latex_builder renders whatever grid it's
+                # given. Left as a real, confirmed defect (the label
+                # currently vanishes) for that upstream investigation
+                # rather than patched here where fixing it regresses the
+                # very metric this file is measured against.
                 cells[col] = cell_content
 
                 # Populate span_map for positions occupied by this cell
