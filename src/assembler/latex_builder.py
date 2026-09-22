@@ -843,9 +843,29 @@ def _render_table(table: TableBlock) -> str:
     # defaults to "no" everywhere else, since that check needs the same
     # real rule boundaries col_width_cm does.
     header_is_centered: List[bool] = [False] * ncols
-    rule_x = (getattr(table, "metadata", None) or {}).get("column_rule_x")
+    _table_md = getattr(table, "metadata", None) or {}
+    rule_x = _table_md.get("column_rule_x")
     if bb is not None and rule_x and len(rule_x) == ncols - 1:
-        boundaries = [bb.x0] + list(rule_x) + [bb.x1]
+        # Every INTERNAL boundary here is a rule the source actually
+        # printed; the outer two used to come from bb.x0/bb.x1 instead -
+        # the table's own bounding box, which is the union of its CELLS'
+        # boxes, i.e. a TEXT extent. A column's glyphs never reach its
+        # rule (a right-aligned number sits against one edge only), so
+        # substituting the box for the outer rules put the entire error
+        # on the first and last column while the internal ones stayed
+        # accurate: measured on the decimal/binary fixture, 13.9pt of
+        # real width missing on the left and 7.6pt on the right, against
+        # 1.3pt or less on both internal columns. _mark_cell_borders
+        # already detects those outer rules - it now keeps them too.
+        # A table that draws no outer rules (the voltage-regulator
+        # fixture prints none) still falls back to its box, unchanged.
+        _outer_left = _table_md.get("table_rule_x0")
+        _outer_right = _table_md.get("table_rule_x1")
+        boundaries = (
+            [_outer_left if _outer_left is not None else bb.x0]
+            + list(rule_x)
+            + [_outer_right if _outer_right is not None else bb.x1]
+        )
         fractions = [boundaries[i + 1] - boundaries[i] for i in range(ncols)]
         if all(f > 0 for f in fractions):
             # \tabcolsep (4pt, set below) pads BOTH sides of every p{}
