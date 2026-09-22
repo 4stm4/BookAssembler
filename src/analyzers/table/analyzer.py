@@ -34,6 +34,15 @@ def _cell_y0(cell: "TableCell") -> float:
     return bb.y0 if bb is not None else 0.0
 
 
+def _cell_text(cell: "TableCell") -> str:
+    return " ".join(
+        s.text.strip()
+        for c in cell.content
+        for il in c.inlines
+        for s in il.spans
+    )
+
+
 def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]:
     """Fold a single-cell grid row into the nearest fuller row's cell.
 
@@ -135,6 +144,43 @@ def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]
             # entry, not the tail of the entry printed just above it.
             _TIE_EPS = 0.006  # roughly half a line's y0-to-y0 step on this fixture
             nearest = max(j for j, d in distances.items() if d <= min_dist + _TIE_EPS)
+
+        # Every case above assumes the orphan is a stray LINE of some
+        # already-represented cell (a CONDITIONS entry wrapped across
+        # blocks, a stray "*"). But a shared source_block_id also fires
+        # for a genuine, standalone characteristic label that a tight
+        # PDF layout printed close to - or even between - two indented
+        # sub-condition labels that belong to it (RFC 0001 SS2.4's
+        # voltage-regulator fixture: "Quiescent Current Change" prints
+        # on its own line at the table's LABEL column x0, directly
+        # below "with line" and above "with load" - both indented
+        # sub-labels for the two data rows this heading covers - and
+        # PdfSourceAdapter grouped all three into one block because
+        # nothing else sits between them). The chosen target here is
+        # "with line"'s own row, and _target_cell's nearest-x0 pick
+        # lands on "with line" ITSELF (that row's own leftmost cell,
+        # not some other column's value) - concatenating onto it does
+        # not continue a wrapped value, it overwrites one real label
+        # with two glued together ("Quiescent Current Change" + "with
+        # line" as one string), which a downstream per-row height/text
+        # render can't tell apart from actual wrapped content. A
+        # continuation orphan (P<15W, 15.5V<VIN<27V) never targets a
+        # row's own leftmost cell - it always lands on that row's
+        # CONDITIONS/VALUE cell, which sits to the right of that row's
+        # own label. So: when the target IS the candidate row's own
+        # leftmost cell, and both sides already hold more than a
+        # placeholder mark's worth of text, this orphan is not a
+        # continuation - leave it standing as its own row instead of
+        # folding it away.
+        target_cell = _target_cell(nearest, orphan_cell)
+        target_row_anchor = min(grid[nearest], key=_cell_x0)
+        if (
+            target_cell is target_row_anchor
+            and len(_cell_text(target_cell).strip()) > 2
+            and len(_cell_text(orphan_cell).strip()) > 2
+        ):
+            continue
+
         decisions.append((i, nearest))
 
     # Pass 2: apply the merges (content + bbox widening) using pass 1's
