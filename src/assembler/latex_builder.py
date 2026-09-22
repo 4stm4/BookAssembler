@@ -856,6 +856,13 @@ def _render_table(table: TableBlock) -> str:
     # geometry inside the real-rule branch below; stays 4pt when there is
     # no rule geometry to measure it from.
     _tabcolsep_pt = 4.0
+    # Extra indent, per column, beyond what \tabcolsep already gives:
+    # LaTeX sets a column's text exactly tabcolsep from its rule, while
+    # a source indents each column by its own amount (measured on the
+    # decimal/binary fixture: 5.2-8.2pt on whichever side each column is
+    # set against). Filled from the analyzer's own pixel measurement
+    # inside the real-rule branch below; zero everywhere else.
+    _col_indent_pt = [0.0] * ncols
     _table_md = getattr(table, "metadata", None) or {}
     rule_x = _table_md.get("column_rule_x")
     if bb is not None and rule_x and len(rule_x) == ncols - 1:
@@ -941,6 +948,48 @@ def _render_table(table: TableBlock) -> str:
                 # almost no padding at all.
                 _tabcolsep_pt = max(0.5, min(4.0, min(_real_pads_pt) / 2.0))
             _TABCOLSEP_CM = _tabcolsep_pt / 28.3465
+
+            # What the source indents each column by, beyond the
+            # tabcolsep every column now gets. Taken from the analyzer's
+            # own pixel measurement of where each column's ink starts and
+            # ends (column_ink_x0/x1) - NOT from the KRM cell boxes,
+            # which cannot answer this: measured against the same pixels,
+            # a per-column median of those boxes is 33-39pt off on a
+            # right-set column (every row's number has its own digit
+            # count, so the ragged side never settles) and negative on
+            # another, where some cells' boxes cross a rule outright.
+            # The SET side - the one the column's text is flush against,
+            # i.e. whichever padding is smaller - is the one to
+            # reproduce; the ragged side follows from the width.
+            _ink_x0 = _table_md.get("column_ink_x0")
+            _ink_x1 = _table_md.get("column_ink_x1")
+            if _ink_x0 and _ink_x1 and len(_ink_x0) == ncols:
+                for _i in range(ncols):
+                    if _ink_x0[_i] is None or _ink_x1[_i] is None:
+                        continue
+                    _left_pt = (
+                        _ink_x0[_i] - boundaries[_i]
+                    ) * _A4_FULL_WIDTH_CM * 28.3465
+                    _right_pt = (
+                        boundaries[_i + 1] - _ink_x1[_i]
+                    ) * _A4_FULL_WIDTH_CM * 28.3465
+                    _set_side_pt = min(_left_pt, _right_pt)
+                    # The analyzer's ink scan has to start clear of the
+                    # rule (3pt) and a printed rule is only ~1.7pt wide
+                    # either side of where it is recorded, so whatever
+                    # content sits in the difference is invisible to it
+                    # and every padding it reports is that much too
+                    # large. Measured against independent word-box
+                    # positions on the decimal/binary fixture, the
+                    # overshoot is consistent: +1.6/+0.6/+1.6/+1.6pt on
+                    # the left edges and +1.6/+0.7/+1.0/+1.7 on the
+                    # right. Taking it back off here keeps the indent on
+                    # the real figure instead of a systematically
+                    # inflated one.
+                    _INK_EDGE_BIAS_PT = 1.5
+                    _col_indent_pt[_i] = max(
+                        0.0, _set_side_pt - _INK_EDGE_BIAS_PT - _tabcolsep_pt
+                    )
             _char_width_scaled_cm = 0.17 * ((median_pt or 8.0) / 8.0)
             # The content floor only makes sense for a NARROW column -
             # one that renders unwrapped, so its width has to fit its
@@ -1102,7 +1151,24 @@ def _render_table(table: TableBlock) -> str:
     # the preamble) right-aligns within an explicit-width p{} column
     # instead, when a real measured width is available.
     def _narrow_align_prefix(i: int) -> str:
-        return "" if col_is_right is not None and not col_is_right[i] else "\\raggedleft"
+        # \leftskip / \rightskip, not \hspace: both were measured on an
+        # isolated table (tests/e2e/_debug_colindent_calib.py) and only
+        # the skips do the job. A trailing <{\hspace{}} on a \raggedleft
+        # column moved its text by exactly nothing (its gap to the rule
+        # stayed 1.7pt whether the hspace was there or not), while
+        # \rightskip moved it to 8.3pt as asked. \hspace also indents
+        # only the FIRST line of a wrapped cell, where a skip indents
+        # every line. Neither moves the column rules - confirmed
+        # identical rule positions across all three variants, which
+        # matters because those rules currently land within 0.6pt of
+        # the source and must stay there.
+        _left_set = col_is_right is not None and not col_is_right[i]
+        _indent = _col_indent_pt[i] if i < len(_col_indent_pt) else 0.0
+        if _left_set:
+            return f"\\leftskip={_indent:.2f}pt" if _indent > 0.05 else ""
+        return "\\raggedleft" + (
+            f"\\rightskip={_indent:.2f}pt" if _indent > 0.05 else ""
+        )
 
     if col_width_cm is not None:
         col_spec_parts = [
