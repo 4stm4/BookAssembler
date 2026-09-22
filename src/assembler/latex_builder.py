@@ -843,6 +843,19 @@ def _render_table(table: TableBlock) -> str:
     # defaults to "no" everywhere else, since that check needs the same
     # real rule boundaries col_width_cm does.
     header_is_centered: List[bool] = [False] * ncols
+    # \tabcolsep pads BOTH sides of every column with space the declared
+    # width does not include, and a flat 4pt is simply wrong for a table
+    # the source printed tighter than that. Measured per column as
+    # (rule-to-rule width - the extent that column's own glyphs occupy),
+    # the decimal/binary fixture's tightest column carries 3.1pt of real
+    # padding in TOTAL - 1.6pt a side, where LaTeX was adding 8pt. That
+    # column then cannot fit inside the width its own rules give it, and
+    # the content floor below has to inflate it to compensate: exactly
+    # what left it +6.2pt wider than the source ruled it, with the whole
+    # table 4.2% too wide as a result. Derived from the source's own
+    # geometry inside the real-rule branch below; stays 4pt when there is
+    # no rule geometry to measure it from.
+    _tabcolsep_pt = 4.0
     _table_md = getattr(table, "metadata", None) or {}
     rule_x = _table_md.get("column_rule_x")
     if bb is not None and rule_x and len(rule_x) == ncols - 1:
@@ -896,7 +909,38 @@ def _render_table(table: TableBlock) -> str:
             # can never shrink a column past what ITS OWN longest cell
             # (header included, since col_max_len is measured over
             # every cell) needs.
-            _TABCOLSEP_CM = 4.0 / 28.3465
+            # The real padding the SOURCE printed around each column's
+            # own text: that column's rule-to-rule width minus the extent
+            # its glyphs actually occupy. Only columns bounded by real
+            # rules on BOTH sides can be measured this way - where an
+            # outer rule is missing the boundary came from the text box
+            # itself, whose "padding" is zero by construction and would
+            # drag this to nothing.
+            _real_pads_pt: List[float] = []
+            for _i in range(ncols):
+                if _i == 0 and _outer_left is None:
+                    continue
+                if _i == ncols - 1 and _outer_right is None:
+                    continue
+                if (
+                    col_min_x0 is None or col_max_x1 is None
+                    or col_min_x0[_i] is None or col_max_x1[_i] is None
+                ):
+                    continue
+                _pad_pt = (
+                    fractions[_i] - (col_max_x1[_i] - col_min_x0[_i])
+                ) * _A4_FULL_WIDTH_CM * 28.3465
+                if _pad_pt > 0:
+                    _real_pads_pt.append(_pad_pt)
+            if _real_pads_pt:
+                # Halved, since \tabcolsep applies to EACH side. Capped at
+                # the old 4pt default so this can only ever tighten a
+                # table, never loosen one past what was already measured
+                # to work, and floored at 0.5pt so two columns' ink cannot
+                # end up touching in a table the source printed with
+                # almost no padding at all.
+                _tabcolsep_pt = max(0.5, min(4.0, min(_real_pads_pt) / 2.0))
+            _TABCOLSEP_CM = _tabcolsep_pt / 28.3465
             _char_width_scaled_cm = 0.17 * ((median_pt or 8.0) / 8.0)
             # The content floor only makes sense for a NARROW column -
             # one that renders unwrapped, so its width has to fit its
@@ -1498,14 +1542,21 @@ def _render_table(table: TableBlock) -> str:
     size_cmd = f"\\fontsize{{{size_pt:.2f}}}{{{size_pt * 1.2:.2f}}}\\selectfont"
 
     # Keeps the column rules near the text without letting the glyphs touch
-    # them. 2pt was tried and was too tight: "Decimal|Binary" came out with
-    # the letters against the rule, worse than the source, which leaves a
-    # visible gap. 4pt is the compromise - closer than LaTeX's 6pt default,
-    # which pushed the rules well outside the span the text occupies.
+    # them. A blanket 2pt was tried and was too tight: "Decimal|Binary"
+    # came out with the letters against the rule, worse than the source,
+    # which leaves a visible gap. 4pt was the compromise that replaced it -
+    # closer than LaTeX's 6pt default, which pushed the rules well outside
+    # the span the text occupies. Both were one constant for every table,
+    # which is the real mistake: how much air a table leaves around its
+    # columns is a property OF THAT TABLE, and it is measurable from the
+    # source (see _tabcolsep_pt above - each column's rule-to-rule width
+    # minus the extent its own glyphs occupy). A table whose rules were
+    # measured keeps its own value; one without rule geometry still gets
+    # the 4pt that was tuned here.
     lines = [
         "\\begin{center}",
         f"\\renewcommand{{\\arraystretch}}{{{dynamic_arraystretch:.3f}}}",
-        "\\setlength{\\tabcolsep}{4pt}",
+        f"\\setlength{{\\tabcolsep}}{{{_tabcolsep_pt:.2f}pt}}",
         size_cmd,
         tabular,
         "\\end{center}",
