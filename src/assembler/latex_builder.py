@@ -1541,6 +1541,32 @@ def _render_table(table: TableBlock) -> str:
     _extra_ratio_total = sum(_extra_ratio)
 
     if bb is not None and rendered_rows:
+        # bb is the union of the CELLS' boxes, so it stops at the
+        # outermost glyph and misses both the rules the source drew and
+        # the air it left above the first row and below the last. The
+        # real spans are larger - measured rule-to-rule, the
+        # decimal/binary fixture is 364.9pt against a bbox of 350.4, and
+        # the voltage-regulator one 190.8pt against 172.1 - and
+        # table_rule_y0/y1 now carry them (the analyzer records them the
+        # same way it records the vertical rules).
+        #
+        # They are deliberately NOT used here. Substituting the real
+        # height made every measurement worse: the decimal/binary
+        # fixture's own rendered height went from 364.8pt - already
+        # within 0.1pt of its source - to 379.5pt, its per-row step from
+        # +0.4pt to +1.0pt against the source's, and its overlay from
+        # 17.3% to 17.4% official, with the voltage-regulator fixture
+        # going 25.9% -> 26.3%. The reason is that this value is not
+        # "how tall the table should be", it is one input to a formula
+        # whose output lands about 14.5pt ABOVE it: the solve counts
+        # rows and leading, while the compiled table also carries its
+        # \hline rules, the per-row \tabularnewline extras and the
+        # cells' own padding, none of which the formula models. The
+        # bbox figure is short by almost exactly that amount, so it is
+        # the input that makes the OUTPUT come out right. Feeding the
+        # true height in just adds the unmodelled 14.5pt on top again.
+        # Fixing this properly means modelling what the formula is
+        # missing, not swapping its input.
         target_height_pt = (bb.y1 - bb.y0) * _A4_FULL_HEIGHT_CM * 28.3465
         # The row_gaps-driven _extra_ratio (above) sums one term per
         # GAP (len(rendered_rows)-1 of them - there is no "trailing

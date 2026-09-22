@@ -137,6 +137,19 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
     outer_left = max((x for x in rule_x if x <= bbox.x0), default=None)
     outer_right = min((x for x in rule_x if x >= bbox.x1), default=None)
 
+    # The same thing one axis over. A table's real height is the span
+    # between the rules it was drawn with, and bbox - the union of the
+    # CELLS' boxes - stops at the outermost glyph instead, missing the
+    # rules themselves and the air the source left above the first row
+    # and below the last. Measured rule-to-rule, the decimal/binary
+    # fixture is 364.9pt tall while its bbox says 350.4, and the
+    # voltage-regulator one is 190.8pt against a bbox of 172.1 - so the
+    # height every rebuilt table was solved for was 14-19pt short of the
+    # real thing, and the difference came back out of the padding above
+    # and below the rows.
+    outer_top = max((y for y in rule_y if y <= bbox.y0), default=None)
+    outer_bottom = min((y for y in rule_y if y >= bbox.y1), default=None)
+
     # How far each column's own ink actually sits from its rules. The
     # assembler needs this to reproduce the indent the source printed
     # (LaTeX otherwise sets every column exactly \tabcolsep from its
@@ -207,7 +220,11 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
         ink_x0.append((clip.x0 + (_lo + int(_cols[0])) / _RULE_ZOOM) / page_w)
         ink_x1.append((clip.x0 + (_lo + int(_cols[-1]) + 1) / _RULE_ZOOM) / page_w)
 
-    if internal_rule_x or outer_left is not None or outer_right is not None:
+    if (
+        internal_rule_x
+        or outer_left is not None or outer_right is not None
+        or outer_top is not None or outer_bottom is not None
+    ):
         md = getattr(table, "metadata", None)
         if md is None:
             md = {}
@@ -218,6 +235,10 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
             md["table_rule_x0"] = outer_left
         if outer_right is not None:
             md["table_rule_x1"] = outer_right
+        if outer_top is not None:
+            md["table_rule_y0"] = outer_top
+        if outer_bottom is not None:
+            md["table_rule_y1"] = outer_bottom
         if any(v is not None for v in ink_x0):
             md["column_ink_x0"] = ink_x0
             md["column_ink_x1"] = ink_x1
