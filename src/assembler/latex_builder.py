@@ -1544,10 +1544,27 @@ def _render_table(table: TableBlock) -> str:
     # space, and the unaware solve's own budget only had ~5pt left for
     # it once its own "row count already ==row count, nothing wraps by
     # width" arraystretch had already spent the rest.
+    # A row's envelope is capped at the STEP to the next row. row_heights
+    # spans a row's cells from min y0 to max y1, which reaches onto the
+    # next printed line whenever a cell's continuation sits there - and
+    # when that continuation survived as its own grid row, we render it as
+    # a row AND reserve its height here, paying for the same printed line
+    # twice. The voltage-regulator fixture does exactly that: rows 2 and 4
+    # measure 1.80 and 1.91 baselines and take +5.28pt and +5.99pt of
+    # extra, while their continuations are already emitted as rows 3 and 5
+    # with steps of their own.
+    #
+    # The cap leaves the case this reservation exists for untouched: row 6
+    # folded three printed lines INTO one cell via _merge_orphan_rows, so
+    # no separate row carries them and the step to the next row (24.6pt)
+    # is larger than the envelope, not smaller.
     _wrap_row_extra_units = [0.0] * len(row_heights)
     if _any_wrapping and _baseline_rh:
         for i, rh in enumerate(row_heights):
             if rh:
+                gap = row_gaps[i] if i < len(row_gaps) else None
+                if gap and gap > 0:
+                    rh = min(rh, gap)
                 ratio = rh / _baseline_rh
                 if ratio > 1.15:
                     own_lines = _row_line_count(i) if i < len(rendered_rows) else 1
