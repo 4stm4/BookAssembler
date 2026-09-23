@@ -1815,6 +1815,26 @@ def _render_table(table: TableBlock) -> str:
     # The floor is exactly what the stretch itself added. A row may give
     # back the space \arraystretch put above its natural line box; take
     # more than that and the rows overlap.
+    # Deepening this floor to the row's OWN ink - row_heights[i] instead
+    # of the table's line box, which would let a row shrink until it is
+    # only as tall as what it holds - was tried and lost. The motive was
+    # real: the voltage-regulator fixture's continuation rows step
+    # 4.1-4.9pt where one natural line box is 6.58pt, so each sits ~4pt
+    # too tall and the constant floor (-2.15pt there) cannot reach, while
+    # that source itself runs tighter than its own ink (4.6pt steps under
+    # ~5pt glyphs). It bought B's drift +27.1pt -> +24.4pt and its
+    # official overlay 25.7% -> 24.5%, and cost geometry on BOTH fixtures:
+    #
+    #   fixture B  rule-to-rule +0.5pt -> -2.2pt, fair 23.8% -> 24.1%,
+    #              horizontals 3/15 unchanged
+    #   fixture A  rule-to-rule +0.1pt -> -0.6pt, drift -0.7pt -> -1.4pt,
+    #              pixels moved 0.1pp, inside noise
+    #
+    # A is the fixture whose height was already exact, and this floor is
+    # not gated on wrapping, so it reached A too. Same shape as the
+    # zeroing attempt above - the padded official metric improves while
+    # the geometry and the fair crop degrade - and the same answer: the
+    # geometry decides. Reverted to the constant.
     _compress_floor_pt = min(0.0, _unstretched_line_pt - _base_line_pt)
     raw_extra_pt = []
     for i in range(len(rendered_rows)):
