@@ -100,6 +100,30 @@ def run(name, fixture):
         s_rules = horizontal_rules(fixture, 0, src_rect)
         o_rules = horizontal_rules(Path(pdf), 1, out_rect)
 
+    # The rects each side is measured in, and every rule found in them.
+    # horizontal_rules() scans a band padded by 30pt, so it can catch a
+    # rule OUTSIDE the table: on fixture A the reported rule-to-rule
+    # span (364.9pt) is larger than the crop that is supposed to hold
+    # the whole table plus margins (358.4pt), which cannot both be true
+    # of the same two rules. Printing the positions says which rules are
+    # actually being compared.
+    print(f"  src_rect  y {src_rect.y0:.1f}..{src_rect.y1:.1f} "
+          f"(h {src_rect.height:.1f}pt)  scan band {src_rect.y0 - 30:.1f}.."
+          f"{src_rect.y1 + 30:.1f}")
+    print(f"  out_rect  y {out_rect.y0:.1f}..{out_rect.y1:.1f} "
+          f"(h {out_rect.height:.1f}pt)  scan band {out_rect.y0 - 30:.1f}.."
+          f"{out_rect.y1 + 30:.1f}")
+    print(f"  source rules ({len(s_rules)}): "
+          + " ".join(f"{r:.1f}" for r in s_rules))
+    print(f"  rebuild rules ({len(o_rules)}): "
+          + " ".join(f"{r:.1f}" for r in o_rules))
+    if s_rules:
+        print("  source rules, relative to the first: "
+              + " ".join(f"{r - s_rules[0]:.1f}" for r in s_rules))
+    if o_rules:
+        print("  rebuild rules, relative to the first: "
+              + " ".join(f"{r - o_rules[0]:.1f}" for r in o_rules))
+
     if len(s_rules) >= 2 and len(o_rules) >= 2:
         s_h = s_rules[-1] - s_rules[0]
         o_h = o_rules[-1] - o_rules[0]

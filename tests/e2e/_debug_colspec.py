@@ -73,6 +73,12 @@ def run(name, fixture):
     # per-cell command that disagrees with the table-level one.
     _fs = sorted(set(re.findall(r"\\fontsize\{[0-9.]+\}\{[0-9.]+\}", tex)))
     print(f"  emitted fontsize commands ({len(_fs)}): {' '.join(_fs[:12])}")
+    # The air emitted under the top rule. On fixture A the source puts
+    # its header separator 21.9pt below its top rule and we put ours at
+    # 26.0pt - if this vskip accounts for that 4.1pt, it is being added
+    # on top of a row height that already carried it.
+    _vsk = re.findall(r"\\noalign\{\\vskip ([0-9.]+)pt\}", tex)
+    print(f"  emitted \\noalign vskip: {_vsk if _vsk else 'none'}")
     print(f"  table_rule_x0={md.get('table_rule_x0')}  x1={md.get('table_rule_x1')}")
 
     rule_x = md.get("column_rule_x") or []
