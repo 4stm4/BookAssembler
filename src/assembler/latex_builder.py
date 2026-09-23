@@ -1771,6 +1771,19 @@ def _render_table(table: TableBlock) -> str:
     # A wrapping row whose own content needs more than its gap implies
     # keeps that need: a merged multi-line cell is taller than the step
     # to the next row when the source printed the two close together.
+    # A row whose source step is SHORTER than the baseline gets a
+    # negative extra, not zero. \arraystretch hands every row the same
+    # _base_line_pt and max(0.0, ...) could only ever add to it, so a
+    # stacked continuation line - the voltage-regulator fixture steps
+    # 4.1pt between the two halves of a condition against its 8.7pt
+    # baseline - paid a full row and pushed everything below it down:
+    # +34.9pt of cumulative drift, only 2 of 15 horizontals landing on
+    # the source's.
+    #
+    # The floor is exactly what the stretch itself added. A row may give
+    # back the space \arraystretch put above its natural line box; take
+    # more than that and the rows overlap.
+    _compress_floor_pt = min(0.0, _unstretched_line_pt - _base_line_pt)
     raw_extra_pt = []
     for i in range(len(rendered_rows)):
         gap = row_gaps[i] if i < len(row_gaps) else None
@@ -1782,7 +1795,10 @@ def _render_table(table: TableBlock) -> str:
             _wrap_row_extra_units[i] * _unstretched_line_pt
             if i < len(_wrap_row_extra_units) else 0.0
         )
-        raw_extra_pt.append(max(0.0, surplus, content))
+        # A wrapping row still keeps its own need: its lines have to fit
+        # whatever the step to the next row implies.
+        floor = content if content > 0 else _compress_floor_pt
+        raw_extra_pt.append(max(floor, surplus))
     _extra_scale = 1.0
 
     # The air the source left between its outer rules and its outermost
@@ -1821,7 +1837,7 @@ def _render_table(table: TableBlock) -> str:
         _row_extra_pt = raw_extra_pt[i] * _extra_scale if i < len(raw_extra_pt) else 0.0
         if i == len(rendered_rows) - 1:
             _row_extra_pt += _bottom_air_pt
-        if _row_extra_pt > 0:
+        if abs(_row_extra_pt) > 0.01:
             extra = f"[{_row_extra_pt:.2f}pt]"
         # \tabularnewline, not bare "\\ " - a row ending in a p{} column
         # (every column can be p{} now that narrow columns get a measured
