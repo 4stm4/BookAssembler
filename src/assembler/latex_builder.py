@@ -1898,6 +1898,29 @@ def _render_table(table: TableBlock) -> str:
         max(0.0, (_rule_y1 - bb.y1) * _page_h_pt)
         if bb is not None and _rule_y1 is not None else 0.0
     )
+    # This air is ADDED, and taking it back out of the first row's own
+    # height so the rules below stay put was tried and lost. It does move
+    # the rule: the decimal/binary fixture's source sets its header
+    # separator 21.9pt under its top rule and we set ours at 26.0pt, and
+    # compensating brought that to 22.7pt - the border mask's worst
+    # horizontal went 23px -> 7px and its median 11px -> 3px, the closest
+    # that fixture's borders have come.
+    #
+    # It pays for it out of the one text gap underneath. The step from
+    # the header to the first data row went 22.7pt -> 19.3pt against a
+    # source of 22.4pt: exact before, 3.0pt short after, and no other row
+    # moved at all. Its fair overlay went 15.8% -> 16.2%, its official
+    # 17.8% -> 18.0% and its cumulative drift -0.7pt -> -4.0pt, all of it
+    # that single gap. One rule closer against one text step and two
+    # honest measures worse is not a trade worth making.
+    #
+    # Worth remembering if it is tried again: the compensation must be
+    # gated on _has_top_rule exactly as this vskip is. Gating only on
+    # _top_air_pt > 0.1 subtracts air from a table that was never given
+    # any - the voltage-regulator fixture computes the air (it has a
+    # table_rule_y0) but emits no vskip (its border_top flags are all
+    # False), and its fair overlay went 23.8% -> 25.9% and its matching
+    # horizontals 3/15 -> 1/15 on that alone.
     if _has_top_rule and _top_air_pt > 0.1:
         body_lines.append(f"\\noalign{{\\vskip {_top_air_pt:.2f}pt}}")
 
