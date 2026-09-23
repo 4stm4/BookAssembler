@@ -1563,6 +1563,21 @@ def _render_table(table: TableBlock) -> str:
         for i, rh in enumerate(row_heights):
             if rh:
                 gap = row_gaps[i] if i < len(row_gaps) else None
+                # Zeroing the extra outright when the envelope overruns the
+                # step - instead of capping it here - was tried and lost.
+                # It does what it claims (the voltage-regulator fixture's
+                # rows 2 and 4 went 0.714 and 0.661 units to 0.000, row 6's
+                # merged cell kept its 2.161, fixture A never enters this
+                # block at all) and its drift improved, +27.1pt -> +17.8pt,
+                # with the official overlay 25.7% -> 23.6%. But it takes out
+                # 8.8pt the source really has: that table measured 182.0pt
+                # rule-to-rule against the source's 190.8 (+0.5pt before),
+                # its fair overlay went 23.8% -> 26.6% and its matching
+                # horizontals 3/15 -> 2/15. The official metric improved
+                # only because its crop pads the top and hides a table that
+                # is now too SHORT; the fair crop, which normalizes on the
+                # text extent, sees it. Capping keeps the overhang out
+                # without spending height the source spent.
                 if gap and gap > 0:
                     rh = min(rh, gap)
                 ratio = rh / _baseline_rh
