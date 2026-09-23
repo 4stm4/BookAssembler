@@ -1216,6 +1216,20 @@ def _render_table(table: TableBlock) -> str:
             right = _cells_at(boundary) if boundary < ncols else []
             ruled = _any_border(left, "border_right") or _any_border(right, "border_left")
             seps.append("|" if ruled else "")
+        # The OUTER two separators come from the scan's own measurement
+        # of the frame, not from a vote over the cells. _any_border is
+        # any(), so one stray row whose edge cell picked up a border
+        # turns the whole frame on: the voltage-regulator fixture draws
+        # no left frame at all - the scan recorded no table_rule_x0 and
+        # the header row's first cell agrees with border_left False -
+        # yet we emitted "|" there, a rule 124pt left of the source's
+        # leftmost, which is the entire -436px offset its border mask
+        # showed. Trust this only where the scan actually ran:
+        # column_rule_x present means it measured this table's
+        # verticals and would have recorded a frame had one been drawn.
+        if _table_md.get("column_rule_x"):
+            seps[0] = "|" if _table_md.get("table_rule_x0") is not None else ""
+            seps[ncols] = "|" if _table_md.get("table_rule_x1") is not None else ""
         col_spec = seps[0] + "".join(
             part + seps[i + 1] for i, part in enumerate(col_spec_parts)
         )
