@@ -1315,7 +1315,10 @@ def _render_table(table: TableBlock) -> str:
     # technique itself in this measurement pipeline, not against either
     # attempt's specific choice of baseline - not attempted further here.
     body_lines = [f"\\begin{{tabular}}{{{col_spec}}}"]
-    if has_any_border and grid and _any_border(grid[0], "border_top"):
+    _has_top_rule = bool(
+        has_any_border and grid and _any_border(grid[0], "border_top")
+    )
+    if _has_top_rule:
         body_lines.append("\\hline")
 
     # Each row's real height, from the same per-cell geometry used for
@@ -1768,6 +1771,28 @@ def _render_table(table: TableBlock) -> str:
         raw_extra_pt.append(max(0.0, surplus, content))
     _extra_scale = 1.0
 
+    # The air the source left between its outer rules and its outermost
+    # glyphs. bb stops at the ink, so without this the top rule sits
+    # straight on the first row's caps and the whole grid rides high
+    # against the source: measured on the decimal/binary fixture the
+    # source leaves 4.5pt above its first glyph where we left -0.5pt,
+    # and that 5pt is the vertical offset the border mask shows.
+    # Appended here rather than beside the \hline itself because the
+    # page-height constant is only bound further down.
+    _page_h_pt = _A4_FULL_HEIGHT_CM * 28.3465
+    _rule_y0 = _table_md.get("table_rule_y0")
+    _rule_y1 = _table_md.get("table_rule_y1")
+    _top_air_pt = (
+        max(0.0, (bb.y0 - _rule_y0) * _page_h_pt)
+        if bb is not None and _rule_y0 is not None else 0.0
+    )
+    _bottom_air_pt = (
+        max(0.0, (_rule_y1 - bb.y1) * _page_h_pt)
+        if bb is not None and _rule_y1 is not None else 0.0
+    )
+    if _has_top_rule and _top_air_pt > 0.1:
+        body_lines.append(f"\\noalign{{\\vskip {_top_air_pt:.2f}pt}}")
+
     for i, (cells, _) in enumerate(rendered_rows):
         if has_any_border:
             rule = "\\hline" if i < len(grid) and _row_ruled_below(i) else ""
@@ -1779,8 +1804,11 @@ def _render_table(table: TableBlock) -> str:
             if (i, col) not in span_map:  # Only render if not spanned from above
                 rendered.append(_render_cell(c, col, row_idx=i))
         extra = ""
-        if i < len(raw_extra_pt) and raw_extra_pt[i] > 0:
-            extra = f"[{raw_extra_pt[i] * _extra_scale:.2f}pt]"
+        _row_extra_pt = raw_extra_pt[i] * _extra_scale if i < len(raw_extra_pt) else 0.0
+        if i == len(rendered_rows) - 1:
+            _row_extra_pt += _bottom_air_pt
+        if _row_extra_pt > 0:
+            extra = f"[{_row_extra_pt:.2f}pt]"
         # \tabularnewline, not bare "\\ " - a row ending in a p{} column
         # (every column can be p{} now that narrow columns get a measured
         # width too) can make a plain "\\" behave like the paragraph-
