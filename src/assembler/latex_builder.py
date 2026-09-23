@@ -1719,21 +1719,54 @@ def _render_table(table: TableBlock) -> str:
         ) * (median_pt or 8.0) * 1.2
         if unstretched_pt > 0:
             dynamic_arraystretch = max(0.8, min(1.5, target_height_pt / unstretched_pt))
-    _base_line_pt = (median_pt or 8.0) * 1.2 * dynamic_arraystretch
 
-    if _any_wrapping:
-        # _wrap_row_extra_units (computed above, before the solve) already
-        # reserved real room in target_height_pt/_base_line_pt for exactly
-        # this - no separate budget/scale-down needed, same as the
-        # no-wrapping branch below.
-        raw_extra_pt = [_base_line_pt * u for u in _wrap_row_extra_units]
-        _extra_scale = 1.0
-    else:
-        # No wrapping: the fold-in solve above already sized _base_line_pt
-        # to leave exactly this much room, so raw_extra_pt falls straight
-        # out with no separate scale-down.
-        raw_extra_pt = [_base_line_pt * r for r in _extra_ratio]
-        _extra_scale = 1.0
+    # The base row is the source's TIGHTEST row, taken directly. Solving
+    # it from a total height instead (above) has to guess at everything
+    # the formula does not model - the rules, the per-row extras, the
+    # cells' own padding - and every attempt to feed it a better total
+    # failed on that gap. A row's step is a measured quantity; there is
+    # no reason to derive it from a sum.
+    # The MEDIAN step, not the smallest. A table whose rows are split
+    # into sub-rows (the voltage-regulator fixture stacks a two-line
+    # condition inside one row) has steps of 4.1pt between those halves
+    # against a median of 8.6pt - taking the minimum makes the base row
+    # half of a real one, and every row then needs a surplus to climb
+    # back, which overshoots. The median is the step an ordinary row
+    # actually has. On a table without sub-rows the two agree anyway
+    # (14.3 against 14.8pt on the decimal/binary fixture).
+    _real_gaps_pt = sorted(
+        g * _A4_FULL_HEIGHT_CM * 28.3465 for g in row_gaps if g and g > 0
+    )
+    _baseline_gap_pt = (
+        _real_gaps_pt[len(_real_gaps_pt) // 2] if _real_gaps_pt else 0.0
+    )
+    _unstretched_line_pt = (median_pt or 8.0) * 1.2
+    if _baseline_gap_pt > 0 and _unstretched_line_pt > 0:
+        dynamic_arraystretch = max(0.5, min(2.0, _baseline_gap_pt / _unstretched_line_pt))
+    _base_line_pt = _unstretched_line_pt * dynamic_arraystretch
+
+    # Each row gets exactly what the source leaves beyond the tightest
+    # row: step_i = base + (gap_i - tightest) = gap_i. Nothing is
+    # budgeted and nothing is scaled, so the extras cannot be paid twice
+    # - the failure mode of every earlier version, which reserved room
+    # for them in the stretch AND then emitted them on top.
+    #
+    # A wrapping row whose own content needs more than its gap implies
+    # keeps that need: a merged multi-line cell is taller than the step
+    # to the next row when the source printed the two close together.
+    raw_extra_pt = []
+    for i in range(len(rendered_rows)):
+        gap = row_gaps[i] if i < len(row_gaps) else None
+        surplus = (
+            (gap * _A4_FULL_HEIGHT_CM * 28.3465) - _baseline_gap_pt
+            if gap and _baseline_gap_pt > 0 else 0.0
+        )
+        content = (
+            _wrap_row_extra_units[i] * _unstretched_line_pt
+            if i < len(_wrap_row_extra_units) else 0.0
+        )
+        raw_extra_pt.append(max(0.0, surplus, content))
+    _extra_scale = 1.0
 
     for i, (cells, _) in enumerate(rendered_rows):
         if has_any_border:
