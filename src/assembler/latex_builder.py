@@ -419,6 +419,11 @@ def render_node(
 
 
 _COLUMN_X_TOLERANCE = 0.03
+# Same figure src/analyzers/table/rules.py's _ROW_Y_TOLERANCE uses to
+# decide what shares one printed line. Kept in step with it on purpose:
+# a cell further than this from its row's own baseline is, by that
+# module's definition, not on the row's line - see _row_height_fraction.
+_ROW_BASELINE_TOLERANCE = 0.003
 
 
 _SIZE_NOISE_TOLERANCE = 0.12  # within this of the table's median size = same size
@@ -1372,14 +1377,45 @@ def _render_table(table: TableBlock) -> str:
         # not. That makes this a problem with the global solve, not
         # with either height formula, and swapping formulas alone
         # cannot fix it.
-        y0s, y1s = [], []
+        # One exception to the envelope, and only one: a bare placeholder
+        # mark sitting on its OWN baseline. The stray ellipsis in row 16
+        # is a cell of the table's OTHER number sequence that
+        # _merge_stray_rows folds into this row on purpose - the
+        # stop-listed roundtrip test asserts exactly that grid, and its
+        # own header documents the +4.9pt offset - so the merge cannot be
+        # undone here. But a mark that is not on the row's line is not
+        # part of the row's HEIGHT either, and counting it is what earns
+        # that row 5.83pt of extra space against a measured need of
+        # 0.5pt.
+        #
+        # Scoped so it can only ever fire on that shape: the cell must be
+        # one or two characters (a dot, a dash - never a word) AND sit
+        # further from the row's own baseline than the same tolerance
+        # _group_into_rows uses to decide what shares a line at all. The
+        # marks in rows 3 and 18 share their row's y0 exactly and stay
+        # counted; a row that is nothing BUT such marks (rows 19-20, a
+        # lone ellipsis of the left-hand sequence) keeps its own height,
+        # since there is no content baseline to measure it against. The
+        # voltage-regulator fixture has no cell of this shape at all, so
+        # it cannot be touched.
+        boxes = []
         for cell in row:
             vl = getattr(cell, "visual_layout", None)
             cbb = getattr(vl, "bounding_box", None) if vl else None
             if cbb is not None:
-                y0s.append(cbb.y0)
-                y1s.append(cbb.y1)
-        return (max(y1s) - min(y0s)) if y0s else None
+                boxes.append((cbb, _cell_text(cell).strip()))
+        if not boxes:
+            return None
+        _content_y0s = [b.y0 for b, text in boxes if len(text) > 2]
+        if _content_y0s:
+            _baseline_y0 = min(_content_y0s)
+            boxes = [
+                (b, text) for b, text in boxes
+                if len(text) > 2 or abs(b.y0 - _baseline_y0) <= _ROW_BASELINE_TOLERANCE
+            ]
+        if not boxes:
+            return None
+        return max(b.y1 for b, _ in boxes) - min(b.y0 for b, _ in boxes)
 
     row_heights = [_row_height_fraction(row) for row in grid]
     _valid_rh = [h for h in row_heights if h is not None and h > 0]
