@@ -67,6 +67,12 @@ def run(name, fixture):
     ours = [float(w) * _PT_PER_CM for w in re.findall(r"p\{([0-9.]+)cm\}", spec)]
     m = re.search(r"arraystretch\}\{([0-9.]+)\}", tex)
     print(f"  tabcolsep {tabcolsep:.2f}pt   arraystretch {m.group(1) if m else '?'}")
+    # Every DISTINCT \fontsize in the emitted body: the second argument
+    # is the line box each cell is actually set with, which is what a
+    # row can be compressed to. Reading only the first match hides a
+    # per-cell command that disagrees with the table-level one.
+    _fs = sorted(set(re.findall(r"\\fontsize\{[0-9.]+\}\{[0-9.]+\}", tex)))
+    print(f"  emitted fontsize commands ({len(_fs)}): {' '.join(_fs[:12])}")
     print(f"  table_rule_x0={md.get('table_rule_x0')}  x1={md.get('table_rule_x1')}")
 
     rule_x = md.get("column_rule_x") or []

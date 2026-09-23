@@ -1789,6 +1789,32 @@ def _render_table(table: TableBlock) -> str:
     _baseline_gap_pt = (
         _real_gaps_pt[len(_real_gaps_pt) // 2] if _real_gaps_pt else 0.0
     )
+    # The 1.2 here is LaTeX's default leading, and deriving it from the
+    # table's own smallest printed step instead was tried and lost. Two
+    # things came out of it, both worth keeping written down.
+    #
+    # First, the per-cell \fontsize leading is INERT for row height in
+    # these tables. Emitting one flat leading for every cell (wrong:
+    # \fontsize{6.98}{4.37} sets 6.98pt type in a 4.37pt box) and then
+    # emitting it proportionally per cell (\fontsize{6.98}{5.56},
+    # \fontsize{3.12}{2.49}) produced byte-identical geometry on both
+    # fixtures - height, drift, both overlays, every border count. Row
+    # height comes from \arraystretch and the row's strut; a p{} cell's
+    # baselineskip only shows up on text that WRAPS inside the cell, and
+    # almost nothing in these tables does.
+    #
+    # Second, what actually moved was this line feeding the solve: a
+    # smaller _unstretched_line_pt deepens _compress_floor_pt (-2.15pt ->
+    # -4.35pt on the voltage-regulator fixture), which is the very change
+    # disproved just below. Same mechanism, longer route, same verdict:
+    #
+    #   fixture B  drift +27.1pt -> +17.6pt, official 25.7% -> 24.6%,
+    #              horizontals anchored 3/15 -> 6/15,
+    #              but rule-to-rule +0.5pt -> -9.5pt and fair 23.8% -> 23.9%
+    #   fixture A  rule-to-rule +0.1pt -> -0.5pt, drift -0.7pt -> -1.3pt
+    #
+    # The horizontals improve because the table is 9.5pt SHORT, not
+    # because its rows landed where the source put them. Reverted.
     _unstretched_line_pt = (median_pt or 8.0) * 1.2
     if _baseline_gap_pt > 0 and _unstretched_line_pt > 0:
         dynamic_arraystretch = max(0.5, min(2.0, _baseline_gap_pt / _unstretched_line_pt))
