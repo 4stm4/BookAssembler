@@ -1648,6 +1648,35 @@ def _render_table(table: TableBlock) -> str:
         # nonzero (the no-wrapping branch with real row-gap data) does
         # the -1 correction apply, keeping wrapping tables (whose
         # _extra_ratio_total is always 0) on the untouched formula.
+        # A fourth attempt rebuilt this whole solve and lost; two facts
+        # from it are worth keeping, because both look like fixes and
+        # only one of them is even half true.
+        #
+        # The 0.8 floor really does bind. Every row's deviation was
+        # re-expressed in absolute points (straight from the source's
+        # own gaps, so nothing got rescaled by the solve's own answer),
+        # subtracted from the budget, and emitted as measured. The
+        # voltage-regulator fixture's starvation went away - 95.9pt
+        # granted against 92.3pt of measured need, where eight of its
+        # rows had been getting 0.00 - and with the floor lowered to
+        # 0.5 its stretch immediately took 0.61, exactly the value it
+        # had been computing and unable to say. Its height went from
+        # 27pt short of the source to 3.8pt short.
+        #
+        # And it still measured worse (fair 24.8% -> 27.0%, official
+        # 25.9% -> 26.6%), because subtracting the extras from the
+        # budget double-counts them: \tabularnewline[Xpt] ADDS to the
+        # row height LaTeX already lays out, it does not replace it. The
+        # arithmetic is unambiguous - that fixture's solve hit its
+        # 172.1pt target exactly (76pt of base plus 95.9pt of extras)
+        # while the compiled table came out 213pt, every row ~1.5pt
+        # too tall, 19 times over. Reserving room for extras and then
+        # also paying them is the same 14.5pt-unmodelled problem the
+        # target_height_pt note above describes, scaled up.
+        #
+        # So: the floor is a real constraint, but lifting it only helps
+        # once the extras stop being counted twice. A fifth attempt
+        # starts there, not at the clamp.
         _line_count_units = _total_lines - 1 if _extra_ratio_total > 0 else _total_lines
         unstretched_pt = (
             _line_count_units + _extra_ratio_total + _wrap_extra_units_total
