@@ -280,6 +280,33 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
         # rows in the middle of it touch neither line. So an edge counts
         # only when the line actually runs along it, judged against this
         # cell's own height rather than any table-wide constant.
+        # This reach is known to be wrong and is left alone deliberately.
+        # It scales with the GLYPHS while a rule sits in the gap set by
+        # the LEADING, so it penalises small type: the voltage-regulator
+        # fixture's header cells are 5.09pt tall and the rule above them
+        # is 5.3pt away - rejected by 0.21pt - so that table draws 17
+        # rules where its source draws 20, while the decimal/binary
+        # fixture's 14.28pt cells accept a rule 3.7pt off with room to
+        # spare.
+        #
+        # Using the row's own STEP instead is the right measure (a rule
+        # between two rows borders both; one further than a whole step
+        # belongs to neither, which is what keeps the decimal/binary
+        # fixture's row 2 - nearest rule 19.4pt off against a 14.7pt
+        # step - correctly unruled where any blanket multiple of the
+        # cell height would invent one). Tried, and it does exactly what
+        # it should to the count: 17 rules -> 20, against the source's
+        # 20, with fixture A untouched.
+        #
+        # It is reverted because of what the new flags switch on
+        # downstream: the header gaining border_top makes _has_top_rule
+        # true for that table, which turns on the top vskip and the
+        # rule-air split in the assembler - the pair already measured as
+        # a regression there - and the table went +0.5pt -> +18.0pt
+        # rule-to-rule with its fair overlay 23.7% -> 25.1%. Only about
+        # 6.5pt of that is accounted for (5.3pt of vskip and three more
+        # rules at 0.4pt); the rest is not, and the interaction needs
+        # working out before the reach is corrected.
         above, below = band((box.y0 + box.y1) / 2.0, horizontals)
         reach = max(box.y1 - box.y0, _BORDER_MATCH_FLOOR)
         cell.border_top = above is not None and (box.y0 - above) <= reach
