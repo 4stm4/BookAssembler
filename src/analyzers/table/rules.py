@@ -304,15 +304,27 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
         # rule-air split in the assembler, and the table went +0.5pt ->
         # +18.0pt rule-to-rule with its fair overlay 23.7% -> 25.1%.
         #
-        # The two were then measured apart, which clears one of them:
-        # with the reach fix in and the rule-air split switched off, the
-        # table is STILL +18.0pt and still draws its 20 rules, so none
-        # of the height is the split's - it costs 0.44pp of that
-        # fixture's fair overlay (25.05% -> 24.61%) and nothing else.
-        # The 18pt belongs to the reach change itself, and only ~6.5pt
-        # of it is accounted for (5.3pt of vskip plus three more rules
-        # at 0.4pt each). That remainder is what has to be understood
-        # before the reach is corrected.
+        # Both halves have since been measured apart, and the "+18pt"
+        # turns out to be mostly an artefact of the comparison.
+        #
+        # The rule-air split is height-neutral by construction and the
+        # emitted table proves it: ten splits totalling 23.45pt appear
+        # as vskips under rules and the same amounts vanish from the
+        # rows' own extras (row 6: +15.83 -> +10.50 beside a 5.33
+        # vskip). With the split switched off the table is still +18pt.
+        # It costs 0.44pp of that fixture's fair overlay and no height.
+        #
+        # The real growth is 6.5pt - the 5.33pt vskip under the new top
+        # rule plus three more rules at 0.4pt. The other 11.5pt is the
+        # SPAN changing what it covers: the bottom rule moves down 6.5pt
+        # but the top rule moves UP 11.1pt, because there is now a rule
+        # above the header and the span measures from it.
+        #
+        # What is actually left wrong is the header band: 16.6pt between
+        # our first two rules against the source's 12.4pt, the same
+        # defect fixed on fixture A by splitting the row's extra around
+        # its rule. Correcting the reach is gated on that, not on the
+        # phantom 11.5pt.
         above, below = band((box.y0 + box.y1) / 2.0, horizontals)
         reach = max(box.y1 - box.y0, _BORDER_MATCH_FLOOR)
         cell.border_top = above is not None and (box.y0 - above) <= reach
