@@ -64,6 +64,30 @@ def horizontal_rules(pdf_path, page_index, rect, zoom=4.0, density=0.5):
     return [wide.y0 + r / zoom for r in out]
 
 
+def ink_band(pdf_path, page_index, x0, x1, y0, y1, zoom=4.0):
+    """First and last inked y inside the box, in points, or None.
+
+    Used on the band BETWEEN two rules, so it answers where that row's
+    text actually sits in it - how much air the row leaves above its
+    glyphs and how much below. Deriving that from a font size and a
+    bbox instead gets it wrong on a scan, where the OCR box and the ink
+    routinely disagree.
+    """
+    d = fitz.open(str(pdf_path))
+    p = d[page_index]
+    pix = p.get_pixmap(clip=fitz.Rect(x0, y0, x1, y1), matrix=fitz.Matrix(zoom, zoom))
+    d.close()
+    arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+    grey = (
+        (arr[:, :, 0].astype(np.int32) + arr[:, :, 1] + arr[:, :, 2]) // 3
+        if pix.n >= 3 else arr[:, :, 0].astype(np.int32)
+    )
+    rows = np.where((grey < _INK).any(axis=1))[0]
+    if not len(rows):
+        return None
+    return (y0 + rows[0] / zoom, y0 + rows[-1] / zoom)
+
+
 def run(name, fixture):
     print("=" * 66)
     print(name)
@@ -99,6 +123,33 @@ def run(name, fixture):
         out_rect = _output_table_rect(fitz, Path(pdf), 1, texts)
         s_rules = horizontal_rules(fixture, 0, src_rect)
         o_rules = horizontal_rules(Path(pdf), 1, out_rect)
+        # Where the first row's ink sits between the first two rules.
+        # The 1pt inset keeps the rules themselves out of the band.
+        s_band = (
+            ink_band(fixture, 0, src_rect.x0, src_rect.x1,
+                     s_rules[0] + 1.0, s_rules[1] - 1.0)
+            if len(s_rules) >= 2 else None
+        )
+        o_band = (
+            ink_band(Path(pdf), 1, out_rect.x0, out_rect.x1,
+                     o_rules[0] + 1.0, o_rules[1] - 1.0)
+            if len(o_rules) >= 2 else None
+        )
+        # The same for the LAST band. _top_air_pt and _bottom_air_pt are
+        # both measured from the cells' bbox, which on a scan is the OCR
+        # box and not the ink: if the top air is overstated that way, the
+        # bottom one is too, and shrinking only the top would leave the
+        # table short.
+        s_last = (
+            ink_band(fixture, 0, src_rect.x0, src_rect.x1,
+                     s_rules[-2] + 1.0, s_rules[-1] - 1.0)
+            if len(s_rules) >= 2 else None
+        )
+        o_last = (
+            ink_band(Path(pdf), 1, out_rect.x0, out_rect.x1,
+                     o_rules[-2] + 1.0, o_rules[-1] - 1.0)
+            if len(o_rules) >= 2 else None
+        )
 
     # The rects each side is measured in, and every rule found in them.
     # horizontal_rules() scans a band padded by 30pt, so it can catch a
@@ -123,6 +174,23 @@ def run(name, fixture):
     if o_rules:
         print("  rebuild rules, relative to the first: "
               + " ".join(f"{r - o_rules[0]:.1f}" for r in o_rules))
+
+    # The first row's band, measured not derived: rule -> ink -> rule on
+    # each side. A header separator that sits too low is either air above
+    # the text (the vskip) or air below it (the row's own descent), and
+    # only this tells them apart.
+    if s_band and len(s_rules) >= 2:
+        print(f"  source  header band: rule {s_rules[0]:.1f} | ink "
+              f"{s_band[0]:.1f}..{s_band[1]:.1f} | rule {s_rules[1]:.1f}   "
+              f"above {s_band[0] - s_rules[0]:.1f}pt  "
+              f"ink {s_band[1] - s_band[0]:.1f}pt  "
+              f"below {s_rules[1] - s_band[1]:.1f}pt")
+    if o_band and len(o_rules) >= 2:
+        print(f"  rebuild header band: rule {o_rules[0]:.1f} | ink "
+              f"{o_band[0]:.1f}..{o_band[1]:.1f} | rule {o_rules[1]:.1f}   "
+              f"above {o_band[0] - o_rules[0]:.1f}pt  "
+              f"ink {o_band[1] - o_band[0]:.1f}pt  "
+              f"below {o_rules[1] - o_band[1]:.1f}pt")
 
     if len(s_rules) >= 2 and len(o_rules) >= 2:
         s_h = s_rules[-1] - s_rules[0]
