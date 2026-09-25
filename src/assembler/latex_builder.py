@@ -1975,8 +1975,38 @@ def _render_table(table: TableBlock) -> str:
         _row_extra_pt = raw_extra_pt[i] * _extra_scale if i < len(raw_extra_pt) else 0.0
         if i == len(rendered_rows) - 1:
             _row_extra_pt += _bottom_air_pt
+        # A rule under a row splits that row's extra space, it does not
+        # sit under all of it. Measured on the decimal/binary fixture:
+        # the source puts its header separator 18.2pt below the header
+        # text and the next row's text 22.4pt below, so 4.2pt of that
+        # step falls UNDER the rule. Emitting the whole extra before the
+        # \hline put our rule 23.2pt below the header text with the next
+        # row's text 22.7pt below it - the rule landing on the text
+        # instead of above it, and the separator 4.1pt lower than the
+        # source's.
+        #
+        # The amount is the same measured rule-to-text clearance the top
+        # of the table already uses, and it is TAKEN FROM the row's own
+        # extra rather than added, so the table's height does not move.
+        _rule_air_pt = 0.0
+        # Gated on _has_top_rule exactly as the vskip under the top rule
+        # is. Without that gate the voltage-regulator fixture picks up
+        # 5.3pt of air under every internal rule from a bb that excludes
+        # its header - the header sits ABOVE its first rule there - and
+        # pays for it: fair 23.8% -> 24.0%, matching horizontals 3/15 ->
+        # 2/15, rule-to-rule +0.5pt -> +2.8pt.
+        if (
+            rule
+            and _has_top_rule
+            and i < len(rendered_rows) - 1
+            and _top_air_pt > 0.1
+        ):
+            _rule_air_pt = min(_top_air_pt, max(0.0, _row_extra_pt))
+            _row_extra_pt -= _rule_air_pt
         if abs(_row_extra_pt) > 0.01:
             extra = f"[{_row_extra_pt:.2f}pt]"
+        if _rule_air_pt > 0.01:
+            rule = rule + f"\\noalign{{\\vskip {_rule_air_pt:.2f}pt}}"
         # \tabularnewline, not bare "\\ " - a row ending in a p{} column
         # (every column can be p{} now that narrow columns get a measured
         # width too) can make a plain "\\" behave like the paragraph-
