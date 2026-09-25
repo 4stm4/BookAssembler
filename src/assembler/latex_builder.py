@@ -1999,6 +1999,14 @@ def _render_table(table: TableBlock) -> str:
         # of the table already uses, and it is TAKEN FROM the row's own
         # extra rather than added, so the table's height does not move.
         _rule_air_pt = 0.0
+        # What this buys and costs, measured by switching it off with
+        # everything else held still: fixture A's header separator sits
+        # at 22.8pt under the top rule with it and 26.0pt without (the
+        # source prints 21.9pt), its horizontals 2/2 against 1/2 - and
+        # its fair overlay is 15.81% with it against 15.73% without. The
+        # border match costs 0.08pp of pixels, and is kept because the
+        # geometry is what the pixels are a proxy for.
+        #
         # Gated on _has_top_rule exactly as the vskip under the top rule
         # is. Without that gate the voltage-regulator fixture picks up
         # 5.3pt of air under every internal rule from a bb that excludes
