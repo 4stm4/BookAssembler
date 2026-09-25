@@ -1902,16 +1902,29 @@ def _render_table(table: TableBlock) -> str:
     # horizontal went 23px -> 13px with its median 11px -> 6px.
     #
     # And the table came out 12.1pt SHORT (rule-to-rule +0.1pt ->
-    # -12.1pt, fair 15.8% -> 16.1%), which is the finding worth keeping:
-    # those 11pt of bogus bottom air are holding the table up. This
-    # fixture's rows are collectively ~12pt shorter than the source's,
-    # and the bb error has been filling the gap. The airs cannot be
-    # corrected until the rows are - fixing the measurement alone just
-    # moves the error from the padding into the height.
+    # -12.1pt, fair 15.8% -> 16.1%).
+    #
+    # The reason is that the ink measurement was itself wrong at the
+    # bottom, on BOTH sides: a rule's anti-aliased fringe covers 30-40%
+    # of the band, survives a "drop rows covering over half the width"
+    # filter, and reads as ink hard against the rule. Measured instead
+    # on the text layer, which has no fringe, this bb-derived air is
+    # very nearly right:
+    #
+    #   source   top rule -> first line 3.7pt, last line -> rule 25.4pt
+    #   rebuild  top rule -> first line 2.8pt, last line -> rule 26.8pt
+    #
+    # and the two tables' text spans agree to 0.2pt (335.7 against
+    # 335.5). So this fixture's rows are NOT short; its outer geometry
+    # is right to within 1.4pt, and the one real defect left in it is
+    # the internal separator under the header, 4.1pt low. Do not
+    # "correct" these airs from pixels again without checking the text
+    # layer first.
     #
     # The voltage-regulator fixture was untouched throughout (23.8% fair,
-    # 25.7% official, 3/15 horizontals, +0.2pt), so this is A's problem
-    # alone.
+    # 25.7% official, 3/15 horizontals, +0.2pt). Its own defect is a
+    # different one and this measurement names it: the source prints 28
+    # text lines inside 167.0pt where we print 21 inside 193.1pt.
     _rule_y0 = _table_md.get("table_rule_y0")
     _rule_y1 = _table_md.get("table_rule_y1")
     _top_air_pt = (

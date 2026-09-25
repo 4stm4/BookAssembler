@@ -67,6 +67,25 @@ def run(name, fixture):
         pdf = compile_xelatex("t.tex", td)
         lines = baselines(Path(pdf), 1)
 
+    # The SOURCE's own text lines, from its OCR layer. Pixel probes
+    # cannot settle where the last line sits relative to the bottom
+    # rule: a rule's anti-aliased fringe covers 30-40% of the band and
+    # survives a "drop rows covering over half the width" filter, so it
+    # reads as ink right up against the rule. Text lines have no fringe.
+    bb = table.visual_layout.bounding_box
+    _PH = 841.89
+    y_lo, y_hi = bb.y0 * _PH - 6.0, bb.y1 * _PH + 6.0
+    src_lines = [l for l in baselines(fixture, 0) if y_lo <= l[0] <= y_hi]
+    tab_lines = [l for l in lines if l[0] > 40.0]  # drop the page folio
+    if src_lines and tab_lines:
+        print(f"  SOURCE table lines: {len(src_lines)}  "
+              f"first {src_lines[0][0]:.1f}  last {src_lines[-1][0]:.1f}  "
+              f"span {src_lines[-1][0] - src_lines[0][0]:.1f}pt")
+        print(f"  REBUILD table lines: {len(tab_lines)}  "
+              f"first {tab_lines[0][0]:.1f}  last {tab_lines[-1][0]:.1f}  "
+              f"span {tab_lines[-1][0] - tab_lines[0][0]:.1f}pt")
+        print("   source first: " + " ".join(t for _, t in src_lines[0][3])[:40])
+        print("   source last:  " + " ".join(t for _, t in src_lines[-1][3])[:40])
     print(f"  grid rows: {len(table.grid)}   rendered baselines: {len(lines)}")
     print("  line      y   step   x0     x1     cells")
     prev_y = None
