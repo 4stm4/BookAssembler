@@ -80,6 +80,10 @@ def run(name, fixture):
     _vsk = re.findall(r"\\noalign\{\\vskip ([0-9.]+)pt\}", tex)
     print(f"  emitted \\noalign vskip: {_vsk if _vsk else 'none'}")
     print(f"  table_rule_x0={md.get('table_rule_x0')}  x1={md.get('table_rule_x1')}")
+    _ph = 841.89
+    for _k in ("table_rule_y0", "table_rule_y1"):
+        _v = md.get(_k)
+        print(f"  {_k} = {_v}" + (f"  ({_v * _ph:.1f}pt)" if _v else ""))
 
     rule_x = md.get("column_rule_x") or []
     left = md.get("table_rule_x0")

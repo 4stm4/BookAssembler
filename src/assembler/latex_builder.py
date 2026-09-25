@@ -1888,6 +1888,30 @@ def _render_table(table: TableBlock) -> str:
     # Appended here rather than beside the \hline itself because the
     # page-height constant is only bound further down.
     _page_h_pt = _A4_FULL_HEIGHT_CM * 28.3465
+    # These come from bb, an OCR box that on a scan sits INSIDE the ink
+    # it covers, and measuring them from the ink instead was tried and
+    # lost - not because the measurement is wrong, but because the error
+    # is load-bearing.
+    #
+    # The measurement was verified two ways on the decimal/binary
+    # fixture, by a rule-detection pass at 3x zoom and an independent
+    # band probe at 4x: its top air is 1.4pt against the 3.3pt bb gives,
+    # and its bottom air 0.8pt against bb's 11.0pt. Feeding those in put
+    # the header separator at 24.0pt under the top rule where bb put it
+    # at 26.0 and the source prints 21.9, and the border mask's worst
+    # horizontal went 23px -> 13px with its median 11px -> 6px.
+    #
+    # And the table came out 12.1pt SHORT (rule-to-rule +0.1pt ->
+    # -12.1pt, fair 15.8% -> 16.1%), which is the finding worth keeping:
+    # those 11pt of bogus bottom air are holding the table up. This
+    # fixture's rows are collectively ~12pt shorter than the source's,
+    # and the bb error has been filling the gap. The airs cannot be
+    # corrected until the rows are - fixing the measurement alone just
+    # moves the error from the padding into the height.
+    #
+    # The voltage-regulator fixture was untouched throughout (23.8% fair,
+    # 25.7% official, 3/15 horizontals, +0.2pt), so this is A's problem
+    # alone.
     _rule_y0 = _table_md.get("table_rule_y0")
     _rule_y1 = _table_md.get("table_rule_y1")
     _top_air_pt = (
