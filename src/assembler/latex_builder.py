@@ -1074,12 +1074,22 @@ def _render_table(table: TableBlock) -> str:
                     return min(estimate, real + _CONTENT_FLOOR_MARGIN_CM)
                 return estimate
 
+            # A column's advance is p{} + 2*tabcolsep + the RULE beside
+            # it: LaTeX adds \arrayrulewidth (0.4pt by default, never set
+            # here) for every "|" in the spec, and nothing above accounts
+            # for it. The fractions come from rule centres, so the rules'
+            # own width lands on top of the span they describe and the
+            # error accumulates left to right - measured on the
+            # decimal/binary fixture, its four verticals sat +0.7, +0.9,
+            # +1.5 and +2.1pt out against the source's, about half a
+            # point per column, with 5 rules x 0.4pt = 2.0pt of it.
+            _ARRAYRULE_CM = 0.4 / 28.3465
             col_width_cm = [
                 max(
                     _content_floor_cm(i),
-                    f * _A4_FULL_WIDTH_CM - 2 * _TABCOLSEP_CM,
+                    f * _A4_FULL_WIDTH_CM - 2 * _TABCOLSEP_CM - _ARRAYRULE_CM,
                 ) if not is_wide[i] else
-                max(2.2, f * _A4_FULL_WIDTH_CM - 2 * _TABCOLSEP_CM)
+                max(2.2, f * _A4_FULL_WIDTH_CM - 2 * _TABCOLSEP_CM - _ARRAYRULE_CM)
                 for i, f in enumerate(fractions)
             ]
             if col_x0_sum is not None and col_x1_sum is not None and col_count is not None:
