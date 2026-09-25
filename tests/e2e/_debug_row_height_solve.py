@@ -82,7 +82,13 @@ def ink_band(pdf_path, page_index, x0, x1, y0, y1, zoom=4.0):
         (arr[:, :, 0].astype(np.int32) + arr[:, :, 1] + arr[:, :, 2]) // 3
         if pix.n >= 3 else arr[:, :, 0].astype(np.int32)
     )
-    rows = np.where((grey < _INK).any(axis=1))[0]
+    ink = grey < _INK
+    # A rule crosses the whole band; a glyph never does. Dropping those
+    # rows lets the band be taken rule-to-rule with NO inset, which
+    # matters: an inset of 1pt put a 1.0pt floor under every "air"
+    # figure this reports, and almost every one of them came back as
+    # exactly 1.0pt - the floor, not a measurement.
+    rows = np.where(ink.any(axis=1) & (ink.mean(axis=1) <= 0.5))[0]
     if not len(rows):
         return None
     return (y0 + rows[0] / zoom, y0 + rows[-1] / zoom)
@@ -124,15 +130,14 @@ def run(name, fixture):
         s_rules = horizontal_rules(fixture, 0, src_rect)
         o_rules = horizontal_rules(Path(pdf), 1, out_rect)
         # Where the first row's ink sits between the first two rules.
-        # The 1pt inset keeps the rules themselves out of the band.
         s_band = (
             ink_band(fixture, 0, src_rect.x0, src_rect.x1,
-                     s_rules[0] + 1.0, s_rules[1] - 1.0)
+                     s_rules[0], s_rules[1])
             if len(s_rules) >= 2 else None
         )
         o_band = (
             ink_band(Path(pdf), 1, out_rect.x0, out_rect.x1,
-                     o_rules[0] + 1.0, o_rules[1] - 1.0)
+                     o_rules[0], o_rules[1])
             if len(o_rules) >= 2 else None
         )
         # The same for the LAST band. _top_air_pt and _bottom_air_pt are
@@ -142,12 +147,12 @@ def run(name, fixture):
         # table short.
         s_last = (
             ink_band(fixture, 0, src_rect.x0, src_rect.x1,
-                     s_rules[-2] + 1.0, s_rules[-1] - 1.0)
+                     s_rules[-2], s_rules[-1])
             if len(s_rules) >= 2 else None
         )
         o_last = (
             ink_band(Path(pdf), 1, out_rect.x0, out_rect.x1,
-                     o_rules[-2] + 1.0, o_rules[-1] - 1.0)
+                     o_rules[-2], o_rules[-1])
             if len(o_rules) >= 2 else None
         )
 
@@ -191,6 +196,22 @@ def run(name, fixture):
               f"above {o_band[0] - o_rules[0]:.1f}pt  "
               f"ink {o_band[1] - o_band[0]:.1f}pt  "
               f"below {o_rules[1] - o_band[1]:.1f}pt")
+
+    # The last band, same reading. The air under the final row's ink is
+    # what _bottom_air_pt is trying to reproduce, and it comes from the
+    # same bbox that overstated the top.
+    if s_last and len(s_rules) >= 2:
+        print(f"  source  last band:   rule {s_rules[-2]:.1f} | ink "
+              f"{s_last[0]:.1f}..{s_last[1]:.1f} | rule {s_rules[-1]:.1f}   "
+              f"above {s_last[0] - s_rules[-2]:.1f}pt  "
+              f"ink {s_last[1] - s_last[0]:.1f}pt  "
+              f"below {s_rules[-1] - s_last[1]:.1f}pt")
+    if o_last and len(o_rules) >= 2:
+        print(f"  rebuild last band:   rule {o_rules[-2]:.1f} | ink "
+              f"{o_last[0]:.1f}..{o_last[1]:.1f} | rule {o_rules[-1]:.1f}   "
+              f"above {o_last[0] - o_rules[-2]:.1f}pt  "
+              f"ink {o_last[1] - o_last[0]:.1f}pt  "
+              f"below {o_rules[-1] - o_last[1]:.1f}pt")
 
     if len(s_rules) >= 2 and len(o_rules) >= 2:
         s_h = s_rules[-1] - s_rules[0]
