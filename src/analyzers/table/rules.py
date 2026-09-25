@@ -301,12 +301,18 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
         # It is reverted because of what the new flags switch on
         # downstream: the header gaining border_top makes _has_top_rule
         # true for that table, which turns on the top vskip and the
-        # rule-air split in the assembler - the pair already measured as
-        # a regression there - and the table went +0.5pt -> +18.0pt
-        # rule-to-rule with its fair overlay 23.7% -> 25.1%. Only about
-        # 6.5pt of that is accounted for (5.3pt of vskip and three more
-        # rules at 0.4pt); the rest is not, and the interaction needs
-        # working out before the reach is corrected.
+        # rule-air split in the assembler, and the table went +0.5pt ->
+        # +18.0pt rule-to-rule with its fair overlay 23.7% -> 25.1%.
+        #
+        # The two were then measured apart, which clears one of them:
+        # with the reach fix in and the rule-air split switched off, the
+        # table is STILL +18.0pt and still draws its 20 rules, so none
+        # of the height is the split's - it costs 0.44pp of that
+        # fixture's fair overlay (25.05% -> 24.61%) and nothing else.
+        # The 18pt belongs to the reach change itself, and only ~6.5pt
+        # of it is accounted for (5.3pt of vskip plus three more rules
+        # at 0.4pt each). That remainder is what has to be understood
+        # before the reach is corrected.
         above, below = band((box.y0 + box.y1) / 2.0, horizontals)
         reach = max(box.y1 - box.y0, _BORDER_MATCH_FLOOR)
         cell.border_top = above is not None and (box.y0 - above) <= reach
