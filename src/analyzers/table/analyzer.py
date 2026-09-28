@@ -578,6 +578,13 @@ class TableDetectorAnalyzer(BaseAnalyzer):
             merged_grid: List[List[TableCell]] = list(base.grid)
             boxes = [c.visual_layout.bounding_box for r in merged_grid for c in r if c.visual_layout]
             consumed: List[int] = []
+            # A short line only counts as a stray row when another table
+            # fragment follows it: held here until one does, dropped if the
+            # run ends first. Absorbing it on sight turned any short line
+            # AFTER a table - the next section's heading, a source note -
+            # into a table row.
+            pending_rows: List[List[TableCell]] = []
+            pending_idx: List[int] = []
             j = i + 1
             while j < len(children):
                 nxt = children[j]
@@ -585,6 +592,9 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                     j += 1
                     continue
                 if isinstance(nxt, TableBlock):
+                    merged_grid.extend(pending_rows)
+                    consumed.extend(pending_idx)
+                    pending_rows, pending_idx = [], []
                     merged_grid.extend(nxt.grid)
                     if nxt.visual_layout:
                         boxes.append(nxt.visual_layout.bounding_box)
@@ -597,12 +607,10 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                     and len(next_text) <= MAX_CELL_TEXT_LEN // 2
                     and not _CAPTION_RE.match(next_text.strip())
                 ):
-                    extra_rows = _rows_from_block(nxt)
-                    if extra_rows:
-                        merged_grid.extend(extra_rows)
-                        consumed.append(j)
-                        j += 1
-                        continue
+                    pending_rows.extend(_rows_from_block(nxt))
+                    pending_idx.append(j)
+                    j += 1
+                    continue
                 break
             if not consumed:
                 i += 1
