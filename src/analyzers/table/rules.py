@@ -877,18 +877,43 @@ def _merge_stray_rows(
     # (it recognizes a drawn rule line like "───", not a single glyph),
     # so it does not fire for "•" alone - a direct length check is what
     # actually distinguishes a placeholder mark from a real word here.
+    #
+    # A row within the threshold of BOTH neighbours joins the nearer one
+    # (the previous on a tie). Folding always into the previous row put a
+    # mark printed just above its own row onto the row before it.
     merged: List[List[Tuple[str, Optional[NormalizedRect], Optional[Any]]]] = []
     merged_y0s: List[float] = []
-    for row, y0 in zip(grouped, y0s):
-        is_lone_label = (
-            len(row) == 1 and len(merged[-1] if merged else []) > 1
-            and len(row[0][0].strip()) > 2
+    carry: List[Tuple[str, Optional[NormalizedRect], Optional[Any]]] = []
+    for k, (own, y0) in enumerate(zip(grouped, y0s)):
+        row = carry + own
+        carry = []
+
+        def is_lone_label(other: List[Any]) -> bool:
+            return len(row) == 1 and len(other) > 1 and len(row[0][0].strip()) > 2
+
+        prev_gap = (y0 - merged_y0s[-1]) if merged else None
+        next_gap = (y0s[k + 1] - y0) if k + 1 < len(y0s) else None
+        to_prev = (
+            prev_gap is not None and prev_gap < threshold and not is_lone_label(merged[-1])
         )
-        if merged and (y0 - merged_y0s[-1]) < threshold and not is_lone_label:
+        # Only a smaller row moves forward into a fuller one: two rows within
+        # the threshold of each other are a stray and its real row, and it is
+        # the stray that joins. Without this a full data row printed just
+        # above a lone mark was pulled forward into the mark.
+        to_next = (
+            next_gap is not None and next_gap < threshold
+            and len(own) < len(grouped[k + 1])
+            and not is_lone_label(grouped[k + 1])
+        )
+        if to_prev and to_next:
+            to_prev, to_next = (prev_gap <= next_gap), (next_gap < prev_gap)
+        if to_prev:
             merged[-1] = merged[-1] + row
-            continue
-        merged.append(row)
-        merged_y0s.append(y0)
+        elif to_next:
+            carry = row
+        else:
+            merged.append(row)
+            merged_y0s.append(y0)
     return merged
 
 
