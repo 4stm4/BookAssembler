@@ -97,7 +97,7 @@ def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]
     # Current") than to its real, now-relocated target. Locking in every
     # decision from the untouched grid first removes that ordering
     # dependency entirely.
-    decisions: List[Tuple[int, int]] = []
+    decisions: List[Tuple[int, int, "TableCell"]] = []
     for i, row in enumerate(grid):
         if len(row) != 1:
             continue
@@ -181,15 +181,23 @@ def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]
         ):
             continue
 
-        decisions.append((i, nearest))
+        decisions.append((i, nearest, target_cell))
 
     # Pass 2: apply the merges (content + bbox widening) using pass 1's
     # decisions - now safe to mutate as we go, since nothing downstream
     # re-measures distance against a row whose bbox this loop changes.
+    #
+    # Order matters when several orphans join one cell from the same side.
+    # Each orphan ABOVE its target is prepended, so they are applied
+    # nearest-first (descending i) - applied in ascending order, lines A
+    # then B above row T read "B A T". Orphans BELOW are appended, so
+    # ascending order keeps them in print order. The target cell is the
+    # one chosen in pass 1: re-choosing it here would measure against
+    # boxes this loop has already widened.
     orphan_indices = set()
-    for i, nearest in decisions:
+    ordered = sorted(decisions, key=lambda d: -d[0] if d[1] > d[0] else d[0])
+    for i, nearest, target_cell in ordered:
         orphan_cell = grid[i][0]
-        target_cell = _target_cell(nearest, orphan_cell)
         if nearest > i:
             target_cell.content = list(orphan_cell.content) + list(target_cell.content)
         else:
