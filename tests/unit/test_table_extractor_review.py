@@ -66,3 +66,17 @@ class TestFindTableRuns:
         runs = _find_table_runs(blocks)
         assert len(runs) == 1
         assert [g[0][0] for g in runs[0]] == [1, 2, 3]
+
+    def test_group_just_under_its_row_joins_the_run(self):
+        from src.analyzers.table.rules import _find_table_runs
+        blocks = [
+            (0, _para("0 0", y0=0.10)),
+            (1, _para("1 2", y0=0.12)),
+            (2, _para("note", y0=0.124, x0=0.2)),  # 0.004 under row 1
+            (3, _para("2 4", y0=0.14)),
+            (4, _para("3 6", y0=0.16)),
+        ]
+        runs = _find_table_runs(blocks)
+        assert len(runs) == 1
+        in_run = sorted(idx for group in runs[0] for idx, _ in group)
+        assert in_run == [0, 1, 2, 3, 4]
