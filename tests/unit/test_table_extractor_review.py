@@ -183,3 +183,14 @@ class TestMarkCellBorders:
         )
         _mark_cell_borders(np, pymupdf, page, table)
         assert len((table.metadata or {}).get("column_rule_x", [])) == 1
+
+
+class TestSplitNumericPair:
+    def test_second_token_starts_after_the_gap(self):
+        from src.analyzers.table.rules import _split_numeric_pair
+        box = NormalizedRect(x0=0.0, y0=0.5, x1=0.11, y1=0.51)  # 11 characters
+        parts = _split_numeric_pair("63 00111111", box, None)
+        assert [t for t, _, _ in parts] == ["63", "00111111"]
+        assert abs(parts[1][1].x0 - 0.03) < 1e-9  # after "63 "
+        assert abs(parts[0][1].x1 - 0.02) < 1e-9
+        assert abs(parts[1][1].x1 - 0.11) < 1e-9

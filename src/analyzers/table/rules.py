@@ -565,18 +565,23 @@ def _split_numeric_pair(
         return [(text, bbox, style)]
     if bbox is None:
         return [(text, bbox, style)]
-    total_chars = sum(len(t) for t in tokens)
-    if total_chars == 0:
-        return [(text, bbox, style)]
-    width = bbox.x1 - bbox.x0
+    # Each token is placed by its own character positions in the line,
+    # spaces included - in a fixed-width face every character, the gap
+    # between the numbers too, takes the same width. Sharing the width by
+    # the tokens' digits alone gave the gap to the first token: in
+    # "63 00111111" the binary value started at 20% of the width instead
+    # of 27%, far enough to bin it under the Decimal heading.
+    char_w = (bbox.x1 - bbox.x0) / max(1, len(text))
     parts: List[Tuple[str, Optional[NormalizedRect], Optional[Any]]] = []
-    x = bbox.x0
-    for i, tok in enumerate(tokens):
-        share = len(tok) / total_chars
-        tok_width = width * share
-        x1 = bbox.x1 if i == len(tokens) - 1 else min(bbox.x1, x + tok_width)
-        parts.append((tok, NormalizedRect(x0=x, y0=bbox.y0, x1=x1, y1=bbox.y1), style))
-        x = x1
+    for match in re.finditer(r"\S+", text):
+        parts.append((
+            match.group(),
+            NormalizedRect(
+                x0=bbox.x0 + match.start() * char_w, y0=bbox.y0,
+                x1=bbox.x0 + match.end() * char_w, y1=bbox.y1,
+            ),
+            style,
+        ))
     return parts
 
 
