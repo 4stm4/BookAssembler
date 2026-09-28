@@ -55,3 +55,14 @@ class TestMergeAdjacentTables:
         TableDetectorAnalyzer()._merge_adjacent_tables(c)
         assert stray.is_tombstoned and second.is_tombstoned
         assert first.row_count == 4
+
+
+class TestFindTableRuns:
+    def test_first_row_after_a_heading_is_kept(self):
+        from src.analyzers.table.rules import _find_table_runs
+        blocks = [(0, _para("Heading", y0=0.10))] + [
+            (i + 1, _para(f"{i} {i * 2}", y0=0.15 + 0.02 * i)) for i in range(3)
+        ]
+        runs = _find_table_runs(blocks)
+        assert len(runs) == 1
+        assert [g[0][0] for g in runs[0]] == [1, 2, 3]

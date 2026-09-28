@@ -428,11 +428,18 @@ def _find_table_runs(
             current_run.append(groups[i])
         elif abs(step - current_step) < Y_STEP_TOLERANCE:
             current_run.append(groups[i])
-        else:
-            if len(current_run) >= MIN_TABLE_ROWS:
-                runs.append(current_run)
+        elif len(current_run) >= MIN_TABLE_ROWS:
+            runs.append(current_run)
             current_run = [groups[i]]
             current_step = None
+        else:
+            # The run so far was too short to be a table, but its last row
+            # and this one already share the new step - that pair is where
+            # a table following a heading actually starts. Restarting at
+            # groups[i] alone dropped the table's first row, and made a
+            # three-row table after a heading undetectable.
+            current_run = [groups[i - 1], groups[i]]
+            current_step = step
 
     if len(current_run) >= MIN_TABLE_ROWS:
         runs.append(current_run)
