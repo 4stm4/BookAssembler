@@ -113,3 +113,19 @@ class TestRowsFromBlock:
             for p in cell.content for il in p.inlines for s in il.spans
         )
         assert "Tj" in texts and "-25C" in texts
+
+
+class TestMergeOrphanRows:
+    def test_two_lines_above_a_row_keep_print_order(self):
+        from src.analyzers.table.analyzer import _cell_text, _merge_orphan_rows
+        grid = [
+            [_cell("Label", x0=0.10, y0=0.40), _cell("1", x0=0.30, y0=0.40)],
+            [_cell("A", x0=0.20, y0=0.486)],
+            [_cell("B", x0=0.20, y0=0.493)],
+            [_cell("Row", x0=0.10, y0=0.50), _cell("T", x0=0.20, y0=0.50),
+             _cell("2", x0=0.30, y0=0.50)],
+        ]
+        out = _merge_orphan_rows(grid)
+        assert len(out) == 2
+        merged = [c for c in out[1] if "T" in _cell_text(c)][0]
+        assert _cell_text(merged).split() == ["A", "B", "T"]
