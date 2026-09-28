@@ -146,3 +146,40 @@ class TestMergeOrphanRows:
         assert len(out) == 2
         merged = [c for c in out[1] if "T" in _cell_text(c)][0]
         assert _cell_text(merged).split() == ["A", "B", "T"]
+
+
+class TestMarkCellBorders:
+    def test_short_table_keeps_its_column_rules(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _mark_cell_borders
+
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        x0, x1, y0, y1 = 200.0, 400.0, 300.0, 340.0  # 40pt tall
+        for x in (x0, 300.0, x1):
+            page.draw_line((x, y0), (x, y1), width=1)
+        for y in (y0, y1):
+            page.draw_line((x0, y), (x1, y), width=1)
+        pw, ph = page.rect.width, page.rect.height
+
+        def cell(cx0, cx1):
+            return TableCell(
+                content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text="x")])])],
+                visual_layout=VisualLayout(
+                    bounding_box=NormalizedRect(
+                        x0=cx0 / pw, y0=(y0 + 5) / ph, x1=cx1 / pw, y1=(y1 - 5) / ph),
+                    page_or_screen_index=0,
+                ),
+            )
+
+        table = TableBlock(
+            grid=[[cell(x0 + 5, 295), cell(305, x1 - 5)]], row_count=1, column_count=2,
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=(x0 + 5) / pw, y0=(y0 + 5) / ph,
+                                            x1=(x1 - 5) / pw, y1=(y1 - 5) / ph),
+                page_or_screen_index=0,
+            ),
+        )
+        _mark_cell_borders(np, pymupdf, page, table)
+        assert len((table.metadata or {}).get("column_rule_x", [])) == 1
