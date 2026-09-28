@@ -421,6 +421,13 @@ def _find_table_runs(
         step = gy0(groups[i]) - gy0(groups[i - 1])
 
         if step < 0.005:
+            # The same visual row at a slightly different baseline - closer
+            # than a row step, but past _ROW_GROUP_TOLERANCE, so it arrives
+            # as its own group. Fold it into the row it belongs to. A bare
+            # `continue` left it out of the run altogether: never part of
+            # the table, never tombstoned, it stayed behind as a stray
+            # paragraph next to the table it belonged in.
+            current_run[-1] = current_run[-1] + groups[i]
             continue
 
         if current_step is None:
