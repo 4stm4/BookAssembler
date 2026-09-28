@@ -620,6 +620,23 @@ def _nearest_bin(x0: float, bins: List[float]) -> int:
     return min(range(len(bins)), key=lambda i: abs(bins[i] - x0))
 
 
+def _join_fragments(
+    a: Tuple[str, Optional[NormalizedRect], Optional[Any]],
+    b: Tuple[str, Optional[NormalizedRect], Optional[Any]],
+) -> Tuple[str, Optional[NormalizedRect], Optional[Any]]:
+    """One (text, bbox, style) fragment from two that share a cell, in x order."""
+    first, second = sorted((a, b), key=lambda f: f[1].x0 if f[1] is not None else 0.0)
+    box_a, box_b = first[1], second[1]
+    if box_a is not None and box_b is not None:
+        box = NormalizedRect(
+            x0=min(box_a.x0, box_b.x0), y0=min(box_a.y0, box_b.y0),
+            x1=max(box_a.x1, box_b.x1), y1=max(box_a.y1, box_b.y1),
+        )
+    else:
+        box = box_a or box_b
+    return (f"{first[0]} {second[0]}", box, first[2] or second[2])
+
+
 def _rows_from_block(block: Any) -> List[List["TableCell"]]:
     """Split one sibling block's own lines into column-ordered grid rows.
 
@@ -691,9 +708,16 @@ def _rows_from_block(block: Any) -> List[List["TableCell"]]:
     else:
         bins = _local_column_bins(fragments)
         for sr_idx, sub_row in enumerate(sub_rows):
-            for text, bbox, style in sub_row:
+            for fragment in sub_row:
+                bbox = fragment[1]
                 col = _nearest_bin(bbox.x0, bins) if bbox is not None else 0
-                by_col.setdefault(col, {})[sr_idx] = (text, bbox, style)
+                slot = by_col.setdefault(col, {})
+                # Two fragments of one sub-row can land in the same bin (x0s
+                # within the bin tolerance). Plain assignment kept only the
+                # last one and dropped the other's text without a trace.
+                slot[sr_idx] = (
+                    _join_fragments(slot[sr_idx], fragment) if sr_idx in slot else fragment
+                )
 
     rows: List[List[TableCell]] = [[] for _ in sub_rows]
     for col in sorted(by_col):

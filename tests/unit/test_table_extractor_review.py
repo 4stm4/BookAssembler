@@ -80,3 +80,36 @@ class TestFindTableRuns:
         assert len(runs) == 1
         in_run = sorted(idx for group in runs[0] for idx, _ in group)
         assert in_run == [0, 1, 2, 3, 4]
+
+
+def _inline(text, x0, y0, w=0.03, h=0.008):
+    return TextLineInline(
+        spans=[StyledTextSpan(text=text)],
+        visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=x0, y0=y0, x1=x0 + w, y1=y0 + h),
+            page_or_screen_index=0,
+        ),
+    )
+
+
+class TestRowsFromBlock:
+    def test_two_fragments_in_one_bin_keep_both_texts(self):
+        from src.analyzers.table.rules import _rows_from_block
+        block = ParagraphBlock(
+            inlines=[
+                _inline("Tj", 0.30, 0.50),
+                _inline("-25C", 0.31, 0.50),
+                _inline("10", 0.60, 0.50),
+                _inline("20", 0.60, 0.52),
+            ],
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=0.3, y0=0.5, x1=0.65, y1=0.53),
+                page_or_screen_index=0,
+            ),
+        )
+        rows = _rows_from_block(block)
+        texts = " ".join(
+            s.text for row in rows for cell in row
+            for p in cell.content for il in p.inlines for s in il.spans
+        )
+        assert "Tj" in texts and "-25C" in texts
