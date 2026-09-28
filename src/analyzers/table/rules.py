@@ -87,8 +87,15 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
     ink = arr[:, :, :3].mean(axis=2) < _RULE_INK_LEVEL
     height, width = ink.shape
 
-    horizontal = _rule_runs(ink.sum(axis=1) > _RULE_SPAN * width)
-    vertical = _rule_runs(ink.sum(axis=0) > _RULE_SPAN * height)
+    # "Most of the table" means most of the TABLE, not of the padded crop.
+    # Measured against the crop, a rule spanning exactly the table covers
+    # W / (W + 2 * _RULE_PAD_PT) of it, which falls under _RULE_SPAN for
+    # any table shorter or narrower than ~60pt: a three-row table 40pt tall
+    # lost every column rule (40 / 80 = 50%).
+    table_w_px = max(1.0, (min(bbox.x1 * page_w, clip.x1) - max(bbox.x0 * page_w, clip.x0)) * _RULE_ZOOM)
+    table_h_px = max(1.0, (min(bbox.y1 * page_h, clip.y1) - max(bbox.y0 * page_h, clip.y0)) * _RULE_ZOOM)
+    horizontal = _rule_runs(ink.sum(axis=1) > _RULE_SPAN * table_w_px)
+    vertical = _rule_runs(ink.sum(axis=0) > _RULE_SPAN * table_h_px)
     if not horizontal and not vertical:
         return False
 
