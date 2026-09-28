@@ -56,6 +56,23 @@ class TestMergeAdjacentTables:
         assert stray.is_tombstoned and second.is_tombstoned
         assert first.row_count == 4
 
+    def test_tables_on_different_pages_are_not_merged(self):
+        first = _table([["1", "2"], ["3", "4"]], page=0)
+        second = _table([["5", "6"]], y0=0.1, page=1)
+        c = ContainerUnit(title="ch", children=[first, second])
+        TableDetectorAnalyzer()._merge_adjacent_tables(c)
+        assert not second.is_tombstoned
+        assert first.row_count == 2
+
+    def test_merged_table_span_map_covers_the_merged_rows(self):
+        first = _table([["1", "2"], ["3", "4"]])
+        second = _table([["5", "6"], ["7"]], y0=0.55)
+        second.grid[0][1].row_span = 2
+        c = ContainerUnit(title="ch", children=[first, second])
+        TableDetectorAnalyzer()._merge_adjacent_tables(c)
+        assert first.row_count == 4
+        assert first.span_map.get((3, 1)) == (2, 1)
+
 
 class TestFindTableRuns:
     def test_first_row_after_a_heading_is_kept(self):

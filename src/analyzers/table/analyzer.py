@@ -19,7 +19,7 @@ from src.krm.models import (
 from src.analyzers.caption.signals import _CAPTION_RE
 from src.analyzers.source_io import resolve_source_path
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
-from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _cluster_columns, _count_columns, _find_table_runs, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _page_idx, _rows_from_block, _rows_from_group, _snap_row_to_columns, _table_from_lines
+from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _build_span_map, _cluster_columns, _count_columns, _find_table_runs, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _page_idx, _rows_from_block, _rows_from_group, _snap_row_to_columns, _table_from_lines
 
 
 def _cell_x0(cell: "TableCell") -> float:
@@ -499,17 +499,7 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                     else:
                         visual_layout = first_block.visual_layout
 
-                    # Build span_map for merged cells
-                    span_map = {}
-                    ncols = max((len(r) for r in grid), default=0)
-                    for row_idx, row in enumerate(grid):
-                        for col_idx, cell in enumerate(row):
-                            row_span = getattr(cell, "row_span", 1) or 1
-                            col_span = getattr(cell, "col_span", 1) or 1
-                            for r in range(row_idx, min(row_idx + row_span, len(grid))):
-                                for c in range(col_idx, min(col_idx + col_span, ncols)):
-                                    if (r, c) != (row_idx, col_idx):
-                                        span_map[(r, c)] = (row_idx, col_idx)
+                    span_map = _build_span_map(grid)
 
                     table = TableBlock(
                         id=derive_composite_id(
@@ -599,6 +589,12 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                 if getattr(nxt, "is_tombstoned", False):
                     j += 1
                     continue
+                # A table never continues onto another page by adjacency in
+                # children alone: two tables on facing pages with nothing
+                # between them were merged into one whose box mixed the two
+                # pages' coordinates.
+                if _page_idx(nxt) != _page_idx(base):
+                    break
                 if isinstance(nxt, TableBlock):
                     merged_grid.extend(pending_rows)
                     consumed.extend(pending_idx)
@@ -624,6 +620,9 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                 i += 1
                 continue
             base.grid = merged_grid
+            # Recomputed over the merged grid: the fragments' own maps
+            # indexed their own rows, and base's alone no longer covers it.
+            base.span_map = _build_span_map(merged_grid)
             base.row_count = len(merged_grid)
             base.column_count = max((len(r) for r in merged_grid), default=0)
             if boxes and base.visual_layout:
