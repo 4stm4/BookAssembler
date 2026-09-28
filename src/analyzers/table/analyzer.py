@@ -225,6 +225,46 @@ def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]
     return [row for i, row in enumerate(grid) if i not in orphan_indices]
 
 
+def _infer_rowspans(grid: List[List["TableCell"]]) -> None:
+    """Give a column's first cell a row_span over the rows right under it
+    that have nothing in that column.
+
+    Columns are identified by each cell's x0, binned against the fullest
+    row. A grid row is ragged by list position - a row missing a MIDDLE
+    column is simply shorter - so reading "index >= len(row)" as "column
+    absent" treated such a row as missing its LAST column, and spanned the
+    wrong cell of the row above down over a real value.
+    """
+    if not grid:
+        return
+    widest = max(grid, key=len)
+    bins = sorted(_cell_x0(c) for c in widest)
+    if not bins:
+        return
+
+    def column_of(cell: "TableCell") -> int:
+        x0 = _cell_x0(cell)
+        return min(range(len(bins)), key=lambda k: abs(bins[k] - x0))
+
+    by_column: List[Dict[int, "TableCell"]] = []
+    for row in grid:
+        cols: Dict[int, "TableCell"] = {}
+        for cell in row:
+            cols.setdefault(column_of(cell), cell)
+        by_column.append(cols)
+
+    for col in range(len(bins)):
+        first = next((r for r, cols in enumerate(by_column) if col in cols), None)
+        if first is None or first + 1 >= len(grid) or col in by_column[first + 1]:
+            continue
+        missing = 0
+        for cols in by_column[first + 1:]:
+            if col in cols:
+                break
+            missing += 1
+        by_column[first][col].row_span = missing + 1
+
+
 class TableDetectorAnalyzer(BaseAnalyzer):
     def __init__(self) -> None:
         super().__init__(
@@ -440,33 +480,7 @@ class TableDetectorAnalyzer(BaseAnalyzer):
 
                     grid = _merge_orphan_rows(grid)
 
-                    # Detect row_span and col_span from jagged grid structure
-                    # When a column is missing in some rows, it likely indicates row_span
-                    if grid:
-                        ncols = max((len(r) for r in grid), default=0)
-
-                        # Detect row_span: if column is present in first row but missing in subsequent rows
-                        for col_idx in range(ncols):
-                            first_cell_idx = None
-                            for row_idx, row in enumerate(grid):
-                                if col_idx < len(row):
-                                    if first_cell_idx is None:
-                                        first_cell_idx = row_idx
-                                else:
-                                    # Column is missing in this row - check if previous row had this cell
-                                    if first_cell_idx is not None and first_cell_idx == row_idx - 1:
-                                        # Previous row had this column, this row doesn't - could be row_span
-                                        # Mark the first cell with appropriate row_span
-                                        if col_idx < len(grid[first_cell_idx]):
-                                            consecutive_missing = 1
-                                            for check_row in range(row_idx + 1, len(grid)):
-                                                if col_idx >= len(grid[check_row]):
-                                                    consecutive_missing += 1
-                                                else:
-                                                    break
-                                            if consecutive_missing > 0:
-                                                cell = grid[first_cell_idx][col_idx]
-                                                cell.row_span = consecutive_missing + 1
+                    _infer_rowspans(grid)
 
                     sep_boost = 0.10 if has_separators else 0.0
                     col_penalty = 0.15 if is_single_col else 0.0

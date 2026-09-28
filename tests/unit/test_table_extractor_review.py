@@ -194,3 +194,16 @@ class TestSplitNumericPair:
         assert abs(parts[1][1].x0 - 0.03) < 1e-9  # after "63 "
         assert abs(parts[0][1].x1 - 0.02) < 1e-9
         assert abs(parts[1][1].x1 - 0.11) < 1e-9
+
+
+class TestInferRowspans:
+    def test_row_missing_a_middle_column_spans_that_column(self):
+        from src.analyzers.table.analyzer import _infer_rowspans
+        a, b, c = _cell("a", x0=0.1), _cell("b", x0=0.2), _cell("c", x0=0.3)
+        grid = [
+            [a, b, c],
+            [_cell("d", x0=0.1, y0=0.52), _cell("f", x0=0.3, y0=0.52)],  # no x0=0.2
+        ]
+        _infer_rowspans(grid)
+        assert b.row_span == 2
+        assert c.row_span == 1
