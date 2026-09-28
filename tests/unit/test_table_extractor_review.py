@@ -207,3 +207,19 @@ class TestInferRowspans:
         _infer_rowspans(grid)
         assert b.row_span == 2
         assert c.row_span == 1
+
+
+def _frag(text, x0, y0):
+    return (text, NormalizedRect(x0=x0, y0=y0, x1=x0 + 0.03, y1=y0 + 0.008), None)
+
+
+class TestMergeStrayRows:
+    def test_mark_joins_the_nearer_row(self):
+        from src.analyzers.table.rules import _merge_stray_rows
+        rows = [[_frag("r", 0.1, y), _frag("v", 0.3, y)] for y in (0.40, 0.42, 0.44)]
+        dot = [_frag("•", 0.2, 0.451)]  # 0.011 under row 0.44, 0.009 above 0.46
+        rows += [dot] + [[_frag("r", 0.1, y), _frag("v", 0.3, y)] for y in (0.46, 0.48)]
+        out = _merge_stray_rows(rows)
+        assert len(out) == 5
+        joined = [r for r in out if any(t == "•" for t, _, _ in r)][0]
+        assert min(f[1].y0 for f in joined if f[0] != "•") == 0.46
