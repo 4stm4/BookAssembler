@@ -148,6 +148,34 @@ class TestMergeOrphanRows:
         assert _cell_text(merged).split() == ["A", "B", "T"]
 
 
+    def test_label_between_two_rows_spans_them(self):
+        from src.analyzers.table.analyzer import _cell_text, _merge_orphan_rows
+        grid = [
+            [_cell("L", x0=0.10, y0=0.40), _cell("c", x0=0.50, y0=0.40), _cell("1", x0=0.80, y0=0.40)],
+            [_cell("c1", x0=0.50, y0=0.50), _cell("2", x0=0.80, y0=0.50)],
+            [_cell("Average Temperature", x0=0.10, y0=0.505)],
+            [_cell("c2", x0=0.50, y0=0.51), _cell("3", x0=0.80, y0=0.51)],
+        ]
+        out = _merge_orphan_rows(grid)
+        assert len(out) == 3
+        label = [c for c in out[1] if _cell_text(c) == "Average Temperature"]
+        assert label and label[0].row_span == 2
+        assert [_cell_text(c) for c in out[1]][0] == "Average Temperature"
+
+    def test_label_stays_its_own_row_when_its_column_is_taken(self):
+        from src.analyzers.table.analyzer import _cell_text, _merge_orphan_rows
+        grid = [
+            [_cell("Head", x0=0.10, y0=0.40), _cell("c", x0=0.50, y0=0.40), _cell("1", x0=0.80, y0=0.40)],
+            [_cell("with line", x0=0.16, y0=0.50), _cell("c1", x0=0.50, y0=0.50), _cell("2", x0=0.80, y0=0.50)],
+            [_cell("Quiescent Current Change", x0=0.10, y0=0.506)],
+            [_cell("with load", x0=0.16, y0=0.512), _cell("c2", x0=0.50, y0=0.512), _cell("3", x0=0.80, y0=0.512)],
+        ]
+        out = _merge_orphan_rows(grid)
+        texts = [_cell_text(c) for row in out for c in row]
+        assert "Quiescent Current Change" in texts
+        assert not any(len(row) > 3 for row in out), "label pushed into a row whose column it shares"
+
+
 class TestMarkCellBorders:
     def test_short_table_keeps_its_column_rules(self):
         import numpy as np
