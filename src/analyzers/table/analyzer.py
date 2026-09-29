@@ -19,13 +19,7 @@ from src.krm.models import (
 from src.analyzers.caption.signals import _CAPTION_RE
 from src.analyzers.source_io import resolve_source_path
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
-from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _build_span_map, _cluster_columns, _count_columns, _find_table_runs, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _page_idx, _rows_from_block, _rows_from_group, _snap_row_to_columns, _table_from_lines
-
-
-def _cell_x0(cell: "TableCell") -> float:
-    vl = getattr(cell, "visual_layout", None)
-    bb = getattr(vl, "bounding_box", None) if vl else None
-    return bb.x0 if bb is not None else 0.0
+from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _build_span_map, _cell_x0, _column_bins, _column_of, _find_placeholder_marks, _cluster_columns, _count_columns, _find_table_runs, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _page_idx, _rows_from_block, _rows_from_group, _snap_row_to_columns, _table_from_lines
 
 
 def _cell_y0(cell: "TableCell") -> float:
@@ -41,19 +35,6 @@ def _cell_text(cell: "TableCell") -> str:
         for il in c.inlines
         for s in il.spans
     )
-
-
-def _column_bins(grid: List[List["TableCell"]]) -> List[float]:
-    """Column positions: the x0s of the fullest row, which has a cell in
-    every column - the same anchoring the assembler uses to bin cells."""
-    if not grid:
-        return []
-    return sorted(_cell_x0(c) for c in max(grid, key=len))
-
-
-def _column_of(cell: "TableCell", bins: List[float]) -> int:
-    x0 = _cell_x0(cell)
-    return min(range(len(bins)), key=lambda k: abs(bins[k] - x0))
 
 
 def _fills_empty_column(cell: "TableCell", row: List["TableCell"], bins: List[float]) -> bool:
@@ -406,6 +387,7 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                 page_index = vl.page_or_screen_index or 0
                 if page_index >= source.page_count:
                     continue
+                _find_placeholder_marks(np, pymupdf, source[page_index], table)
                 _mark_cell_borders(np, pymupdf, source[page_index], table)
         finally:
             source.close()

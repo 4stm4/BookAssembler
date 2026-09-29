@@ -251,3 +251,69 @@ class TestMergeStrayRows:
         assert len(out) == 5
         joined = [r for r in out if any(t == "•" for t, _, _ in r)][0]
         assert min(f[1].y0 for f in joined if f[0] != "•") == 0.46
+
+
+class TestRecoverPlaceholderMarks:
+    def _setup(self):
+        import pymupdf
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        pw, ph = page.rect.width, page.rect.height
+        # two columns at x 200 and 300, three rows 20pt apart, cells 14pt tall
+        rows_y = (300.0, 320.0, 340.0)
+
+        def cell(text, x, y):
+            return TableCell(
+                content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text=text)])])],
+                visual_layout=VisualLayout(
+                    bounding_box=NormalizedRect(x0=x / pw, y0=y / ph, x1=(x + 40) / pw, y1=(y + 14) / ph),
+                    page_or_screen_index=0,
+                ),
+            )
+
+        grid = [
+            [cell("0", 200, rows_y[0]), cell("32", 300, rows_y[0])],
+            [cell("1", 200, rows_y[1])],                       # column 2 empty
+            [cell("2", 200, rows_y[2]), cell("34", 300, rows_y[2])],
+        ]
+        table = TableBlock(
+            grid=grid, row_count=3, column_count=2,
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=200 / pw, y0=300 / ph, x1=340 / pw, y1=354 / ph),
+                page_or_screen_index=0,
+            ),
+        )
+        return doc, page, table, rows_y
+
+    def test_dot_in_an_empty_cell_is_found_but_the_grid_is_untouched(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _find_placeholder_marks
+        doc, page, table, rows_y = self._setup()
+        page.draw_circle((315, rows_y[1] + 7), 1.8, color=(0, 0, 0), fill=(0, 0, 0))
+        assert _find_placeholder_marks(np, pymupdf, page, table) == 1
+        marks = table.metadata["placeholder_marks"]
+        assert [m["row"] for m in marks] == [1]
+        assert len(table.grid[1]) == 1, "the KRM grid must keep only the text layer's cells"
+
+    def test_non_dots_and_filled_cells_are_left_alone(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _find_placeholder_marks
+        doc, page, table, rows_y = self._setup()
+        # a thin bar in the empty cell, and a dot in the gap beside an occupied cell
+        page.draw_line((315, rows_y[1] + 2), (315, rows_y[1] + 12), width=1)
+        page.draw_circle((318, rows_y[0] + 7), 1.8, color=(0, 0, 0), fill=(0, 0, 0))
+        assert _find_placeholder_marks(np, pymupdf, page, table) == 0
+        assert not (table.metadata or {}).get("placeholder_marks")
+
+    def test_builder_draws_a_found_mark_into_its_cell(self):
+        from src.assembler.latex_builder import _cell_text, _grid_with_placeholder_marks
+        doc, page, table, rows_y = self._setup()
+        pw, ph = page.rect.width, page.rect.height
+        table.metadata = {"placeholder_marks": [
+            {"row": 1, "bbox": [313 / pw, (rows_y[1] + 5) / ph, 317 / pw, (rows_y[1] + 9) / ph]},
+        ]}
+        drawn = _grid_with_placeholder_marks(table)
+        assert [_cell_text(c) for c in drawn[1]] == ["1", "\u2022"]
+        assert len(table.grid[1]) == 1

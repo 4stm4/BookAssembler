@@ -52,6 +52,40 @@ def _rule_runs(flags) -> List[Tuple[int, int]]:
     return out
 
 
+def _render_table_ink(np, pymupdf, page, bbox):
+    """The table's region as an ink mask, with its rules found.
+
+    Returns (ink, clip, horizontal, vertical), or None when the region is
+    too small to render: ink is a boolean array at _RULE_ZOOM over clip
+    (the table's box plus _RULE_PAD_PT), horizontal/vertical are the
+    pixel runs of the rules.
+    """
+    page_w, page_h = page.rect.width, page.rect.height
+    clip = pymupdf.Rect(
+        bbox.x0 * page_w - _RULE_PAD_PT, bbox.y0 * page_h - _RULE_PAD_PT,
+        bbox.x1 * page_w + _RULE_PAD_PT, bbox.y1 * page_h + _RULE_PAD_PT,
+    )
+    clip = clip & page.rect
+    if clip.is_empty or clip.width < 2 or clip.height < 2:
+        return None
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(_RULE_ZOOM, _RULE_ZOOM), clip=clip)
+    if pix.width < 2 or pix.height < 2:
+        return None
+    arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+    ink = arr[:, :, :3].mean(axis=2) < _RULE_INK_LEVEL
+
+    # "Most of the table" means most of the TABLE, not of the padded crop.
+    # Measured against the crop, a rule spanning exactly the table covers
+    # W / (W + 2 * _RULE_PAD_PT) of it, which falls under _RULE_SPAN for
+    # any table shorter or narrower than ~60pt: a three-row table 40pt tall
+    # lost every column rule (40 / 80 = 50%).
+    table_w_px = max(1.0, (min(bbox.x1 * page_w, clip.x1) - max(bbox.x0 * page_w, clip.x0)) * _RULE_ZOOM)
+    table_h_px = max(1.0, (min(bbox.y1 * page_h, clip.y1) - max(bbox.y0 * page_h, clip.y0)) * _RULE_ZOOM)
+    horizontal = _rule_runs(ink.sum(axis=1) > _RULE_SPAN * table_w_px)
+    vertical = _rule_runs(ink.sum(axis=0) > _RULE_SPAN * table_h_px)
+    return ink, clip, horizontal, vertical
+
+
 def _mark_cell_borders(np, pymupdf, page, table) -> bool:
     """Set each cell's border_* from the rules printed on the source page.
 
@@ -72,30 +106,11 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
     """
     bbox = table.visual_layout.bounding_box
     page_w, page_h = page.rect.width, page.rect.height
-    clip = pymupdf.Rect(
-        bbox.x0 * page_w - _RULE_PAD_PT, bbox.y0 * page_h - _RULE_PAD_PT,
-        bbox.x1 * page_w + _RULE_PAD_PT, bbox.y1 * page_h + _RULE_PAD_PT,
-    )
-    clip = clip & page.rect
-    if clip.is_empty or clip.width < 2 or clip.height < 2:
+    rendered = _render_table_ink(np, pymupdf, page, bbox)
+    if rendered is None:
         return None
-
-    pix = page.get_pixmap(matrix=pymupdf.Matrix(_RULE_ZOOM, _RULE_ZOOM), clip=clip)
-    if pix.width < 2 or pix.height < 2:
-        return None
-    arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
-    ink = arr[:, :, :3].mean(axis=2) < _RULE_INK_LEVEL
+    ink, clip, horizontal, vertical = rendered
     height, width = ink.shape
-
-    # "Most of the table" means most of the TABLE, not of the padded crop.
-    # Measured against the crop, a rule spanning exactly the table covers
-    # W / (W + 2 * _RULE_PAD_PT) of it, which falls under _RULE_SPAN for
-    # any table shorter or narrower than ~60pt: a three-row table 40pt tall
-    # lost every column rule (40 / 80 = 50%).
-    table_w_px = max(1.0, (min(bbox.x1 * page_w, clip.x1) - max(bbox.x0 * page_w, clip.x0)) * _RULE_ZOOM)
-    table_h_px = max(1.0, (min(bbox.y1 * page_h, clip.y1) - max(bbox.y0 * page_h, clip.y0)) * _RULE_ZOOM)
-    horizontal = _rule_runs(ink.sum(axis=1) > _RULE_SPAN * table_w_px)
-    vertical = _rule_runs(ink.sum(axis=0) > _RULE_SPAN * table_h_px)
     if not horizontal and not vertical:
         return False
 
@@ -1095,6 +1110,176 @@ def _build_span_map(grid: List[List["TableCell"]]) -> Dict[Tuple[int, int], Tupl
                     if (r, c) != (row_idx, col_idx):
                         span_map[(r, c)] = (row_idx, col_idx)
     return span_map
+
+
+def _cell_x0(cell: "TableCell") -> float:
+    vl = getattr(cell, "visual_layout", None)
+    bb = getattr(vl, "bounding_box", None) if vl else None
+    return bb.x0 if bb is not None else 0.0
+
+
+def _column_bins(grid: List[List["TableCell"]]) -> List[float]:
+    """Column positions: the x0s of the fullest row, which has a cell in
+    every column - the same anchoring the assembler uses to bin cells."""
+    if not grid:
+        return []
+    return sorted(_cell_x0(c) for c in max(grid, key=len))
+
+
+def _column_of(cell: "TableCell", bins: List[float]) -> int:
+    x0 = _cell_x0(cell)
+    return min(range(len(bins)), key=lambda k: abs(bins[k] - x0))
+
+
+# A placeholder mark ("•" standing in an empty cell) is a small, round,
+# solid blob. Sized against the table's own text height, so the test
+# carries across type sizes: on the decimal/binary fixture its dots are
+# 3.3-3.7pt against 14.3pt cells (0.23-0.26), while the ink the test must
+# reject is either taller (header glyph fragments the OCR box clipped,
+# 0.44-0.66, fill 0.4-0.7) or thin (rule slivers and the voltage-
+# regulator fixture's condition bars, aspect ~0.2).
+_MARK_SIZE_MIN = 0.15
+_MARK_SIZE_MAX = 0.40
+_MARK_ASPECT_MIN = 0.7
+_MARK_ASPECT_MAX = 1.4
+_MARK_FILL_MIN = 0.6
+_MARK_CELL_MARGIN_PT = 1.5  # swallows glyph overhang the OCR box clips
+
+
+def _ink_blobs(np, mask) -> List[List[Tuple[int, int]]]:
+    """8-connected blobs of a boolean mask, as lists of (y, x) pixels."""
+    seen = np.zeros_like(mask, dtype=bool)
+    h, w = mask.shape
+    out: List[List[Tuple[int, int]]] = []
+    for y, x in np.argwhere(mask):
+        if seen[y, x]:
+            continue
+        seen[y, x] = True
+        stack = [(int(y), int(x))]
+        pixels: List[Tuple[int, int]] = []
+        while stack:
+            cy, cx = stack.pop()
+            pixels.append((cy, cx))
+            for ny in (cy - 1, cy, cy + 1):
+                for nx in (cx - 1, cx, cx + 1):
+                    if 0 <= ny < h and 0 <= nx < w and mask[ny, nx] and not seen[ny, nx]:
+                        seen[ny, nx] = True
+                        stack.append((ny, nx))
+        out.append(pixels)
+    return out
+
+
+def _find_placeholder_marks(np, pymupdf, page, table) -> int:
+    """Find the "•" placeholder marks the OCR layer missed, in the pixels.
+
+    A scan's text layer does not reliably recognise a lone dot: the
+    decimal/binary fixture prints eleven placeholder dots and its OCR
+    layer holds five - every one of which is already a cell. The other
+    six exist only as ink, and the rendered table was missing them.
+
+    A dot is looked for in the ink that is left once every cell's box (a
+    little enlarged) and every rule are cleared away, and it is only
+    accepted for a cell that is EMPTY - the row it centres on has nothing
+    in its column - since a placeholder is exactly what stands in for a
+    missing value.
+
+    The finds go to table.metadata["placeholder_marks"] as
+    {"row", "bbox"}, NOT into the grid. The grid is the table's TEXT, as
+    the source's text layer carries it (tests/e2e/test_krm_roundtrip.py
+    holds it to that, cell for cell); a mark read off the pixels is a
+    visual fact about the printed page, and the assembler sets it into
+    its cell when it draws the table. Returns how many were found.
+    """
+    vl = table.visual_layout
+    bbox = vl.bounding_box if vl else None
+    placed = [
+        c for row in table.grid for c in row
+        if c.visual_layout is not None and c.visual_layout.bounding_box is not None
+    ]
+    if bbox is None or not placed:
+        return 0
+    rendered = _render_table_ink(np, pymupdf, page, bbox)
+    if rendered is None:
+        return 0
+    ink, clip, horizontal, vertical = rendered
+    ink = ink.copy()
+    page_w, page_h = page.rect.width, page.rect.height
+    z = _RULE_ZOOM
+
+    def px(value: float, origin: float) -> int:
+        return int(round((value - origin) * z))
+
+    for r0, r1 in horizontal:
+        ink[max(0, r0 - 2):r1 + 2, :] = False
+    for c0, c1 in vertical:
+        ink[:, max(0, c0 - 2):c1 + 2] = False
+    m = _MARK_CELL_MARGIN_PT
+    for cell in placed:
+        b = cell.visual_layout.bounding_box
+        ink[max(0, px(b.y0 * page_h - m, clip.y0)):px(b.y1 * page_h + m, clip.y0) + 1,
+            max(0, px(b.x0 * page_w - m, clip.x0)):px(b.x1 * page_w + m, clip.x0) + 1] = False
+    inside = np.zeros_like(ink)
+    inside[max(0, px(bbox.y0 * page_h, clip.y0)):px(bbox.y1 * page_h, clip.y0),
+           max(0, px(bbox.x0 * page_w, clip.x0)):px(bbox.x1 * page_w, clip.x0)] = True
+    ink &= inside
+    if not ink.any():
+        return 0
+
+    heights = sorted(c.visual_layout.bounding_box.height * page_h for c in placed)
+    text_h = heights[len(heights) // 2]
+    if text_h <= 0:
+        return 0
+    bins = _column_bins(table.grid)
+    row_centres = []
+    for row in table.grid:
+        boxes = [c.visual_layout.bounding_box for c in row if c.visual_layout and c.visual_layout.bounding_box]
+        row_centres.append(
+            sum((b.y0 + b.y1) / 2.0 for b in boxes) / len(boxes) * page_h if boxes else None
+        )
+
+    marks: List[Dict[str, Any]] = []
+    taken = set()
+    for pixels in _ink_blobs(np, ink):
+        ys = [p[0] for p in pixels]
+        xs = [p[1] for p in pixels]
+        w_pt = (max(xs) - min(xs) + 1) / z
+        h_pt = (max(ys) - min(ys) + 1) / z
+        fill = len(pixels) / ((max(xs) - min(xs) + 1) * (max(ys) - min(ys) + 1))
+        if not (
+            _MARK_SIZE_MIN * text_h <= w_pt <= _MARK_SIZE_MAX * text_h
+            and _MARK_SIZE_MIN * text_h <= h_pt <= _MARK_SIZE_MAX * text_h
+            and _MARK_ASPECT_MIN <= w_pt / h_pt <= _MARK_ASPECT_MAX
+            and fill >= _MARK_FILL_MIN
+        ):
+            continue
+        cy = clip.y0 + (sum(ys) / len(ys)) / z
+        candidates = [
+            (abs(c - cy), i) for i, c in enumerate(row_centres) if c is not None
+        ]
+        if not candidates:
+            continue
+        dist, row_idx = min(candidates)
+        if dist > text_h / 2.0:
+            continue
+        x0 = (clip.x0 + min(xs) / z) / page_w
+        box = [
+            x0, (clip.y0 + min(ys) / z) / page_h,
+            (clip.x0 + (max(xs) + 1) / z) / page_w, (clip.y0 + (max(ys) + 1) / z) / page_h,
+        ]
+        col = min(range(len(bins)), key=lambda k: abs(bins[k] - x0)) if bins else 0
+        row = table.grid[row_idx]
+        if (row_idx, col) in taken or (bins and any(_column_of(c, bins) == col for c in row)):
+            continue
+        taken.add((row_idx, col))
+        marks.append({"row": row_idx, "bbox": box})
+
+    if marks:
+        md = getattr(table, "metadata", None)
+        if md is None:
+            md = {}
+            table.metadata = md
+        md["placeholder_marks"] = marks
+    return len(marks)
 
 
 _STRAY_COLUMN_MAX_SIZE = 3
