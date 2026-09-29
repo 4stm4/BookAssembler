@@ -43,6 +43,34 @@ def _cell_text(cell: "TableCell") -> str:
     )
 
 
+def _column_bins(grid: List[List["TableCell"]]) -> List[float]:
+    """Column positions: the x0s of the fullest row, which has a cell in
+    every column - the same anchoring the assembler uses to bin cells."""
+    if not grid:
+        return []
+    return sorted(_cell_x0(c) for c in max(grid, key=len))
+
+
+def _column_of(cell: "TableCell", bins: List[float]) -> int:
+    x0 = _cell_x0(cell)
+    return min(range(len(bins)), key=lambda k: abs(bins[k] - x0))
+
+
+def _fills_empty_column(cell: "TableCell", row: List["TableCell"], bins: List[float]) -> bool:
+    """True when cell's column holds nothing in row.
+
+    Judged by column, not by box overlap: two cells can sit side by side
+    without touching and still share a column, and the assembler keeps
+    only one cell per column - inserting "Quiescent Current Change" beside
+    "with line" (both in the label column, boxes apart) dropped it from
+    the rendered table.
+    """
+    if not bins or getattr(cell, "visual_layout", None) is None:
+        return False
+    col = _column_of(cell, bins)
+    return all(_column_of(other, bins) != col for other in row)
+
+
 def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]:
     """Fold a single-cell grid row into the nearest fuller row's cell.
 
@@ -98,6 +126,8 @@ def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]
     # decision from the untouched grid first removes that ordering
     # dependency entirely.
     decisions: List[Tuple[int, int, "TableCell"]] = []
+    insertions: List[Tuple[int, int, Optional[int]]] = []
+    bins = _column_bins(grid)
     for i, row in enumerate(grid):
         if len(row) != 1:
             continue
@@ -172,6 +202,25 @@ def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]
         # placeholder mark's worth of text, this orphan is not a
         # continuation - leave it standing as its own row instead of
         # folding it away.
+        # An orphan standing in a column its row leaves EMPTY is that row's
+        # missing cell, not a continuation of one of its cells: insert it
+        # rather than fold its text into a neighbour. The voltage-regulator
+        # fixture's "Average Temperature Coefficient of Output Voltage"
+        # label sits in the label column between the two rows it labels,
+        # overlapping none of their cells; folding was refused (its nearest
+        # cell is the row's anchor), so it rendered as a row of its own.
+        # Between two full rows that both lack its column, it spans them.
+        if _fills_empty_column(orphan_cell, grid[nearest], bins):
+            above = max((j for j in full_indices if j < i), default=None)
+            below = min((j for j in full_indices if j > i), default=None)
+            spans_both = (
+                above is not None and below is not None
+                and _fills_empty_column(orphan_cell, grid[above], bins)
+                and _fills_empty_column(orphan_cell, grid[below], bins)
+            )
+            insertions.append((i, above if spans_both else nearest, below if spans_both else None))
+            continue
+
         target_cell = _target_cell(nearest, orphan_cell)
         target_row_anchor = min(grid[nearest], key=_cell_x0)
         if (
@@ -220,6 +269,16 @@ def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]
             )
         orphan_indices.add(i)
 
+    for i, target, _ in insertions:
+        grid[target].append(grid[i][0])
+        grid[target].sort(key=_cell_x0)
+        orphan_indices.add(i)
+    # A span is only right once every row between the two it covers is
+    # gone - otherwise it would reach over a row that stayed.
+    for i, above, below in insertions:
+        if below is not None and all(k in orphan_indices for k in range(above + 1, below)):
+            grid[i][0].row_span = 2
+
     if not orphan_indices:
         return grid
     return [row for i, row in enumerate(grid) if i not in orphan_indices]
@@ -235,22 +294,15 @@ def _infer_rowspans(grid: List[List["TableCell"]]) -> None:
     absent" treated such a row as missing its LAST column, and spanned the
     wrong cell of the row above down over a real value.
     """
-    if not grid:
-        return
-    widest = max(grid, key=len)
-    bins = sorted(_cell_x0(c) for c in widest)
+    bins = _column_bins(grid)
     if not bins:
         return
-
-    def column_of(cell: "TableCell") -> int:
-        x0 = _cell_x0(cell)
-        return min(range(len(bins)), key=lambda k: abs(bins[k] - x0))
 
     by_column: List[Dict[int, "TableCell"]] = []
     for row in grid:
         cols: Dict[int, "TableCell"] = {}
         for cell in row:
-            cols.setdefault(column_of(cell), cell)
+            cols.setdefault(_column_of(cell, bins), cell)
         by_column.append(cols)
 
     for col in range(len(bins)):
