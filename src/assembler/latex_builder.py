@@ -11,7 +11,7 @@ import logging
 import os
 import re
 import subprocess
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.security.manager import Capability, get_security_manager
 from src.krm.models import (
@@ -30,10 +30,15 @@ from src.krm.models import (
     FormulaBlock,
     ListBlock,
     ParagraphBlock,
+    NormalizedRect,
     SidebarBlock,
+    StyledTextSpan,
     TableBlock,
+    TableCell,
+    TextLineInline,
     TitlePageBlock,
     TocEntryBlock,
+    VisualLayout,
 )
 
 log = logging.getLogger(__name__)
@@ -599,6 +604,46 @@ def _column_bins(grid: List[List[Any]]) -> Optional[List[float]]:
     return bins
 
 
+# A lone mark standing in for a missing value, not a value itself.
+_PLACEHOLDER_MARKS = {"\u2022", "\u00b7", "\u2219"}
+
+
+def _grid_with_placeholder_marks(table: TableBlock) -> List[List[Any]]:
+    """The table's grid with the placeholder marks found in its source's
+    pixels set into their empty cells - for drawing only.
+
+    The KRM grid holds the table's text as the source's text layer
+    carries it; a scan's OCR misses lone dots (the decimal/binary fixture
+    prints eleven "•" and its text layer has five), so the analyzer finds
+    the rest in the pixels and records them in
+    table.metadata["placeholder_marks"] instead of the grid. They are
+    drawn here as ordinary cells, styled like their row, so every column
+    and row measurement below treats them exactly as the dots OCR did
+    read. The KRM itself is never modified.
+    """
+    grid = getattr(table, "grid", None)
+    marks = (getattr(table, "metadata", None) or {}).get("placeholder_marks") or []
+    if not grid or not marks:
+        return grid
+    rows = [list(row) for row in grid]
+    for mark in marks:
+        r = mark.get("row")
+        if r is None or not 0 <= r < len(rows):
+            continue
+        x0, y0, x1, y1 = mark["bbox"]
+        like = next((c for c in rows[r] if getattr(c, "visual_layout", None) is not None), None)
+        rows[r].append(TableCell(
+            content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text="\u2022")])])],
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=x0, y0=y0, x1=x1, y1=y1),
+                page_or_screen_index=like.visual_layout.page_or_screen_index if like else 0,
+                style=like.visual_layout.style if like else None,
+            ),
+        ))
+        rows[r].sort(key=lambda c: _cell_x0(c) or 0.0)
+    return rows
+
+
 def _render_table(table: TableBlock) -> str:
     """Render a table atomically (RFC 0007 §5.2).
 
@@ -610,7 +655,7 @@ def _render_table(table: TableBlock) -> str:
     if recognized:
         safe = _sanitize_latex_fragment(recognized)
         return "\\begin{center}\n" + safe + "\n\\end{center}\n"
-    grid = getattr(table, "grid", None)
+    grid = _grid_with_placeholder_marks(table)
     if not grid:
         return ""
 
@@ -628,6 +673,9 @@ def _render_table(table: TableBlock) -> str:
 
     bins = _column_bins(grid)
     span_map = getattr(table, "span_map", {})
+    # Where each lone placeholder mark sits in the source, by (row, col) -
+    # see _place_mark below. Filled only where cells are binned by x.
+    placeholder_x: Dict[Tuple[int, int], Tuple[float, float]] = {}
     # Populated below only when bins are available (real per-column source
     # geometry); stays None otherwise so the fallback path further down
     # knows to fall back to the old content-length-driven estimate.
@@ -679,6 +727,8 @@ def _render_table(table: TableBlock) -> str:
                 # from it below, and font commands are not content.
                 text = _styled_cell_text(cell, _esc(raw).replace("\n", " "), median_pt, raw=raw)
                 texts[col] = raw
+                if raw.strip() in _PLACEHOLDER_MARKS and x0 is not None and x1 is not None:
+                    placeholder_x[(row_idx, col)] = (x0, x1)
                 row_span = getattr(cell, "row_span", 1) or 1
                 col_span = getattr(cell, "col_span", 1) or 1
 
@@ -1249,6 +1299,35 @@ def _render_table(table: TableBlock) -> str:
         # too, not just the span-cell convention's own unconditional "|".
         seps = ["|"] * (ncols + 1)
         col_spec = "|" + "|".join(col_spec_parts) + "|"
+
+    def _place_mark(text: str, col: int, x0: float, x1: float) -> str:
+        """Set a lone placeholder mark where the source printed it.
+
+        A column is set flush right or left for its NUMBERS, and a "•"
+        standing in for a missing number is not a number: the source
+        centres it under the figures, so flushing it against the
+        column's edge put every one of the decimal/binary fixture's dots
+        5-8px right of its printed position - two patches of mismatch
+        per dot instead of one. The gap between the mark and the
+        column's set edge is taken from their measured positions and
+        held open with an invisible rule; an hspace would not do, since a
+        trailing one on a raggedleft cell is trimmed away with the
+        paragraph's last glue.
+        """
+        ink_x0 = _table_md.get("column_ink_x0") or []
+        ink_x1 = _table_md.get("column_ink_x1") or []
+        if col_is_right is None or col >= len(col_is_right) or col >= len(ink_x0):
+            return text
+        scale = _A4_FULL_WIDTH_CM * 28.3465
+        if col_is_right[col]:
+            if ink_x1[col] is None:
+                return text
+            gap = (ink_x1[col] - x1) * scale
+            return text + f"\\rule{{{gap:.2f}pt}}{{0pt}}" if gap > 0.1 else text
+        if ink_x0[col] is None:
+            return text
+        gap = (x0 - ink_x0[col]) * scale
+        return f"\\rule{{{gap:.2f}pt}}{{0pt}}" + text if gap > 0.1 else text
 
     def _render_cell(cell: Any, col: int, row_idx: int = -1) -> str:
         if (
@@ -1980,6 +2059,8 @@ def _render_table(table: TableBlock) -> str:
         rendered = []
         for col, c in enumerate(cells):
             if (i, col) not in span_map:  # Only render if not spanned from above
+                if isinstance(c, str) and (i, col) in placeholder_x:
+                    c = _place_mark(c, col, *placeholder_x[(i, col)])
                 rendered.append(_render_cell(c, col, row_idx=i))
         extra = ""
         _row_extra_pt = raw_extra_pt[i] * _extra_scale if i < len(raw_extra_pt) else 0.0
