@@ -244,5 +244,6 @@ def run(name, fixture):
                 print(f"  {i:<5} {env:.5f}    {tallest:.5f}    {env / base:5.2f}   {txt[:44]}")
 
 
-run("FIXTURE_A (decimal/binary)", FIXTURE_A)
-run("FIXTURE_B (voltage regulator)", FIXTURE_B)
+if __name__ == "__main__":
+    run("FIXTURE_A (decimal/binary)", FIXTURE_A)
+    run("FIXTURE_B (voltage regulator)", FIXTURE_B)

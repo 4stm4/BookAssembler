@@ -243,7 +243,7 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
         ink_x1.append((clip.x0 + (_lo + int(_cols[-1]) + 1) / _RULE_ZOOM) / page_w)
 
     if (
-        internal_rule_x
+        internal_rule_x or rule_y
         or outer_left is not None or outer_right is not None
         or outer_top is not None or outer_bottom is not None
     ):
@@ -257,6 +257,12 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
             md["table_rule_x0"] = outer_left
         if outer_right is not None:
             md["table_rule_x1"] = outer_right
+        # Every horizontal rule, not just the outer two: the assembler sets
+        # a ruled row's height from the distance between its own rules,
+        # because a row's text steps are not that distance - sub-rows and
+        # wrapped cells inside one ruled band put them anywhere in it.
+        if rule_y:
+            md["rule_y"] = sorted(rule_y)
         if outer_top is not None:
             md["table_rule_y0"] = outer_top
         if outer_bottom is not None:

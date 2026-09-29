@@ -317,3 +317,28 @@ class TestRecoverPlaceholderMarks:
         drawn = _grid_with_placeholder_marks(table)
         assert [_cell_text(c) for c in drawn[1]] == ["1", "\u2022"]
         assert len(table.grid[1]) == 1
+
+
+class TestRuleDrivenRows:
+    def test_wrapped_line_count_uses_real_glyph_widths(self):
+        from src.assembler.latex_builder import _wrapped_line_count
+        text = "15.5 V < V|n < 27 V 5 mA < l0UT < 1 JO A K 15 W"
+        # at 5.48pt this sets on one line in the fixture's 123pt column
+        assert _wrapped_line_count(text, 123.0, 5.48, False) == 1
+        assert _wrapped_line_count(text, 60.0, 5.48, False) >= 2
+
+    def test_rules_are_drawn_only_where_the_source_has_them(self):
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        ph = 29.7 * 28.3465
+        rows = [["Head", "H2"], ["a", "1"], ["b", "2"], ["c", "3"]]
+        table = _table(rows, y0=0.30)
+        # cells are 0.02 apart (row centres at 0.305, 0.325, ...): measured rules
+        # above row 0, under row 0 and under the last row only
+        table.metadata = {"rule_y": [0.297, 0.315, 0.3765]}
+        doc = KnowledgeDocument(
+            title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]
+        )
+        tex = build_latex(doc)
+        body = tex[tex.index("\\begin{tabular}"):tex.index("\\end{tabular}")]
+        assert body.count("\\hline") == 3
