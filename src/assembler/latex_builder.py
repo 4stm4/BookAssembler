@@ -604,6 +604,42 @@ def _column_bins(grid: List[List[Any]]) -> Optional[List[float]]:
     return bins
 
 
+_A4_HEIGHT_PT = 29.7 * 28.3465
+
+
+def _wrapped_line_count(text: str, width_pt: float, size_pt: float, bold: bool) -> Optional[int]:
+    """How many lines text breaks into at width_pt, from real glyph widths.
+
+    Cells are set in TeX Gyre Termes, a Times clone, so the Times metrics
+    PyMuPDF carries (tiro / tibo) are the widths xelatex will lay out.
+    A flat average character width - the old estimate, 0.6em - is too
+    wide for a Times face: it broke the voltage-regulator fixture's
+    "Output Voltage" condition into two lines when it sets on one, and
+    every height computed from that was 6.6pt out. Greedy word wrap, no
+    hyphenation. None when the metrics are not available.
+    """
+    try:
+        import pymupdf
+    except ImportError:
+        return None
+    words = text.split()
+    if not words or width_pt <= 0 or size_pt <= 0:
+        return 1
+    font = pymupdf.Font("tibo" if bold else "tiro")
+    space = font.text_length(" ", fontsize=size_pt)
+    lines, current = 1, 0.0
+    for word in words:
+        width = font.text_length(word, fontsize=size_pt)
+        if current == 0.0:
+            current = width
+        elif current + space + width <= width_pt:
+            current += space + width
+        else:
+            lines += 1
+            current = width
+    return lines
+
+
 # A lone mark standing in for a missing value, not a value itself.
 _PLACEHOLDER_MARKS = {"\u2022", "\u00b7", "\u2219"}
 
@@ -1404,7 +1440,43 @@ def _render_table(table: TableBlock) -> str:
     # tables of this kind are ruled that way - measuring the fixtures
     # disproved it: the decimal/binary page is ruled that way, but the
     # voltage-regulator page rules under every single row.
+    # The source's own horizontal rules, measured by the analyzer
+    # (table.metadata["rule_y"]). When they are known they decide where
+    # a horizontal rule is drawn, instead of the cells' border flags: a
+    # flag is judged with a reach that scales with the glyphs, and it
+    # dropped the rule above the voltage-regulator fixture's header (5.3pt
+    # off against a 5.09pt reach) while inventing one under its "with
+    # line" row, where the source prints none.
+    _rules_pt = sorted(y * _A4_HEIGHT_PT for y in (_table_md.get("rule_y") or []))
+    _row_centre_pt: List[Optional[float]] = []
+    _row_top_pt: List[Optional[float]] = []
+    for _grow in grid:
+        _boxes = [
+            c.visual_layout.bounding_box for c in _grow
+            if getattr(c, "visual_layout", None) is not None and c.visual_layout.bounding_box is not None
+        ]
+        _row_centre_pt.append(
+            sum((b.y0 + b.y1) / 2.0 for b in _boxes) / len(_boxes) * _A4_HEIGHT_PT if _boxes else None
+        )
+        _row_top_pt.append(min(b.y0 for b in _boxes) * _A4_HEIGHT_PT if _boxes else None)
+
+    def _rule_below_pt(row: int) -> Optional[float]:
+        """The measured rule between row and the next, or under the last."""
+        lo = _row_centre_pt[row] if row < len(_row_centre_pt) else None
+        if lo is None:
+            return None
+        hi = _row_centre_pt[row + 1] if row + 1 < len(_row_centre_pt) else None
+        between = [r for r in _rules_pt if r > lo and (hi is None or r < hi)]
+        return between[0] if between else None
+
+    _top_rule_pt = (
+        max((r for r in _rules_pt if r < _row_centre_pt[0]), default=None)
+        if _rules_pt and _row_centre_pt and _row_centre_pt[0] is not None else None
+    )
+
     def _row_ruled_below(index: int) -> bool:
+        if _rules_pt:
+            return _rule_below_pt(index) is not None
         below = grid[index + 1] if index + 1 < len(grid) else []
         return _any_border(grid[index], "border_bottom") or _any_border(below, "border_top")
 
@@ -1418,8 +1490,9 @@ def _render_table(table: TableBlock) -> str:
     # technique itself in this measurement pipeline, not against either
     # attempt's specific choice of baseline - not attempted further here.
     body_lines = [f"\\begin{{tabular}}{{{col_spec}}}"]
-    _has_top_rule = bool(
-        has_any_border and grid and _any_border(grid[0], "border_top")
+    _has_top_rule = (
+        _top_rule_pt is not None if _rules_pt
+        else bool(has_any_border and grid and _any_border(grid[0], "border_top"))
     )
     if _has_top_rule:
         body_lines.append("\\hline")
@@ -1604,12 +1677,26 @@ def _render_table(table: TableBlock) -> str:
     def _row_line_count(row_idx: int) -> int:
         if col_width_cm is None or row_idx >= len(rendered_rows):
             return 1
-        _, texts = rendered_rows[row_idx]
+        styled_cells, texts = rendered_rows[row_idx]
         best = 1
         for col, raw in enumerate(texts):
             if col < len(is_wide) and is_wide[col] and raw and col < len(col_width_cm):
-                chars_per_line = max(1.0, col_width_cm[col] / max(_wrap_char_width_cm, 0.01))
-                lines = max(1, -(-len(raw) // int(chars_per_line)))
+                styled = styled_cells[col] if col < len(styled_cells) else ""
+                if isinstance(styled, tuple):
+                    if styled[1] > 1:
+                        # A \multirow cell's text lies over the rows it
+                        # spans and adds no height to this one.
+                        continue
+                    styled = styled[3]
+                m = re.search(r"\\fontsize\{([0-9.]+)\}", styled or "")
+                size = float(m.group(1)) if m else (median_pt or 8.0)
+                lines = _wrapped_line_count(
+                    raw.replace("\n", " "), col_width_cm[col] * 28.3465, size,
+                    "\\bfseries" in (styled or ""),
+                )
+                if lines is None:
+                    chars_per_line = max(1.0, col_width_cm[col] / max(_wrap_char_width_cm, 0.01))
+                    lines = max(1, -(-len(raw) // int(chars_per_line)))
                 best = max(best, lines)
         return best
 
@@ -2047,8 +2134,52 @@ def _render_table(table: TableBlock) -> str:
     # table_rule_y0) but emits no vskip (its border_top flags are all
     # False), and its fair overlay went 23.8% -> 25.9% and its matching
     # horizontals 3/15 -> 1/15 on that alone.
+    # With the rules measured, the air under each one is the source's own
+    # gap from that rule to the top of the row below it, less the gap
+    # LaTeX already leaves between a row's top and its glyphs (the strut
+    # sits 0.7 of the row high; cap and figure height is ~0.68 of the
+    # size). One figure for the whole table was wrong on the voltage-
+    # regulator fixture, whose rows sit 5.3, 3.2, 1.7pt... under their
+    # rules.
+    _natural_pad_pt = 0.7 * _base_line_pt - 0.68 * (median_pt or 8.0)
+
+    def _air_under_rule_pt(rule_pt: Optional[float], row: int) -> float:
+        top = _row_top_pt[row] if 0 <= row < len(_row_top_pt) else None
+        if rule_pt is None or top is None:
+            return 0.0
+        return max(0.0, (top - rule_pt) - _natural_pad_pt)
+
+    if _rules_pt and _top_rule_pt is not None:
+        _top_air_pt = _air_under_rule_pt(_top_rule_pt, 0)
     if _has_top_rule and _top_air_pt > 0.1:
         body_lines.append(f"\\noalign{{\\vskip {_top_air_pt:.2f}pt}}")
+
+    # Rule-driven row heights. For a ruled table the source's own rules are
+    # the ground truth for where each row ends: a row's text steps are not
+    # the distance between its rules once sub-rows or wrapped cells sit
+    # inside one ruled band, and deriving heights from text left the
+    # voltage-regulator fixture with 3 of its 15 horizontals on target and
+    # +27pt of drift, while every one of those rules had been detected to
+    # within 0.1pt.
+    #
+    # What this loop emits is fully known - a row is _base_line_pt tall
+    # plus one unstretched line per extra wrapped line, plus its
+    # \tabularnewline extra; a rule adds \arrayrulewidth (0.4pt); a vskip
+    # adds itself - so each drawn rule's position is tracked as it is
+    # emitted, and the extra of a row with a measured rule under it is
+    # solved to put that rule where the source has it, measured from the
+    # first drawn rule. Every target is taken from that anchor, not from
+    # the previous row, so a row clamped at its floor does not carry its
+    # error down the table.
+    _ARRAYRULE_PT = 0.4
+    _y_pt = 0.0            # emitted position of the current point
+    _anchor = None         # (emitted centre, measured position) of the first drawn rule
+    _pre_air_pt = 0.0      # vskip emitted under the rule just drawn
+    if _has_top_rule:
+        if _top_rule_pt is not None:
+            _anchor = (_ARRAYRULE_PT / 2.0, _top_rule_pt)
+        _y_pt = _ARRAYRULE_PT
+        _pre_air_pt = _top_air_pt if _top_air_pt > 0.1 else 0.0
 
     for i, (cells, _) in enumerate(rendered_rows):
         if has_any_border:
@@ -2094,7 +2225,13 @@ def _render_table(table: TableBlock) -> str:
         # its header - the header sits ABOVE its first rule there - and
         # pays for it: fair 23.8% -> 24.0%, matching horizontals 3/15 ->
         # 2/15, rule-to-rule +0.5pt -> +2.8pt.
-        if (
+        if _rules_pt:
+            # Rule-driven: the air below this rule is the next row's own,
+            # and it is NOT taken out of this row's extra - that extra is
+            # solved below to land the rule where the source has it.
+            if rule and i + 1 < len(rendered_rows):
+                _rule_air_pt = _air_under_rule_pt(_rule_below_pt(i), i + 1)
+        elif (
             rule
             and _has_top_rule
             and i < len(rendered_rows) - 1
@@ -2102,6 +2239,26 @@ def _render_table(table: TableBlock) -> str:
         ):
             _rule_air_pt = min(_top_air_pt, max(0.0, _row_extra_pt))
             _row_extra_pt -= _rule_air_pt
+        _row_h_pt = _base_line_pt + max(0, _row_line_count(i) - 1) * _unstretched_line_pt
+        _y_pt += _pre_air_pt
+        _measured = _rule_below_pt(i) if rule else None
+        if _measured is not None and _anchor is not None:
+            _target = _anchor[0] + (_measured - _anchor[1])
+            # A row keeps at least its own natural line boxes. Three
+            # quarters of one line was tried first and let the
+            # voltage-regulator fixture's "with line" / "Quiescent Current
+            # Change" / "with load" rows - three rows of text in an 8pt
+            # band - print on top of each other with a rule through them.
+            # A rule that cannot be reached lands a little low instead, and
+            # the rows after it recover, since each aims at the anchor.
+            _floor = -(_row_h_pt - _row_line_count(i) * _unstretched_line_pt)
+            _row_extra_pt = max(_floor, _target - _ARRAYRULE_PT / 2.0 - _y_pt - _row_h_pt)
+        _y_pt += _row_h_pt + _row_extra_pt
+        if rule:
+            if _anchor is None and _measured is not None:
+                _anchor = (_y_pt + _ARRAYRULE_PT / 2.0, _measured)
+            _y_pt += _ARRAYRULE_PT
+        _pre_air_pt = _rule_air_pt
         if abs(_row_extra_pt) > 0.01:
             extra = f"[{_row_extra_pt:.2f}pt]"
         if _rule_air_pt > 0.01:
