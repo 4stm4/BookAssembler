@@ -5,8 +5,9 @@ Text assertions (test_krm_roundtrip.py, test_assembled_table_pdf.py) already
 check cell content exactly, row for row. This checks what no text assert can:
 lay the rebuilt table on top of the source table and see whether the ink
 actually lands in the same places - by rendering both to images, cropping
-each to its own table's real bounding box, normalizing them to a common
-size, and comparing the two black/white ink matrices pixel by pixel.
+each the same way to its own table (text extent grown to its own frame
+rules), normalizing them to a common size, and comparing the two
+black/white ink matrices pixel by pixel.
 
 The rule: both crops become a black/white ink matrix, one is laid over the
 other, and more than MAX_MISMATCH of the pixels disagreeing fails the test.
@@ -49,39 +50,95 @@ def _table_texts(table: TableBlock, min_len: int = 1) -> list:
     return texts
 
 
+# Both crops are cut the SAME way: the table's text extent, grown on each
+# side to the nearest rule standing within _FRAME_REACH_PT of it (the
+# table's own frame, when it draws one), cut through the rule's centre.
+# Nothing is added to one side only. The crop used here before gave the
+# rebuild alone 4pt of margin left, right and below and max(row_h, 12pt)
+# above, while the source got none - which shifted every rebuilt pixel
+# against its source counterpart by that margin, so no border could
+# coincide however well it was placed.
+_FRAME_REACH_PT = 20.0
+_FRAME_RULE_SPAN = 0.6   # a rule covers most of the table; text never does
+
+
+def _grow_to_frame(fitz, page, rect):
+    """rect grown on each side to the nearest rule just outside it."""
+    import numpy as np
+    zoom = 3.0
+    clip = fitz.Rect(rect.x0 - _FRAME_REACH_PT, rect.y0 - _FRAME_REACH_PT,
+                     rect.x1 + _FRAME_REACH_PT, rect.y1 + _FRAME_REACH_PT) & page.rect
+    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
+    arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+    ink = arr[:, :, :3].mean(axis=2) < _INK_THRESHOLD
+
+    def px(value, origin):
+        return int(round((value - origin) * zoom))
+
+    x_lo, x_hi = px(rect.x0, clip.x0), px(rect.x1, clip.x0)
+    y_lo, y_hi = px(rect.y0, clip.y0), px(rect.y1, clip.y0)
+    rows = np.where(ink[:, x_lo:x_hi].mean(axis=1) > _FRAME_RULE_SPAN)[0]
+    cols = np.where(ink[y_lo:y_hi, :].mean(axis=0) > _FRAME_RULE_SPAN)[0]
+
+    def centres(indices, origin):
+        runs, start, prev = [], None, None
+        for i in indices:
+            if start is None:
+                start = prev = i
+            elif i - prev > 1:
+                runs.append((start + prev) / 2.0)
+                start = prev = i
+            else:
+                prev = i
+        if start is not None:
+            runs.append((start + prev) / 2.0)
+        return [origin + r / zoom for r in runs]
+
+    ys = centres(rows, clip.y0)
+    xs = centres(cols, clip.x0)
+    return fitz.Rect(
+        max((x for x in xs if x < rect.x0), default=rect.x0),
+        max((y for y in ys if y < rect.y0), default=rect.y0),
+        min((x for x in xs if x > rect.x1), default=rect.x1),
+        min((y for y in ys if y > rect.y1), default=rect.y1),
+    )
+
+
 def _source_table_rect(fitz, pdf_path: Path, page_index: int, table: TableBlock):
     doc = fitz.open(pdf_path)
     page = doc[page_index]
     pw, ph = page.rect.width, page.rect.height
     bb = table.visual_layout.bounding_box
-    rect = fitz.Rect(bb.x0 * pw, bb.y0 * ph, bb.x1 * pw, bb.y1 * ph)
+    rect = _grow_to_frame(fitz, page, fitz.Rect(bb.x0 * pw, bb.y0 * ph, bb.x1 * pw, bb.y1 * ph))
     doc.close()
     return rect
 
 
 def _output_table_rect(fitz, pdf_path: Path, page_index: int, texts: list):
-    """Locate a table on the assembled PDF by its own distinctive cell text.
+    """Locate a table on the assembled PDF by its own cell text.
 
-    Only tokens of 6+ characters are trusted as anchors - short numbers and
-    words risk colliding with unrelated text elsewhere on a page with more
-    than one table, the same risk a plain index-based crop would have.
+    Tokens of 6+ characters anchor it - short numbers and words risk
+    colliding with unrelated text elsewhere on the page (the page number,
+    another table). Every cell's text found within _FRAME_REACH_PT of that
+    anchor then makes up the table's text extent, the same way the source's
+    extent is made of all of its cells.
     """
     doc = fitz.open(pdf_path)
     page = doc[page_index]
-    strong = [t for t in texts if len(t) >= 6]
-    rects = []
-    for t in strong:
-        rects.extend(page.search_for(t))
-    doc.close()
-    if not rects:
+    strong = [r for t in texts if len(t) >= 6 for r in page.search_for(t)]
+    if not strong:
+        doc.close()
         return None
-    x0 = min(r.x0 for r in rects)
-    y0 = min(r.y0 for r in rects)
-    x1 = max(r.x1 for r in rects)
-    y1 = max(r.y1 for r in rects)
-    row_count = max(1, len(set(round(r.y0, 1) for r in rects)))
-    row_h = (y1 - y0) / row_count
-    return fitz.Rect(x0 - 4, y0 - max(row_h, 12), x1 + 4, y1 + 4)
+    anchor = fitz.Rect(min(r.x0 for r in strong), min(r.y0 for r in strong),
+                       max(r.x1 for r in strong), max(r.y1 for r in strong))
+    near = fitz.Rect(anchor.x0 - _FRAME_REACH_PT, anchor.y0 - _FRAME_REACH_PT,
+                     anchor.x1 + _FRAME_REACH_PT, anchor.y1 + _FRAME_REACH_PT)
+    rects = [r for t in set(texts) for r in page.search_for(t) if near.contains(r)]
+    extent = fitz.Rect(min(r.x0 for r in rects), min(r.y0 for r in rects),
+                       max(r.x1 for r in rects), max(r.y1 for r in rects))
+    rect = _grow_to_frame(fitz, page, extent)
+    doc.close()
+    return rect
 
 
 def _render_crop(fitz, pdf_path: Path, page_index: int, rect, zoom: float = 2.0):
@@ -101,7 +158,12 @@ _INK_THRESHOLD = 160     # 0-255 grey level below which a pixel counts as ink
 # One number for every fixture on purpose: a rebuilt table either lands on
 # top of the page it came from or it does not, and a per-fixture exception
 # is just a way to keep a failing render green.
-MAX_MISMATCH = 0.03
+#
+# Raised from 3% to 10% on 2026-09-30 by the maintainer's explicit
+# decision, together with the symmetric crop above. The rest is glyph
+# shape: the source is a scan set in a different face, and its ink edges
+# can never coincide pixel for pixel with any font the rebuild sets.
+MAX_MISMATCH = 0.10
 
 
 def _ink_mask(img):
