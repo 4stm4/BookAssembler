@@ -965,6 +965,12 @@ def _render_table(table: TableBlock) -> str:
     # inside the real-rule branch below; zero everywhere else.
     _col_indent_pt = [0.0] * ncols
     _table_md = getattr(table, "metadata", None) or {}
+    # The rules' printed weight, in TeX points (measured in PDF points).
+    # LaTeX's own 0.4pt default when the source's was not measured.
+    _rule_w_pt = (
+        _table_md["rule_width_pt"] * 72.27 / 72.0
+        if _table_md.get("rule_width_pt") else 0.4
+    )
     rule_x = _table_md.get("column_rule_x")
     if bb is not None and rule_x and len(rule_x) == ncols - 1:
         # Every INTERNAL boundary here is a rule the source actually
@@ -1179,7 +1185,7 @@ def _render_table(table: TableBlock) -> str:
             # decimal/binary fixture, its four verticals sat +0.7, +0.9,
             # +1.5 and +2.1pt out against the source's, about half a
             # point per column, with 5 rules x 0.4pt = 2.0pt of it.
-            _ARRAYRULE_CM = 0.4 / _PT_PER_CM
+            _ARRAYRULE_CM = _rule_w_pt / _PT_PER_CM
             col_width_cm = [
                 max(
                     _content_floor_cm(i),
@@ -2183,7 +2189,7 @@ def _render_table(table: TableBlock) -> str:
     # first drawn rule. Every target is taken from that anchor, not from
     # the previous row, so a row clamped at its floor does not carry its
     # error down the table.
-    _ARRAYRULE_PT = 0.4
+    _ARRAYRULE_PT = _rule_w_pt
     _y_pt = 0.0            # emitted position of the current point
     _anchor = None         # (emitted centre, measured position) of the first drawn rule
     _pre_air_pt = 0.0      # vskip emitted under the rule just drawn
@@ -2334,6 +2340,7 @@ def _render_table(table: TableBlock) -> str:
         "\\begin{center}",
         f"\\renewcommand{{\\arraystretch}}{{{dynamic_arraystretch:.3f}}}",
         f"\\setlength{{\\tabcolsep}}{{{_tabcolsep_pt:.2f}pt}}",
+        f"\\setlength{{\\arrayrulewidth}}{{{_rule_w_pt:.2f}pt}}",
         size_cmd,
         tabular,
         "\\end{center}",
