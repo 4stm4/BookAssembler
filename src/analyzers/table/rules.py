@@ -1247,6 +1247,68 @@ _MARK_FILL_MIN = 0.6
 _MARK_CELL_MARGIN_PT = 1.5  # swallows glyph overhang the OCR box clips
 
 
+def _fold_label_rows(table) -> None:
+    """Fold a row holding nothing but a label beside a block of sub-rows
+    into the sub-row above it, once the rules are known.
+
+    The voltage-regulator fixture prints "Quiescent Current Change" once,
+    centred on the rule between its "with line" and "with load" sub-rows,
+    and grouping by y gives it a row of its own between them. A row is
+    folded only when it is one real label (not a mark), no measured rule
+    separates it from the row above, and it shares no x with the rows on
+    either side - so it prints beside them, not under their content. The
+    builder then sets it beside "with line" and lowers it to where it
+    was printed.
+    """
+    md = getattr(table, "metadata", None) or {}
+    rules = md.get("rule_y") or []
+    grid = table.grid
+    spanned = {r for r, _ in (getattr(table, "span_map", None) or {})}
+
+    def boxes(row):
+        return [c.visual_layout.bounding_box for c in row
+                if c.visual_layout is not None and c.visual_layout.bounding_box is not None]
+
+    def centre(row):
+        bs = boxes(row)
+        return sum((b.y0 + b.y1) / 2.0 for b in bs) / len(bs) if bs else None
+
+    def beside(box, row):
+        return all(not _x_overlaps(box, b) for b in boxes(row))
+
+    kept: List[List["TableCell"]] = []
+    new_index: Dict[int, int] = {}
+    for i, row in enumerate(grid):
+        label = row[0] if len(row) == 1 else None
+        box = boxes([label])[0] if label is not None and boxes([label]) else None
+        above = centre(kept[-1]) if kept else None
+        here = centre(row)
+        if (
+            box is not None and above is not None and i + 1 < len(grid) and i not in spanned
+            and len(_cell_text_of(label).strip()) > 2
+            and not any(above < r < here for r in rules)
+            and beside(box, kept[-1]) and beside(box, grid[i + 1])
+        ):
+            kept[-1] = sorted(kept[-1] + row, key=_cell_x0)
+        else:
+            kept.append(row)
+        new_index[i] = len(kept) - 1
+    if len(kept) == len(grid):
+        return
+    table.grid = kept
+    table.row_count = len(kept)
+    table.span_map = _build_span_map(kept)
+    for mark in md.get("placeholder_marks", []):
+        mark["row"] = new_index.get(mark["row"], mark["row"])
+
+
+def _cell_text_of(cell: "TableCell") -> str:
+    return " ".join(
+        span.text for block in cell.content for inline in getattr(block, "inlines", [])
+        for span in getattr(inline, "spans", []) if hasattr(span, "text")
+    )
+
+
 def _ink_blobs(np, mask) -> List[List[Tuple[int, int]]]:
     """8-connected blobs of a boolean mask, as lists of (y, x) pixels."""
     seen = np.zeros_like(mask, dtype=bool)

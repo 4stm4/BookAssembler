@@ -619,3 +619,33 @@ class TestPlacementByBoxes:
         cells = [_make_cell(t, b, s, 0) for t, b, s in parts]
         assert all(c.metadata.get("x_estimated") for c in cells)
         assert not _make_cell("63", NormalizedRect(x0=0.2, y0=0.3, x1=0.25, y1=0.31), None, 0).metadata.get("x_estimated")
+
+
+class TestFoldLabelRows:
+    @staticmethod
+    def _table(rules):
+        from src.analyzers.table.rules import _build_span_map
+        rows = [[_cell("with line", x0=0.20, y0=0.300), _cell("0.8", x0=0.33, y0=0.300)],
+                [_cell("Quiescent", x0=0.08, y0=0.305)],
+                [_cell("with load", x0=0.20, y0=0.312), _cell("0.5", x0=0.33, y0=0.312)]]
+        rows[1][0].visual_layout = VisualLayout(
+            bounding_box=NormalizedRect(x0=0.08, y0=0.305, x1=0.18, y1=0.312), page_or_screen_index=0)
+        table = TableBlock(grid=rows, row_count=3, column_count=2,
+                           visual_layout=VisualLayout(bounding_box=NormalizedRect(x0=0.08, y0=0.30, x1=0.38, y1=0.32),
+                                                      page_or_screen_index=0))
+        table.span_map = _build_span_map(rows)
+        table.metadata = {"rule_y": rules}
+        return table
+
+    def test_a_label_beside_its_sub_rows_joins_the_one_above(self):
+        from src.analyzers.table.rules import _fold_label_rows, _cell_text_of
+        table = self._table([0.298, 0.3115, 0.323])
+        _fold_label_rows(table)
+        assert table.row_count == 2
+        assert [_cell_text_of(c) for c in table.grid[0]] == ["Quiescent", "with line", "0.8"]
+
+    def test_a_rule_between_keeps_it_a_row(self):
+        from src.analyzers.table.rules import _fold_label_rows
+        table = self._table([0.298, 0.307, 0.3115, 0.323])
+        _fold_label_rows(table)
+        assert table.row_count == 3
