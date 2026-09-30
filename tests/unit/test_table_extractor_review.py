@@ -675,3 +675,28 @@ class TestUnreadTextBand:
         doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
         # header and first row lifted by their bands, the second by the usual lift
         assert build_latex(doc).count("\\noalign{\\vskip -") == 3
+
+
+class TestSplitCellsAtRules:
+    def test_words_on_both_sides_of_a_rule_become_two_cells(self):
+        import pymupdf
+        from src.analyzers.table.rules import _cell_text_of, _split_cells_at_rules
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((120, 300), "Output Voltage", fontsize=8)
+        page.insert_text((230, 300), "IOUT", fontsize=8)
+        pw, ph = page.rect.width, page.rect.height
+        words = page.get_text("words")
+        x0, x1 = min(w[0] for w in words), max(w[2] for w in words)
+        y0, y1 = min(w[1] for w in words), max(w[3] for w in words)
+        cell = TableCell(
+            content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text="Output Voltage IOUT")])])],
+            visual_layout=VisualLayout(bounding_box=NormalizedRect(x0=x0 / pw, y0=y0 / ph, x1=x1 / pw, y1=y1 / ph),
+                                       page_or_screen_index=0),
+        )
+        table = TableBlock(grid=[[cell]], row_count=1, column_count=2,
+                           visual_layout=VisualLayout(bounding_box=cell.visual_layout.bounding_box, page_or_screen_index=0))
+        table.metadata = {"column_rule_x": [220 / pw]}
+        _split_cells_at_rules(page, table)
+        assert [_cell_text_of(c) for c in table.grid[0]] == ["Output Voltage", "IOUT"]
+        assert table.grid[0][1].visual_layout.bounding_box.x0 * pw >= 229

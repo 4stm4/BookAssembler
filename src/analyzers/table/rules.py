@@ -1247,6 +1247,70 @@ _MARK_FILL_MIN = 0.6
 _MARK_CELL_MARGIN_PT = 1.5  # swallows glyph overhang the OCR box clips
 
 
+# How far past a column rule a word's centre must lie to count as the
+# other column's: a word straddling the rule is left where it is.
+_RULE_SIDE_MARGIN_PT = 2.0
+
+
+def _split_cells_at_rules(page, table) -> None:
+    """Split a cell whose words stand on both sides of a column rule.
+
+    The text layer can run two cells together across the rule between
+    them: on the voltage-regulator fixture "Average Temperature Coefficient
+    of Output Voltage" and "IOUT = 5 mA" came as one line, and the rebuild
+    set it all in CHARACTERISTICS, where it wrapped and ran into the next
+    column. The rules are the grid, so each part goes to its side, placed
+    by its words' own boxes on the page. Only a one-line cell whose words
+    are exactly its text is touched.
+    """
+    md = getattr(table, "metadata", None) or {}
+    rules = md.get("column_rule_x") or []
+    if not rules:
+        return
+    pw, ph = page.rect.width, page.rect.height
+    words = page.get_text("words")
+    for r, row in enumerate(table.grid):
+        for cell in list(row):
+            box = cell.visual_layout.bounding_box if cell.visual_layout else None
+            text = _cell_text_of(cell)
+            if box is None or "\n" in text:
+                continue
+            inside = [
+                w for w in words
+                if box.x0 * pw - 1 <= (w[0] + w[2]) / 2 <= box.x1 * pw + 1
+                and box.y0 * ph - 1 <= (w[1] + w[3]) / 2 <= box.y1 * ph + 1
+            ]
+            if " ".join(w[4] for w in inside) != " ".join(text.split()):
+                continue
+            for rule in rules:
+                x = rule * pw
+                left = [w for w in inside if (w[0] + w[2]) / 2 < x - _RULE_SIDE_MARGIN_PT]
+                right = [w for w in inside if (w[0] + w[2]) / 2 > x + _RULE_SIDE_MARGIN_PT]
+                if not left or not right or len(left) + len(right) != len(inside):
+                    continue
+
+                def rect(ws):
+                    return NormalizedRect(
+                        x0=min(w[0] for w in ws) / pw, y0=min(w[1] for w in ws) / ph,
+                        x1=max(w[2] for w in ws) / pw, y1=max(w[3] for w in ws) / ph,
+                    )
+
+                style = cell.visual_layout.style
+                cell.content = [ParagraphBlock(
+                    inlines=[TextLineInline(spans=[StyledTextSpan(text=" ".join(w[4] for w in left))])],
+                )]
+                cell.visual_layout = VisualLayout(
+                    bounding_box=rect(left), page_or_screen_index=cell.visual_layout.page_or_screen_index,
+                    style=style,
+                )
+                part = _make_cell(" ".join(w[4] for w in right), rect(right), style,
+                                  cell.visual_layout.page_or_screen_index)
+                row.append(part)
+                row.sort(key=_cell_x0)
+                break
+    table.span_map = _build_span_map(table.grid)
+
+
 def _fold_label_rows(table) -> None:
     """Fold a row holding nothing but a label beside a block of sub-rows
     into the sub-row above it, once the rules are known.
