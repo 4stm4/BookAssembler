@@ -30,3 +30,5 @@ for y, kind, text in sorted(events):
     print(f"{y * PH:7.1f}  {kind:7s} {text}")
 print("text under each rule, top..bottom pt:",
       " ".join("-" if b is None else f"{b[0]:.1f}..{b[1]:.1f}" for b in md.get("text_band_pt", [])))
+print("sub-column rules (x, from rule y, to rule y):",
+      " ".join(f"{x * PW:.1f}@{a * PH:.1f}..{b * PH:.1f}" for x, a, b in md.get("sub_rule", [])))

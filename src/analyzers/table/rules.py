@@ -108,6 +108,48 @@ def _text_bands(np, ink, horizontal) -> List[Optional[List[float]]]:
     return bands
 
 
+# Share of a band's pixel rows a column must be inked on to be a rule
+# through that band: a glyph's stroke never runs a whole row's height.
+_SUB_RULE_COVER = 0.9
+# Pixel columns apart that still belong to one rule, from band to band.
+_SUB_RULE_JOIN_PX = 3
+
+
+def _sub_column_rules(np, ink, horizontal, rule_cols) -> List[Tuple[float, int, int]]:
+    """Vertical rules that run between two horizontal rules only, as
+    (pixel column, first rule index, last rule index).
+
+    The voltage-regulator fixture splits CONDITIONS into "Tj = 25 C" and
+    its ranges for the Line and Load Regulation rows only, and parts
+    "with line"/"with load" off their label for two rows: rules too short
+    to count as column rules, drawn from one horizontal rule to another.
+    Each band between two horizontal rules is read on its own, the table's
+    full column rules left out, and a rule found in consecutive bands at
+    the same place is one rule."""
+    found: List[Tuple[float, int, int]] = []
+    for k in range(len(horizontal) - 1):
+        band = ink[horizontal[k][1]:horizontal[k + 1][0]]
+        if band.shape[0] < 3:
+            continue
+        lines = (band.mean(axis=0) >= _SUB_RULE_COVER) & ~rule_cols
+        xs = np.nonzero(lines)[0]
+        groups: List[List[int]] = []
+        for x in xs:
+            if groups and x - groups[-1][-1] <= 1:
+                groups[-1].append(int(x))
+            else:
+                groups.append([int(x)])
+        for g in groups:
+            centre = (g[0] + g[-1]) / 2.0
+            for i, (x, first, last) in enumerate(found):
+                if last == k and abs(x - centre) <= _SUB_RULE_JOIN_PX:
+                    found[i] = (x, first, k + 1)
+                    break
+            else:
+                found.append((centre, k, k + 1))
+    return found
+
+
 def _render_table_ink(np, pymupdf, page, bbox):
     """The table's region as an ink mask, with its rules found.
 
@@ -343,6 +385,11 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
         if rule_y:
             md["rule_y"] = sorted(rule_y)
             md["rule_x_extent"] = [e for _, e in sorted(zip(rule_y, rule_x_extent))]
+            # Sub-column rules, by x and the two horizontal rules they join.
+            md["sub_rule"] = [
+                [(clip.x0 + (x + 0.5) / _RULE_ZOOM) / page_w, rule_y[first], rule_y[last]]
+                for x, first, last in _sub_column_rules(np, ink, horizontal, _rule_cols)
+            ]
             # Where the source printed the text under each rule, off the
             # ink: a cell's box comes from the text layer and says nothing
             # about where the glyphs actually sit.

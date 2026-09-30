@@ -1676,6 +1676,32 @@ def _render_table(table: TableBlock) -> str:
             f"\\vrule width {b - a:.2f}pt height \\arrayrulewidth depth 0pt\\hss}}}}"
         )
 
+    _sub_rules = [
+        (x, y0 * _A4_HEIGHT_PT, y1 * _A4_HEIGHT_PT) for x, y0, y1 in (_table_md.get("sub_rule") or [])
+    ]
+
+    def _sub_rules_from(rule_pt: Optional[float]) -> str:
+        """The sub-column rules hanging from the rule at rule_pt.
+
+        Each is a \\vrule of the table's rule weight in a zero-width box,
+        as deep as the distance to the rule it ends on, taken straight back
+        with a \\vskip: the rows under it keep the heights the rule solve
+        gave them, and every rule it joins lands where it was measured, so
+        the segment meets both ends."""
+        if rule_pt is None or _emitted_bounds_pt is None:
+            return ""
+        out = ""
+        for x, y0, y1 in _sub_rules:
+            if abs(y0 - rule_pt) > 0.5:
+                continue
+            depth = y1 - y0 - _rule_w_pt
+            left = _to_tabular_pt(x) - _rule_w_pt / 2.0
+            out += (
+                f"\\noalign{{\\hbox to 0pt{{\\hskip {left:.2f}pt\\vrule width {_rule_w_pt:.2f}pt "
+                f"height 0pt depth {depth:.2f}pt\\hss}}\\vskip -{depth:.2f}pt}}"
+            )
+        return out
+
     def _row_ruled_below(index: int) -> bool:
         if _rules_pt:
             return _rule_below_pt(index) is not None
@@ -2563,6 +2589,8 @@ def _render_table(table: TableBlock) -> str:
             if _row_extra_pt > 0:
                 _emitted_pt += max(0, _row_line_count(i) - 1) * _unstretched_line_pt
             extra = f"[{_emitted_pt:.2f}pt]"
+        if rule and _rules_pt:
+            rule += _sub_rules_from(_rule_below_pt(i))
         if abs(_rule_air_pt) > 0.01:
             rule = rule + f"\\noalign{{\\vskip {_rule_air_pt:.2f}pt}}"
         # \tabularnewline, not bare "\\ " - a row ending in a p{} column

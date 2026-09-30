@@ -709,3 +709,61 @@ class TestOneLineMultirow:
                 [_cell("bb", x0=0.20, y0=0.34), _cell("2", x0=0.33, y0=0.34)]]
         rows[1][0].row_span = 2
         assert "\\multirow{2}{*}{" in _ruled_tex(rows)
+
+
+class TestSubColumnRules:
+    def test_a_rule_between_two_horizontals_only_is_found(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _mark_cell_borders
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        pw, ph = page.rect.width, page.rect.height
+        for x in (200.0, 300.0, 400.0):
+            page.draw_line((x, 300), (x, 420), width=1.5)
+        for y in (300.0, 340.0, 380.0, 420.0):
+            page.draw_line((200, y), (400, y), width=1.5)
+        page.draw_line((250, 340), (250, 380), width=1.5)   # the middle band only
+        cells = [
+            TableCell(
+                content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text="x")])])],
+                visual_layout=VisualLayout(
+                    bounding_box=NormalizedRect(x0=x0 / pw, y0=y0 / ph, x1=(x0 + 20) / pw, y1=(y0 + 12) / ph),
+                    page_or_screen_index=0,
+                ),
+            )
+            for y0 in (314, 354, 394) for x0 in (210, 330)
+        ]
+        table = TableBlock(
+            grid=[cells[0:2], cells[2:4], cells[4:6]], row_count=3, column_count=2,
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=210 / pw, y0=314 / ph, x1=350 / pw, y1=406 / ph),
+                page_or_screen_index=0,
+            ),
+        )
+        _mark_cell_borders(np, pymupdf, page, table)
+        subs = table.metadata["sub_rule"]
+        assert len(subs) == 1
+        x, y0, y1 = subs[0]
+        assert abs(x * pw - 250) < 1 and abs(y0 * ph - 340) < 1 and abs(y1 * ph - 380) < 1
+
+    def test_it_is_drawn_from_rule_to_rule(self):
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("L1", x0=0.10, y0=0.32), _cell("aa", x0=0.20, y0=0.32), _cell("1", x0=0.33, y0=0.32)],
+                [_cell("L2", x0=0.10, y0=0.34), _cell("bb", x0=0.20, y0=0.34), _cell("2", x0=0.33, y0=0.34)]]
+        grid = [[_styled(c) for c in row] for row in rows]
+        table = TableBlock(grid=grid, row_count=3, column_count=3, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.40, y1=0.35), page_or_screen_index=0))
+        for row in grid:
+            for cell in row:
+                cell.border_left = cell.border_right = True
+        table.metadata = {"column_rule_x": [0.175, 0.275], "rule_y": [0.298, 0.3185, 0.3385, 0.3585],
+                          "sub_rule": [[0.22, 0.3185, 0.3585]]}
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        tex = build_latex(doc)
+        # hung from the second rule, as deep as the 0.04 of the page to the last
+        assert tex.count("height 0pt depth") == 1
+        # (0.3585 - 0.3185) x 845.04pt, less the 0.4pt rule weight
+        assert "depth 33.40pt" in tex
