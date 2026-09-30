@@ -604,7 +604,14 @@ def _column_bins(grid: List[List[Any]]) -> Optional[List[float]]:
     return bins
 
 
-_A4_HEIGHT_PT = 29.7 * 28.3465
+# TeX points per centimetre. A TeX "pt" is 1/72.27 in, not the PDF's
+# 1/72 in (bp), and every length here is emitted as "pt": converting
+# with the bp figure (_PT_PER_CM) made every emitted length 0.37% short of
+# what was measured - 1.4pt over the decimal/binary fixture's 365pt,
+# where its rows stepped 14.717 in the PDF against 14.773 intended.
+_PT_PER_CM = 72.27 / 2.54
+
+_A4_HEIGHT_PT = 29.7 * _PT_PER_CM
 
 
 def _wrapped_line_count(text: str, width_pt: float, size_pt: float, bold: bool) -> Optional[int]:
@@ -1030,7 +1037,7 @@ def _render_table(table: TableBlock) -> str:
                     continue
                 _pad_pt = (
                     fractions[_i] - (col_max_x1[_i] - col_min_x0[_i])
-                ) * _A4_FULL_WIDTH_CM * 28.3465
+                ) * _A4_FULL_WIDTH_CM * _PT_PER_CM
                 if _pad_pt > 0:
                     _real_pads_pt.append(_pad_pt)
             if _real_pads_pt:
@@ -1041,7 +1048,7 @@ def _render_table(table: TableBlock) -> str:
                 # end up touching in a table the source printed with
                 # almost no padding at all.
                 _tabcolsep_pt = max(0.5, min(4.0, min(_real_pads_pt) / 2.0))
-            _TABCOLSEP_CM = _tabcolsep_pt / 28.3465
+            _TABCOLSEP_CM = _tabcolsep_pt / _PT_PER_CM
 
             # What the source indents each column by, beyond the
             # tabcolsep every column now gets. Taken from the analyzer's
@@ -1063,10 +1070,10 @@ def _render_table(table: TableBlock) -> str:
                         continue
                     _left_pt = (
                         _ink_x0[_i] - boundaries[_i]
-                    ) * _A4_FULL_WIDTH_CM * 28.3465
+                    ) * _A4_FULL_WIDTH_CM * _PT_PER_CM
                     _right_pt = (
                         boundaries[_i + 1] - _ink_x1[_i]
-                    ) * _A4_FULL_WIDTH_CM * 28.3465
+                    ) * _A4_FULL_WIDTH_CM * _PT_PER_CM
                     _set_side_pt = min(_left_pt, _right_pt)
                     # The analyzer's ink scan has to start clear of the
                     # rule (3pt) and a printed rule is only ~1.7pt wide
@@ -1172,7 +1179,7 @@ def _render_table(table: TableBlock) -> str:
             # decimal/binary fixture, its four verticals sat +0.7, +0.9,
             # +1.5 and +2.1pt out against the source's, about half a
             # point per column, with 5 rules x 0.4pt = 2.0pt of it.
-            _ARRAYRULE_CM = 0.4 / 28.3465
+            _ARRAYRULE_CM = 0.4 / _PT_PER_CM
             col_width_cm = [
                 max(
                     _content_floor_cm(i),
@@ -1359,7 +1366,7 @@ def _render_table(table: TableBlock) -> str:
         ink_x1 = _table_md.get("column_ink_x1") or []
         if col_is_right is None or col >= len(col_is_right) or col >= len(ink_x0):
             return text
-        scale = _A4_FULL_WIDTH_CM * 28.3465
+        scale = _A4_FULL_WIDTH_CM * _PT_PER_CM
         if col_is_right[col]:
             if ink_x1[col] is None:
                 return text
@@ -1696,7 +1703,7 @@ def _render_table(table: TableBlock) -> str:
                 m = re.search(r"\\fontsize\{([0-9.]+)\}", styled or "")
                 size = float(m.group(1)) if m else (median_pt or 8.0)
                 lines = _wrapped_line_count(
-                    raw.replace("\n", " "), col_width_cm[col] * 28.3465, size,
+                    raw.replace("\n", " "), col_width_cm[col] * _PT_PER_CM, size,
                     "\\bfseries" in (styled or ""),
                 )
                 if lines is None:
@@ -1905,7 +1912,7 @@ def _render_table(table: TableBlock) -> str:
         # true height in just adds the unmodelled 14.5pt on top again.
         # Fixing this properly means modelling what the formula is
         # missing, not swapping its input.
-        target_height_pt = (bb.y1 - bb.y0) * _A4_FULL_HEIGHT_CM * 28.3465
+        target_height_pt = (bb.y1 - bb.y0) * _A4_FULL_HEIGHT_CM * _PT_PER_CM
         # The row_gaps-driven _extra_ratio (above) sums one term per
         # GAP (len(rendered_rows)-1 of them - there is no "trailing
         # gap" after the last row), but _total_lines counts one unit
@@ -1965,7 +1972,7 @@ def _render_table(table: TableBlock) -> str:
     # actually has. On a table without sub-rows the two agree anyway
     # (14.3 against 14.8pt on the decimal/binary fixture).
     _real_gaps_pt = sorted(
-        g * _A4_FULL_HEIGHT_CM * 28.3465 for g in row_gaps if g and g > 0
+        g * _A4_FULL_HEIGHT_CM * _PT_PER_CM for g in row_gaps if g and g > 0
     )
     _baseline_gap_pt = (
         _real_gaps_pt[len(_real_gaps_pt) // 2] if _real_gaps_pt else 0.0
@@ -2047,7 +2054,7 @@ def _render_table(table: TableBlock) -> str:
     for i in range(len(rendered_rows)):
         gap = row_gaps[i] if i < len(row_gaps) else None
         surplus = (
-            (gap * _A4_FULL_HEIGHT_CM * 28.3465) - _baseline_gap_pt
+            (gap * _A4_FULL_HEIGHT_CM * _PT_PER_CM) - _baseline_gap_pt
             if gap and _baseline_gap_pt > 0 else 0.0
         )
         content = (
@@ -2068,7 +2075,7 @@ def _render_table(table: TableBlock) -> str:
     # and that 5pt is the vertical offset the border mask shows.
     # Appended here rather than beside the \hline itself because the
     # page-height constant is only bound further down.
-    _page_h_pt = _A4_FULL_HEIGHT_CM * 28.3465
+    _page_h_pt = _A4_FULL_HEIGHT_CM * _PT_PER_CM
     # These come from bb, an OCR box that on a scan sits INSIDE the ink
     # it covers, and measuring them from the ink instead was tried and
     # lost - not because the measurement is wrong, but because the error
