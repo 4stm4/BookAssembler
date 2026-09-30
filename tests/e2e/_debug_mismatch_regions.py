@@ -117,24 +117,37 @@ for s0, s1 in _sg:
     print(f"    {s0:3d}..{s1:3d} | {o0:3d}..{o1:3d} | {x[lo:hi + 1].sum():5d}")
 print(f"  total mismatch px {total}")
 
-# where each band's text ink sits, source against rebuild: the ink rows'
-# centroid and extent inside each band between two full rules, in pt
+# where each band's text ink sits, source against rebuild: its top (the
+# first pixel row of glyphs under the rule, the rule's fringe skipped) and
+# its bottom (the last row of glyphs), in pt from the band's top, with
+# vertical rules - any column inked down most of the band - left out
 _pt = (src_rect.height / H)
-print("  text in each band (source | rebuild, pt from the band's top rule; centroid, top..bottom):")
+print("  text in each band, pt from the band's top rule (source | rebuild):")
 _bands = [(g0[1] + 1, g1[0]) for g0, g1 in zip(_sg, _sg[1:])]
+
+
+def _text_rows(m, lo, hi):
+    band = m[lo:hi]
+    cover = band[:, band.mean(axis=0) < 0.8].mean(axis=1)
+    text = cover >= 0.03
+    # the rules' own blurred fringes at either end of the band
+    top, bottom = 0, len(text)
+    while top < bottom and text[top]:
+        top += 1
+    while bottom > top and text[bottom - 1]:
+        bottom -= 1
+    rows = np.nonzero(text[top:bottom])[0] + top
+    if not rows.size:
+        return None
+    return rows[0] * _pt, (rows[-1] + 1) * _pt
+
+
+_d = []
 for lo, hi in _bands:
-    def _prof(m):
-        body = m[lo:hi]
-        rows = body.mean(axis=1)
-        rows = np.where(rows > 0.5, 0, rows)   # a rule row is not text
-        if rows.sum() == 0:
-            return None
-        ys = np.arange(lo, hi)
-        c = (rows * ys).sum() / rows.sum()
-        inked = ys[rows > 0.01]
-        return c, inked.min(), inked.max()
-    s, o = _prof(a), _prof(b)
-    if s and o:
-        print(f"    band {lo:3d}..{hi:3d}: {(s[0] - lo) * _pt:5.2f} ({(s[1] - lo) * _pt:4.1f}..{(s[2] - lo) * _pt:4.1f})"
-              f" | {(o[0] - lo) * _pt:5.2f} ({(o[1] - lo) * _pt:4.1f}..{(o[2] - lo) * _pt:4.1f})"
-              f"   d {(o[0] - s[0]) * _pt:+.2f}")
+    s_, o_ = _text_rows(a, lo, hi), _text_rows(b, lo, hi)
+    if s_ and o_:
+        _d.append(o_[0] - s_[0])
+        print(f"    band {lo:3d}..{hi:3d}: top {s_[0]:4.1f} | {o_[0]:4.1f} ({o_[0] - s_[0]:+.1f})"
+              f"   bottom {s_[1]:4.1f} | {o_[1]:4.1f} ({o_[1] - s_[1]:+.1f})")
+if _d:
+    print(f"  text top, rebuild minus source: median {sorted(_d)[len(_d) // 2]:+.2f}pt")

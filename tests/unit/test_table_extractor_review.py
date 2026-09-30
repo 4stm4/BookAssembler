@@ -576,3 +576,28 @@ class TestSizeNoise:
         tex = _ruled_tex(rows)
         assert "\\fontsize{3.12}" not in tex
         assert "\\fontsize{8.00}{9.60}\\selectfont small" in tex
+
+
+class TestTextUnderRules:
+    def test_text_printed_close_under_a_rule_is_lifted_to_it(self):
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("aa", x0=0.20, y0=0.32), _cell("1", x0=0.33, y0=0.32)]]
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        grid = [[_styled(c) for c in row] for row in rows]
+        table = TableBlock(
+            grid=grid, row_count=2, column_count=3,
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.40, y1=0.34), page_or_screen_index=0,
+            ),
+        )
+        for row in grid:
+            for cell in row:
+                cell.border_left = cell.border_right = True
+        # glyphs 0.5..6.0pt under the middle rule, far closer than LaTeX's strut sets them
+        table.metadata = {
+            "column_rule_x": [0.175, 0.275], "rule_y": [0.298, 0.3185, 0.3385],
+            "text_band_pt": [[0.5, 6.0], [0.5, 6.0], None],
+        }
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        assert "\\noalign{\\vskip -" in build_latex(doc)

@@ -73,6 +73,40 @@ def _rule_extent(np, ink, run: Tuple[int, int]) -> Tuple[int, int]:
     return best
 
 
+# Share of a pixel row's width a line of text inks: the tops and feet of a
+# line of glyphs reach 3% and more, scan specks never 1%.
+_TEXT_ROW_SHARE = 0.03
+
+
+def _text_bands(np, ink, horizontal) -> List[Optional[List[float]]]:
+    """Where the text under each horizontal rule starts and ends, in points
+    below the rule's lower edge (None where no text follows it).
+
+    Read off the ink between that rule and the next, leaving out vertical
+    rules (any column inked down most of the band, a sub-column rule
+    included) and the two rules' own blurred fringes: a fringe row reaches
+    30% and more, and taken for text it put the text hard against the
+    rule."""
+    bands: List[Optional[List[float]]] = []
+    for k, (_, end) in enumerate(horizontal):
+        stop = horizontal[k + 1][0] if k + 1 < len(horizontal) else ink.shape[0]
+        band = ink[end:stop]
+        if band.shape[0] < 2:
+            bands.append(None)
+            continue
+        text = band[:, band.mean(axis=0) < 0.8].mean(axis=1) >= _TEXT_ROW_SHARE
+        top, bottom = 0, len(text)
+        while top < bottom and text[top]:
+            top += 1
+        while bottom > top and text[bottom - 1]:
+            bottom -= 1
+        rows = np.nonzero(text[top:bottom])[0] + top
+        bands.append(
+            [float(rows[0]) / _RULE_ZOOM, float(rows[-1] + 1) / _RULE_ZOOM] if rows.size else None
+        )
+    return bands
+
+
 def _render_table_ink(np, pymupdf, page, bbox):
     """The table's region as an ink mask, with its rules found.
 
@@ -300,6 +334,12 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
         if rule_y:
             md["rule_y"] = sorted(rule_y)
             md["rule_x_extent"] = [e for _, e in sorted(zip(rule_y, rule_x_extent))]
+            # Where the source printed the text under each rule, off the
+            # ink: a cell's box comes from the text layer and says nothing
+            # about where the glyphs actually sit.
+            md["text_band_pt"] = [
+                t for _, t in sorted(zip(rule_y, _text_bands(np, ink, horizontal)), key=lambda z: z[0])
+            ]
         if outer_top is not None:
             md["table_rule_y0"] = outer_top
         if outer_bottom is not None:

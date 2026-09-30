@@ -2343,7 +2343,35 @@ def _render_table(table: TableBlock) -> str:
     # rules.
     _natural_pad_pt = 0.7 * _base_line_pt - 0.68 * (median_pt or 8.0)
 
+    # Where the source printed the text under each rule, read off its ink
+    # by the analyzer: (top, bottom) below the rule's lower edge. Where it
+    # is known the row's glyphs are centred where the source's are - the
+    # boxes the fallback below reads come from the text layer, and on the
+    # voltage-regulator fixture they put every row's text 1.5pt below the
+    # print, 1.2pt at its centre. A band's first line is centred its cap
+    # height below the band's top; the source's cap height is the median
+    # height of its one-line bands (its glyphs are taller than ours, and a
+    # band's own foot moves with its descenders and subscripts).
+    _line_box_pt = line_box * _A4_HEIGHT_PT
+    _text_band = {
+        r: band for r, band in zip(_rules_pt, _table_md.get("text_band_pt") or [])
+        if band is not None
+    }
+    _heights = sorted(
+        b[1] - b[0] for b in _text_band.values() if b[1] - b[0] <= 1.5 * _line_box_pt
+    )
+    _source_cap_pt = _heights[len(_heights) // 2] if _heights else 0.0
+    # Our glyphs' centre under a row's top: the baseline sits on the
+    # strut, 0.7 of the row down, and caps and figures reach 0.68 of the
+    # size above it.
+    _glyph_centre_pt = 0.7 * _base_line_pt - 0.34 * (median_pt or 8.0)
+
     def _air_under_rule_pt(rule_pt: Optional[float], row: int) -> float:
+        """Space to put between a rule and the row under it; negative lifts
+        the row's text towards the rule."""
+        band = _text_band.get(rule_pt) if rule_pt is not None else None
+        if band is not None:
+            return band[0] + _source_cap_pt / 2.0 - _glyph_centre_pt
         top = _row_top_pt[row] if 0 <= row < len(_row_top_pt) else None
         if rule_pt is None or top is None:
             return 0.0
@@ -2351,7 +2379,7 @@ def _render_table(table: TableBlock) -> str:
 
     if _rules_pt and _top_rule_pt is not None:
         _top_air_pt = _air_under_rule_pt(_top_rule_pt, 0)
-    if _has_top_rule and _top_air_pt > 0.1:
+    if _has_top_rule and abs(_top_air_pt) > 0.1:
         body_lines.append(f"\\noalign{{\\vskip {_top_air_pt:.2f}pt}}")
 
     # Rule-driven row heights. For a ruled table the source's own rules are
@@ -2379,7 +2407,7 @@ def _render_table(table: TableBlock) -> str:
         if _top_rule_pt is not None:
             _anchor = (_ARRAYRULE_PT / 2.0, _top_rule_pt)
         _y_pt = _ARRAYRULE_PT
-        _pre_air_pt = _top_air_pt if _top_air_pt > 0.1 else 0.0
+        _pre_air_pt = _top_air_pt if abs(_top_air_pt) > 0.1 else 0.0
 
     for i, (cells, _) in enumerate(rendered_rows):
         if has_any_border:
@@ -2490,7 +2518,7 @@ def _render_table(table: TableBlock) -> str:
             if _row_extra_pt > 0:
                 _emitted_pt += max(0, _row_line_count(i) - 1) * _unstretched_line_pt
             extra = f"[{_emitted_pt:.2f}pt]"
-        if _rule_air_pt > 0.01:
+        if abs(_rule_air_pt) > 0.01:
             rule = rule + f"\\noalign{{\\vskip {_rule_air_pt:.2f}pt}}"
         # \tabularnewline, not bare "\\ " - a row ending in a p{} column
         # (every column can be p{} now that narrow columns get a measured

@@ -28,3 +28,5 @@ for i, row in enumerate(t.grid):
     events.append((y0, f"row {i:2d}", f"y {y0 * PH:6.1f}..{y1 * PH:6.1f}  {cells}"))
 for y, kind, text in sorted(events):
     print(f"{y * PH:7.1f}  {kind:7s} {text}")
+print("text under each rule, top..bottom pt:",
+      " ".join("-" if b is None else f"{b[0]:.1f}..{b[1]:.1f}" for b in md.get("text_band_pt", [])))
