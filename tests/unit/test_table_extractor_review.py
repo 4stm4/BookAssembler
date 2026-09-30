@@ -398,3 +398,30 @@ class TestSideBySideCells:
         doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
         tex = build_latex(doc)
         assert "Tj" in tex and "145V" in tex
+
+
+class TestDisjointRowsInterleave:
+    @staticmethod
+    def _first_extra(sub_x0):
+        import re
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        # "sub" printed 0.005 of the page (about 4pt) under "Label"
+        rows = [[_cell("Label", x0=0.10, y0=0.300), _cell("1", x0=0.40, y0=0.300)],
+                [_cell("sub", x0=sub_x0, y0=0.305), _cell("", x0=0.52, y0=0.305)],
+                [_cell("Next", x0=0.10, y0=0.325), _cell("2", x0=0.40, y0=0.325)]]
+        table = TableBlock(
+            grid=rows, row_count=3, column_count=2,
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=0.10, y0=0.300, x1=0.45, y1=0.335),
+                page_or_screen_index=0,
+            ),
+        )
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        extras = re.findall(r"\\tabularnewline\[(-?[0-9.]+)pt\]", build_latex(doc))
+        return float(extras[0]) if extras else 0.0
+
+    def test_a_row_clear_of_the_next_may_step_under_a_line_box(self):
+        # "sub" beside "Label" in x cannot print over it, so the row may
+        # close up to the source step; right under it, it may not.
+        assert self._first_extra(sub_x0=0.20) < self._first_extra(sub_x0=0.10)

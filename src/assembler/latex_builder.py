@@ -2095,6 +2095,32 @@ def _render_table(table: TableBlock) -> str:
     # the geometry and the fair crop degrade - and the same answer: the
     # geometry decides. Reverted to the constant.
     _compress_floor_pt = min(0.0, _unstretched_line_pt - _base_line_pt)
+
+    def _printed_span(cell: Any) -> Optional[Tuple[float, float]]:
+        printed = (getattr(cell, "metadata", None) or {}).get("printed_x")
+        if printed:
+            return printed[0], printed[1]
+        x0, x1 = _cell_x0(cell), _cell_x1(cell)
+        return (x0, x1) if x0 is not None and x1 is not None else None
+
+    def _disjoint_below(row: int) -> bool:
+        """True when no cell of this row sits over any cell of the next.
+
+        Two rows whose text shares no horizontal extent cannot print on
+        top of each other however close they step - so such a row may be
+        set as tightly as its source printed it, instead of being held at
+        a full line box. The voltage-regulator fixture interleaves exactly
+        so: "with line", "Quiescent Current Change" and "with load" step
+        4.1 and 4.3pt apart, the label in the column's left part and the
+        sub-labels indented past it.
+        """
+        if row + 1 >= len(grid):
+            return False
+        here = [sp for sp in (_printed_span(c) for c in grid[row]) if sp]
+        there = [sp for sp in (_printed_span(c) for c in grid[row + 1]) if sp]
+        if not here or not there:
+            return False
+        return all(a1 <= b0 or b1 <= a0 for a0, a1 in here for b0, b1 in there)
     raw_extra_pt = []
     for i in range(len(rendered_rows)):
         gap = row_gaps[i] if i < len(row_gaps) else None
@@ -2108,7 +2134,9 @@ def _render_table(table: TableBlock) -> str:
         )
         # A wrapping row still keeps its own need: its lines have to fit
         # whatever the step to the next row implies.
-        floor = content if content > 0 else _compress_floor_pt
+        floor = content if content > 0 else (
+            -(_base_line_pt - 0.5) if _disjoint_below(i) else _compress_floor_pt
+        )
         raw_extra_pt.append(max(floor, surplus))
     _extra_scale = 1.0
 
@@ -2311,7 +2339,10 @@ def _render_table(table: TableBlock) -> str:
             # band - print on top of each other with a rule through them.
             # A rule that cannot be reached lands a little low instead, and
             # the rows after it recover, since each aims at the anchor.
-            _floor = -(_row_h_pt - _row_line_count(i) * _unstretched_line_pt)
+            _floor = (
+                -(_row_h_pt - 0.5) if _disjoint_below(i)
+                else -(_row_h_pt - _row_line_count(i) * _unstretched_line_pt)
+            )
             _row_extra_pt = max(_floor, _target - _ARRAYRULE_PT / 2.0 - _y_pt - _row_h_pt)
         _y_pt += _row_h_pt + _row_extra_pt
         if rule:
