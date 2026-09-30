@@ -649,3 +649,26 @@ class TestFoldLabelRows:
         table = self._table([0.298, 0.307, 0.3115, 0.323])
         _fold_label_rows(table)
         assert table.row_count == 3
+
+
+class TestUnreadTextBand:
+    def test_a_row_whose_text_could_not_be_read_sits_as_the_others(self):
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("L1", x0=0.10, y0=0.32), _cell("aa", x0=0.20, y0=0.32), _cell("1", x0=0.33, y0=0.32)],
+                [_cell("L2", x0=0.10, y0=0.34), _cell("bb", x0=0.20, y0=0.34), _cell("2", x0=0.33, y0=0.34)]]
+        grid = [[_styled(c) for c in row] for row in rows]
+        table = TableBlock(grid=grid, row_count=3, column_count=3, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.40, y1=0.35), page_or_screen_index=0))
+        for row in grid:
+            for cell in row:
+                cell.border_left = cell.border_right = True
+        # the text under the third rule ran into its fringe and was not read
+        table.metadata = {
+            "column_rule_x": [0.175, 0.275], "rule_y": [0.298, 0.3185, 0.3385, 0.3585],
+            "text_band_pt": [[0.5, 6.0], [0.5, 6.0], None, None],
+        }
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        # header and first row lifted by their bands, the second by the usual lift
+        assert build_latex(doc).count("\\noalign{\\vskip -") == 3

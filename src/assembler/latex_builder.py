@@ -2388,6 +2388,11 @@ def _render_table(table: TableBlock) -> str:
     # strut, 0.7 of the row down, and caps and figures reach 0.68 of the
     # size above it.
     _glyph_centre_pt = 0.7 * _base_line_pt - 0.34 * (median_pt or 8.0)
+    _airs = sorted(
+        b[0] + _source_cap_pt / 2.0 - _glyph_centre_pt for r, b in _text_band.items()
+        if r != _top_rule_pt
+    )
+    _usual_air_pt = _airs[len(_airs) // 2] if _airs else None
 
     def _air_under_rule_pt(rule_pt: Optional[float], row: int) -> float:
         """Space to put between a rule and the row under it; negative lifts
@@ -2395,6 +2400,12 @@ def _render_table(table: TableBlock) -> str:
         band = _text_band.get(rule_pt) if rule_pt is not None else None
         if band is not None:
             return band[0] + _source_cap_pt / 2.0 - _glyph_centre_pt
+        # Where the source's text under a rule could not be read - it runs
+        # into the rule's fringe, as "with line" does on the voltage-
+        # regulator fixture - it sits as the table's other rows do. Its box
+        # would say otherwise: the text layer puts boxes above the print.
+        if rule_pt is not None and _usual_air_pt is not None and rule_pt in _rules_pt:
+            return _usual_air_pt
         top = _row_top_pt[row] if 0 <= row < len(_row_top_pt) else None
         if rule_pt is None or top is None:
             return 0.0
