@@ -473,7 +473,9 @@ def _is_latin_only(text: str) -> bool:
     return bool(text) and not _CYRILLIC_RE.search(text)
 
 
-def _styled_cell_text(cell: Any, text: str, median_pt: float = 0.0, raw: str = "") -> str:
+def _styled_cell_text(
+    cell: Any, text: str, median_pt: float = 0.0, raw: str = "", line_box: float = 0.0,
+) -> str:
     """Wrap a cell's escaped text in the typography the source printed it in.
 
     Every TableCell carries the StyleDescriptor read off its own source span
@@ -497,6 +499,17 @@ def _styled_cell_text(cell: Any, text: str, median_pt: float = 0.0, raw: str = "
 
     prefix = font_prefix
     size_pt = _snap_size(getattr(style, "font_size_pt", 0.0) or 0.0, median_pt)
+    # A cell whose line box is the table's usual one was printed at the
+    # table's usual size, whatever its text layer says, and so was one
+    # whose ink is taller than the line its reported size would give: the
+    # voltage-regulator fixture's "+25 C < Tj < +150 C" reads 3.12pt with
+    # 5.9pt of glyphs, and was set at half its neighbours' width.
+    h = _box_height(cell)
+    if median_pt > 0 and line_box > 0 and h is not None and (
+        abs(h - line_box) <= _SIZE_NOISE_TOLERANCE * line_box
+        or h * _A4_HEIGHT_PT > 1.2 * (getattr(style, "font_size_pt", 0.0) or 0.0)
+    ):
+        size_pt = median_pt
     if size_pt > 0:
         prefix += f"\\fontsize{{{size_pt:.2f}}}{{{size_pt * 1.2:.2f}}}\\selectfont "
     if getattr(style, "is_monospace", False):
@@ -659,39 +672,47 @@ def _wrapped_line_count(text: str, width_pt: float, size_pt: float, bold: bool) 
 _PLACE_EXPLICIT_PT = 0.1
 _PLACE_INDENT_PT = 3.0
 
-# How far below its row's first line, in lines, a one-line cell must have
-# been printed before it is lowered to where it was printed. A label
-# centred on a block of sub-rows sits half a line or more down; OCR
-# jitter within one printed line stays well under this.
-_LOWER_MIN_LINES = 0.4
+# How far below its row's first line a one-line cell must have been
+# printed before it is lowered to where it was printed, in the table's
+# line boxes. A label centred on a block of sub-rows sits half a line or
+# more down; OCR jitter within one printed line stays well under this.
+_LOWER_MIN_BOX_SHARE = 0.45
 
 
-def _line_pt(cell: Any) -> float:
+def _box_height(cell: Any) -> Optional[float]:
     vl = getattr(cell, "visual_layout", None)
-    return 1.2 * (getattr(getattr(vl, "style", None), "font_size_pt", None) or 0.0)
+    box = getattr(vl, "bounding_box", None) if vl else None
+    return box.y1 - box.y0 if box is not None else None
 
 
-def _first_line_centre(cell: Any) -> Optional[float]:
+def _median_line_box(grid: List[List[Any]]) -> float:
+    """The height of the table's usual one-line cell box, a page fraction.
+
+    Line geometry is judged against this and not against a cell's own font
+    size: the size comes from the OCR text layer and is noise on a scan
+    (the voltage-regulator fixture's cells, uniform in print, read 3.1 to
+    7.0pt), while every one of their boxes is the same 5.9pt tall."""
+    heights = sorted(h for row in grid for cell in row if (h := _box_height(cell)))
+    return heights[len(heights) // 2] if heights else 0.0
+
+
+def _printed_on_one_line(cell: Any, line_box: float) -> bool:
+    h = _box_height(cell)
+    return h is not None and line_box > 0 and h <= 1.5 * line_box
+
+
+def _first_line_centre(cell: Any, line_box: float) -> Optional[float]:
     """Where a cell's first printed line is centred, as a page fraction.
 
     None for a cell without geometry and for a placeholder mark, whose
     box is its dot's ink, not a line of text."""
-    vl = getattr(cell, "visual_layout", None)
-    box = getattr(vl, "bounding_box", None) if vl else None
-    line = _line_pt(cell) / _A4_HEIGHT_PT
-    if box is None or line <= 0 or _cell_text(cell).strip() in _PLACEHOLDER_MARKS:
+    h = _box_height(cell)
+    if h is None or line_box <= 0 or _cell_text(cell).strip() in _PLACEHOLDER_MARKS:
         return None
-    return box.y0 + min(box.y1 - box.y0, line) / 2.0
+    return cell.visual_layout.bounding_box.y0 + min(h, line_box) / 2.0
 
 
-def _printed_on_one_line(cell: Any) -> bool:
-    vl = getattr(cell, "visual_layout", None)
-    box = getattr(vl, "bounding_box", None) if vl else None
-    line = _line_pt(cell)
-    return box is not None and line > 0 and (box.y1 - box.y0) * _A4_HEIGHT_PT <= 1.5 * line
-
-
-def _lowered_to_print(text: str, cell: Any, row_top_line: Optional[float]) -> str:
+def _lowered_to_print(text: str, cell: Any, row_top_line: Optional[float], line_box: float) -> str:
     """A one-line cell set as far below its row's first line as the source
     printed it.
 
@@ -704,12 +725,12 @@ def _lowered_to_print(text: str, cell: Any, row_top_line: Optional[float]) -> st
     row keeps the height the rule solve gave it; a cell printed on more
     than one line is left to wrap.
     """
-    centre = _first_line_centre(cell)
-    if centre is None or row_top_line is None or not _printed_on_one_line(cell):
+    centre = _first_line_centre(cell, line_box)
+    if centre is None or row_top_line is None or not _printed_on_one_line(cell, line_box):
+        return text
+    if centre - row_top_line < _LOWER_MIN_BOX_SHARE * line_box:
         return text
     drop = (centre - row_top_line) * _A4_HEIGHT_PT
-    if drop < _LOWER_MIN_LINES * _line_pt(cell):
-        return text
     return f"\\raisebox{{{-drop:.2f}pt}}[0pt][0pt]{{{text}}}"
 
 
@@ -779,6 +800,7 @@ def _render_table(table: TableBlock) -> str:
         and cell.visual_layout.style.font_size_pt
     )
     median_pt = _sizes[len(_sizes) // 2] if _sizes else 0.0
+    line_box = _median_line_box(grid)
 
     bins = _column_bins(grid)
     span_map = getattr(table, "span_map", {})
@@ -825,9 +847,9 @@ def _render_table(table: TableBlock) -> str:
             cells = [""] * ncols
             texts = [""] * ncols
             row_entries: Dict[int, List[Tuple[Any, Any, Any, str]]] = {}
-            _row_lines = [c for c in (_first_line_centre(cell) for cell in row) if c is not None]
+            _row_lines = [c for c in (_first_line_centre(cell, line_box) for cell in row) if c is not None]
             for cell in row:
-                if _printed_on_one_line(cell):
+                if _printed_on_one_line(cell, line_box):
                     x0 = _cell_x0(cell)
                     one_line.add((row_idx, min(range(ncols), key=lambda i: abs(bins[i] - x0))))
             _row_top_line = min(_row_lines) if _row_lines else None
@@ -854,14 +876,14 @@ def _render_table(table: TableBlock) -> str:
                 # cell's first and last lines carry the row's stretched
                 # struts, which otherwise push each line a strut apart
                 # (8.8pt a line on that fixture, where it prints 7).
-                if "\n" in raw and not _printed_on_one_line(cell):
+                if "\n" in raw and not _printed_on_one_line(cell, line_box):
                     stacked.add((row_idx, col))
                     body = "\\lineskiplimit=-\\maxdimen " + _latex_linebreaks(_esc(raw))
                 else:
                     body = _esc(raw).replace("\n", " ")
-                text = _styled_cell_text(cell, body, median_pt, raw=raw)
+                text = _styled_cell_text(cell, body, median_pt, raw=raw, line_box=line_box)
                 if (getattr(cell, "row_span", 1) or 1) == 1:
-                    text = _lowered_to_print(text, cell, _row_top_line)
+                    text = _lowered_to_print(text, cell, _row_top_line, line_box)
                 texts[col] = raw
                 _printed = (getattr(cell, "metadata", None) or {}).get("printed_x")
                 if _printed:
@@ -2367,10 +2389,18 @@ def _render_table(table: TableBlock) -> str:
             )
         else:
             rule = "\\hline" if i in (0, len(rendered_rows) - 1) else ""
-        # Skip positions occupied by spanned cells from previous rows
+        # A position another cell spans is not a cell of its own. One
+        # spanned across from the left is consumed by that \multicolumn;
+        # one spanned down from a row above still takes its column here,
+        # empty, or every cell after it moves one column left - the
+        # voltage-regulator fixture's last row put "+25 C < Tj < +150 C"
+        # under CHARACTERISTICS and "0.3" under TYP that way.
         rendered = []
         for col, c in enumerate(cells):
-            if (i, col) not in span_map:  # Only render if not spanned from above
+            origin = span_map.get((i, col))
+            if origin is not None and origin[0] != i:
+                rendered.append("")
+            elif origin is None:
                 if (
                     isinstance(c, str) and (i, col) in printed_x
                     and not (i == 0 and col < len(header_is_centered) and header_is_centered[col])

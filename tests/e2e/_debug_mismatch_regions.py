@@ -116,3 +116,25 @@ for s0, s1 in _sg:
     lo, hi = min(s0, o0), max(s1, o1)
     print(f"    {s0:3d}..{s1:3d} | {o0:3d}..{o1:3d} | {x[lo:hi + 1].sum():5d}")
 print(f"  total mismatch px {total}")
+
+# where each band's text ink sits, source against rebuild: the ink rows'
+# centroid and extent inside each band between two full rules, in pt
+_pt = (src_rect.height / H)
+print("  text in each band (source | rebuild, pt from the band's top rule; centroid, top..bottom):")
+_bands = [(g0[1] + 1, g1[0]) for g0, g1 in zip(_sg, _sg[1:])]
+for lo, hi in _bands:
+    def _prof(m):
+        body = m[lo:hi]
+        rows = body.mean(axis=1)
+        rows = np.where(rows > 0.5, 0, rows)   # a rule row is not text
+        if rows.sum() == 0:
+            return None
+        ys = np.arange(lo, hi)
+        c = (rows * ys).sum() / rows.sum()
+        inked = ys[rows > 0.01]
+        return c, inked.min(), inked.max()
+    s, o = _prof(a), _prof(b)
+    if s and o:
+        print(f"    band {lo:3d}..{hi:3d}: {(s[0] - lo) * _pt:5.2f} ({(s[1] - lo) * _pt:4.1f}..{(s[2] - lo) * _pt:4.1f})"
+              f" | {(o[0] - lo) * _pt:5.2f} ({(o[1] - lo) * _pt:4.1f}..{(o[2] - lo) * _pt:4.1f})"
+              f"   d {(o[0] - s[0]) * _pt:+.2f}")

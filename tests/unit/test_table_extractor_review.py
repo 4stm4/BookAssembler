@@ -487,7 +487,7 @@ def _ruled_tex(rows, x1=0.40):
     """build_latex of a three-column table ruled at 0.175 and 0.275, no frame."""
     from src.assembler.latex_builder import build_latex
     from src.krm.models import KnowledgeDocument
-    grid = [[_styled(c) for c in row] for row in rows]
+    grid = [[c if c.visual_layout.style else _styled(c) for c in row] for row in rows]
     table = TableBlock(
         grid=grid, row_count=len(grid), column_count=3,
         visual_layout=VisualLayout(
@@ -552,3 +552,27 @@ class TestStackedLines:
 
     def test_lines_printed_as_one_are_joined(self):
         assert "15 V 5 mA P" in self._tex(0.01)
+
+
+
+class TestRowSpannedPositions:
+    def test_a_row_under_a_multirow_keeps_all_its_columns(self):
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("aa", x0=0.20, y0=0.32), _cell("1", x0=0.33, y0=0.32)],
+                [_cell("bb", x0=0.20, y0=0.34), _cell("2", x0=0.33, y0=0.34)]]
+        rows[1][0].row_span = 2
+        tex = _ruled_tex(rows)
+        last = next(l for l in tex.splitlines() if " bb" in l)
+        # the spanned first column is still there, empty
+        assert last.count("&") == 2 and last.lstrip().startswith("&")
+
+
+class TestSizeNoise:
+    def test_a_size_the_line_box_contradicts_is_the_tables(self):
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("small", x0=0.20, y0=0.32), _cell("1", x0=0.33, y0=0.32)]]
+        # read as 3.12pt, in an 8.4pt box like its 8pt neighbours'
+        _styled(rows[1][1], 3.12)
+        tex = _ruled_tex(rows)
+        assert "\\fontsize{3.12}" not in tex
+        assert "\\fontsize{8.00}{9.60}\\selectfont small" in tex
