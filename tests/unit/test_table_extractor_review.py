@@ -475,3 +475,61 @@ class TestPartialRules:
         ink[2:4, 150:153] = False   # 1pt of dropout
         ink[2:4, 10:40] = True      # a separate stroke 20pt to the left
         assert _rule_extent(np, ink, (2, 4)) == (60, 280)
+
+
+def _styled(cell, size_pt=8.0):
+    from src.krm.models import StyleDescriptor
+    cell.visual_layout.style = StyleDescriptor(font_size_pt=size_pt)
+    return cell
+
+
+def _ruled_tex(rows, x1=0.40):
+    """build_latex of a three-column table ruled at 0.175 and 0.275, no frame."""
+    from src.assembler.latex_builder import build_latex
+    from src.krm.models import KnowledgeDocument
+    grid = [[_styled(c) for c in row] for row in rows]
+    table = TableBlock(
+        grid=grid, row_count=len(grid), column_count=3,
+        visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=x1, y1=0.30 + 0.02 * len(grid)),
+            page_or_screen_index=0,
+        ),
+    )
+    for row in grid:
+        for cell in row:
+            cell.border_left = cell.border_right = True
+    table.metadata = {"column_rule_x": [0.175, 0.275]}
+    doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+    return build_latex(doc)
+
+
+class TestPrintedHeight:
+    @staticmethod
+    def _rows(label_drop):
+        return [
+            [_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("Unit", x0=0.33, y0=0.30)],
+            [_cell("Label", x0=0.10, y0=0.32 + label_drop), _cell("Tj", x0=0.20, y0=0.32), _cell("V", x0=0.33, y0=0.32)],
+            [_cell("L2", x0=0.10, y0=0.34), _cell("X", x0=0.20, y0=0.34), _cell("mA", x0=0.33, y0=0.34)],
+        ]
+
+    def test_a_label_printed_on_its_block_is_lowered_to_it(self):
+        # 0.006 of the page is 5pt, half a 9.6pt line
+        import re
+        drops = re.findall(r"\\raisebox\{-([0-9.]+)pt\}\[0pt\]\[0pt\]\{", _ruled_tex(self._rows(0.006)))
+        assert len(drops) == 1 and 4.5 < float(drops[0]) < 5.5
+
+    def test_jitter_within_a_line_is_left_alone(self):
+        assert "\\raisebox" not in _ruled_tex(self._rows(0.001))
+
+
+class TestNarrowCellsFitTheirColumn:
+    def test_a_cell_wider_than_its_column_does_not_widen_it(self):
+        # "mV/VOUT" is printed 0.05 of the page wide from right against the
+        # last rule, in a column 0.055 wide with no frame on its right
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("mV/VOUT", x0=0.28, y0=0.30)],
+                [_cell("L", x0=0.10, y0=0.32), _cell("X", x0=0.20, y0=0.32), _cell("V", x0=0.32, y0=0.32)]]
+        tex = _ruled_tex(rows, x1=0.33)
+        spec = next(l for l in tex.splitlines() if "begin{tabular}" in l)
+        # 0.055 * 21cm less one padding and half a rule, not its 1.05cm text
+        assert spec.endswith("p{1.01cm}@{}}")
+        assert "[r]{\\latinfont \\fontsize{8.00}{9.60}\\selectfont mV/VOUT}" in tex

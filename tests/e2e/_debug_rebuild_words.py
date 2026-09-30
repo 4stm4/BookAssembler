@@ -1,0 +1,25 @@
+"""Debug-only: where the rebuild set each word, relative to its table crop.
+
+Run with python3 (argument A or B), not pytest.
+"""
+import sys
+import tempfile
+from pathlib import Path
+sys.path.insert(0, "/app")
+import fitz
+from src.assembler.latex_builder import build_latex, compile_xelatex
+from src.krm.models import ContainerUnit, KnowledgeDocument
+from tests.e2e.test_assembled_table_pdf import FIXTURE_A, FIXTURE_B, _extract_table
+from tests.e2e.test_visual_overlay import _output_table_rect, _table_texts
+
+fx = FIXTURE_A if (sys.argv[1:] or ["A"])[0] == "A" else FIXTURE_B
+t = _extract_table(fx)
+tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[t])]))
+with tempfile.TemporaryDirectory() as td:
+    Path(td, "t.tex").write_text(tex)
+    pdf = Path(compile_xelatex("t.tex", td))
+    rect = _output_table_rect(fitz, pdf, 1, _table_texts(t))
+    d = fitz.open(str(pdf))
+    for w in d[1].get_text("words"):
+        if rect.contains(fitz.Rect(w[:4])):
+            print(f"{w[0] - rect.x0:7.2f} {w[1] - rect.y0:7.2f} {w[2] - rect.x0:7.2f} {w[3] - rect.y0:7.2f}  {w[4]}")

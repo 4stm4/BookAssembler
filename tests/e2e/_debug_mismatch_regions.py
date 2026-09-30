@@ -76,3 +76,43 @@ out_rule[b.mean(axis=1) > 0.5, :] = True
 out_rule[:, b.mean(axis=0) > 0.6] = True
 on_rules = x & (src_rule | out_rule)
 print(f"  on rule lines (either side): {on_rules.sum() / total:.2%} of mismatch")
+
+# row bands between the source's own full-width rules, with how much of
+# each band's mismatch lies on rule pixels
+_rr = np.where(rows_cover > 0.5)[0]
+_ys = []
+for r in _rr:
+    if not _ys or r - _ys[-1][-1] > 2:
+        _ys.append([r])
+    else:
+        _ys[-1].append(r)
+_cuts = [0] + [int(np.mean(g)) for g in _ys] + [H]
+_cuts = sorted(set(_cuts))
+print("  row bands (px, share of mismatch, of which on rules):")
+for i in range(len(_cuts) - 1):
+    lo, hi = _cuts[i], _cuts[i + 1]
+    band = x[lo:hi]
+    if band.sum() == 0:
+        continue
+    print(f"    y {lo:3d}..{hi:3d}: {band.sum() / total:6.2%}  "
+          f"({on_rules[lo:hi].sum() / max(1, band.sum()):.0%} on rules)")
+
+# each full-width rule in mask rows: where the source's lies against the
+# rebuild's nearest one (start..end, both inclusive), and the mismatch
+# on those rows alone
+def _groups(cover, level):
+    out = []
+    for r in np.where(cover > level)[0]:
+        if out and r - out[-1][1] <= 1:
+            out[-1][1] = r
+        else:
+            out.append([r, r])
+    return out
+_sg = _groups(a.mean(axis=1), 0.5)
+_og = _groups(b.mean(axis=1), 0.5)
+print("  rules in mask rows (source | rebuild | mismatch px on the union of their rows):")
+for s0, s1 in _sg:
+    o0, o1 = min(_og, key=lambda g: abs((g[0] + g[1]) - (s0 + s1))) if _og else (None, None)
+    lo, hi = min(s0, o0), max(s1, o1)
+    print(f"    {s0:3d}..{s1:3d} | {o0:3d}..{o1:3d} | {x[lo:hi + 1].sum():5d}")
+print(f"  total mismatch px {total}")

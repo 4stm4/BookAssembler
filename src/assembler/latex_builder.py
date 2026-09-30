@@ -617,6 +617,9 @@ _A4_WIDTH_PT = 21.0 * _PT_PER_CM
 # How far short of the table's edge a measured rule may stop and still be
 # drawn across all of it: scan edges are ragged by a point or so.
 _PARTIAL_RULE_TOL_PT = 2.0
+# The narrowest p{} a narrow column is given, only so that a degenerate
+# measurement cannot produce a zero or negative width.
+_MIN_NARROW_P_CM = 0.1
 
 
 def _wrapped_line_count(text: str, width_pt: float, size_pt: float, bold: bool) -> Optional[int]:
@@ -658,6 +661,59 @@ def _wrapped_line_count(text: str, width_pt: float, size_pt: float, bold: bool) 
 # cell, so measurement noise does not move ordinary values.
 _PLACE_EXPLICIT_PT = 0.1
 _PLACE_INDENT_PT = 3.0
+
+# How far below its row's first line, in lines, a one-line cell must have
+# been printed before it is lowered to where it was printed. A label
+# centred on a block of sub-rows sits half a line or more down; OCR
+# jitter within one printed line stays well under this.
+_LOWER_MIN_LINES = 0.4
+
+
+def _line_pt(cell: Any) -> float:
+    vl = getattr(cell, "visual_layout", None)
+    return 1.2 * (getattr(getattr(vl, "style", None), "font_size_pt", None) or 0.0)
+
+
+def _first_line_centre(cell: Any) -> Optional[float]:
+    """Where a cell's first printed line is centred, as a page fraction.
+
+    None for a cell without geometry and for a placeholder mark, whose
+    box is its dot's ink, not a line of text."""
+    vl = getattr(cell, "visual_layout", None)
+    box = getattr(vl, "bounding_box", None) if vl else None
+    line = _line_pt(cell) / _A4_HEIGHT_PT
+    if box is None or line <= 0 or _cell_text(cell).strip() in _PLACEHOLDER_MARKS:
+        return None
+    return box.y0 + min(box.y1 - box.y0, line) / 2.0
+
+
+def _printed_on_one_line(cell: Any) -> bool:
+    vl = getattr(cell, "visual_layout", None)
+    box = getattr(vl, "bounding_box", None) if vl else None
+    line = _line_pt(cell)
+    return box is not None and line > 0 and (box.y1 - box.y0) * _A4_HEIGHT_PT <= 1.5 * line
+
+
+def _lowered_to_print(text: str, cell: Any, row_top_line: Optional[float]) -> str:
+    """A one-line cell set as far below its row's first line as the source
+    printed it.
+
+    Every cell of a LaTeX row starts on the row's first line, while the
+    source centres a label beside a block of sub-rows or stacked lines on
+    that block: the voltage-regulator fixture's "Line Regulation" and its
+    "Tj = 25 C" sit on the rule between their two condition sub-rows, and
+    "Output Voltage" beside its three stacked conditions sits on the
+    middle one. The shift is a \\raisebox with no height or depth, so the
+    row keeps the height the rule solve gave it; a cell printed on more
+    than one line is left to wrap.
+    """
+    centre = _first_line_centre(cell)
+    if centre is None or row_top_line is None or not _printed_on_one_line(cell):
+        return text
+    drop = (centre - row_top_line) * _A4_HEIGHT_PT
+    if drop < _LOWER_MIN_LINES * _line_pt(cell):
+        return text
+    return f"\\raisebox{{{-drop:.2f}pt}}[0pt][0pt]{{{text}}}"
 
 
 # A lone mark standing in for a missing value, not a value itself.
@@ -732,6 +788,8 @@ def _render_table(table: TableBlock) -> str:
     # Where each lone placeholder mark sits in the source, by (row, col) -
     # see _place_at_printed_x below. Filled only where cells are binned by x.
     printed_x: Dict[Tuple[int, int], Tuple[float, float]] = {}
+    # (row, col) of the cells the source printed on a single line.
+    one_line: set = set()
     # Populated below only when bins are available (real per-column source
     # geometry); stays None otherwise so the fallback path further down
     # knows to fall back to the old content-length-driven estimate.
@@ -768,6 +826,12 @@ def _render_table(table: TableBlock) -> str:
             cells = [""] * ncols
             texts = [""] * ncols
             row_entries: Dict[int, List[Tuple[Any, Any, Any, str]]] = {}
+            _row_lines = [c for c in (_first_line_centre(cell) for cell in row) if c is not None]
+            for cell in row:
+                if _printed_on_one_line(cell):
+                    x0 = _cell_x0(cell)
+                    one_line.add((row_idx, min(range(ncols), key=lambda i: abs(bins[i] - x0))))
+            _row_top_line = min(_row_lines) if _row_lines else None
             for cell in row:
                 x0 = _cell_x0(cell)
                 col = min(range(ncols), key=lambda i: abs(bins[i] - x0))
@@ -783,6 +847,8 @@ def _render_table(table: TableBlock) -> str:
                 # texts[] keeps the RAW string: column widths are measured
                 # from it below, and font commands are not content.
                 text = _styled_cell_text(cell, _esc(raw).replace("\n", " "), median_pt, raw=raw)
+                if (getattr(cell, "row_span", 1) or 1) == 1:
+                    text = _lowered_to_print(text, cell, _row_top_line)
                 texts[col] = raw
                 _printed = (getattr(cell, "metadata", None) or {}).get("printed_x")
                 if _printed:
@@ -1063,18 +1129,6 @@ def _render_table(table: TableBlock) -> str:
             # that bug regressed an earlier attempt at this same fix)
             # keeps the actually-rendered width matching what was
             # measured from the source.
-            # A flat 0.3cm floor here (tried first) is not tied to what
-            # any COLUMN actually needs - confirmed directly on this
-            # fixture's own overlay: subtracting tabcolsep left one
-            # column narrower than its own "Decimal"/"Binary" header
-            # text, and the header visibly overlapped its neighbor's
-            # ("DecBinary", the two headers' ink literally overlaid).
-            # The real per-column floor already exists for the fallback
-            # path below (col_max_len chars * a font-scaled advance
-            # width + padding) - reused here so subtracting tabcolsep
-            # can never shrink a column past what ITS OWN longest cell
-            # (header included, since col_max_len is measured over
-            # every cell) needs.
             # The real padding the SOURCE printed around each column's
             # own text: that column's rule-to-rule width minus the extent
             # its glyphs actually occupy. Only columns bounded by real
@@ -1149,60 +1203,16 @@ def _render_table(table: TableBlock) -> str:
                     _col_indent_pt[_i] = max(
                         0.0, _set_side_pt - _INK_EDGE_BIAS_PT - _tabcolsep_pt
                     )
-            _char_width_scaled_cm = 0.17 * ((median_pt or 8.0) / 8.0)
-            # The content floor only makes sense for a NARROW column -
-            # one that renders unwrapped, so its width has to fit its
-            # longest cell on one line. A WIDE column already wraps
-            # (p{}), so col_max_len - a raw character count, with no
-            # idea the cell will wrap - is not a real width requirement
-            # for it: confirmed directly on the voltage-regulator
-            # fixture, where merging a multi-line CONDITIONS cell
-            # (_merge_orphan_rows) produced one long combined string,
-            # and applying this floor to a WIDE column inflated it past
-            # its own real rule-measured width (4.96cm declared vs a
-            # source column that measures much narrower) - the opposite
-            # of what subtracting tabcolsep was trying to fix.
-            # The floor is the char-count estimate, pulled down to the
-            # column's real measured extent where that is smaller. Every
-            # boundary here is measured: a printed rule, or on an open side
-            # the text edge itself, now that nothing pads it. A 0.15cm
-            # hedge on top of the extent, kept for open sides while they
-            # were still padded, left the voltage-regulator fixture's UNITS
-            # column 5pt wider than its source.
-
-            # Tried subtracting 2*tabcolsep from this floor too (the
-            # fraction branch below already does, so its own FINAL
-            # rendered width - once LaTeX adds that padding back - lands
-            # on the source's real rule-to-rule width; this floor never
-            # got the same treatment). The theory measured out true:
-            # confirmed on the voltage-regulator fixture that its narrow
-            # MIN/TYP/MAX/UNITS columns (floor-dominated, real glyph
-            # extent close to the source column's own real width, i.e.
-            # printed with almost no padding at all) summed 24.9pt over
-            # source width, matching the table's own total overshoot
-            # (25.8pt) almost exactly. But applying the subtraction
-            # (clamped to never shrink below the real glyph extent)
-            # regressed that same fixture's overlay mismatch (24.2% ->
-            # 24.5%) even though it improved the decimal/binary one
-            # slightly (15.4% -> 15.3%) - net negative once both are
-            # weighed together, the third time narrowing this fixture's
-            # narrow columns has done that (see the two comments above).
-            # Reverted; the column WIDTH being more geometrically correct
-            # doesn't reliably translate into a better ink-mask match for
-            # this specific table.
-            def _content_floor_cm(i: int) -> float:
-                estimate = col_max_len[i] * _char_width_scaled_cm + 0.3
-                if (
-                    col_min_x0 is not None and col_max_x1 is not None
-                    and col_min_x0[i] is not None and col_max_x1[i] is not None
-                ):
-                    real = (col_max_x1[i] - col_min_x0[i]) * _A4_FULL_WIDTH_CM
-                    # The ink has to fit, and exactly the glyph extent does
-                    # that: a hedge kept the decimal/binary fixture's last
-                    # column at 2.69cm where its own rules say 2.54.
-                    return min(estimate, real)
-                return estimate
-
+            # No floor from the column's content: a column is as wide as
+            # its rules say, and a cell wider than that is set where the
+            # source set it - into the column's padding (_fit_to_column).
+            # The voltage-regulator fixture prints "uV/VOUT" from right
+            # against its UNITS rule, with no padding at all; a floor that
+            # held the column open for it made the table 4.7pt wider than
+            # its source and moved every rule off its source by as much.
+            # Earlier attempts at narrowing these columns were judged on
+            # an overlay that cut the rebuild with a margin the source
+            # did not get, and are not evidence either way.
             # A column's advance is p{} + 2*tabcolsep + the RULE beside
             # it: LaTeX adds \arrayrulewidth (0.4pt by default, never set
             # here) for every "|" in the spec, and nothing above accounts
@@ -1222,12 +1232,15 @@ def _render_table(table: TableBlock) -> str:
 
             col_width_cm = [
                 max(
-                    _content_floor_cm(i),
+                    _MIN_NARROW_P_CM if not is_wide[i] else 2.2,
                     f * _A4_FULL_WIDTH_CM - _sides_cm(i),
-                ) if not is_wide[i] else
-                max(2.2, f * _A4_FULL_WIDTH_CM - _sides_cm(i))
+                )
                 for i, f in enumerate(fractions)
             ]
+            # Rounded once, to what the column spec prints, so that
+            # everything sized from these widths (a boxed cell, a partial
+            # rule's position) agrees with the column LaTeX actually sets.
+            col_width_cm = [round(w, 2) for w in col_width_cm]
             _source_bounds = boundaries
             _emitted_bounds_pt = [0.0 if _open_left else _rule_w_pt / 2.0]
             for i in range(ncols):
@@ -1427,6 +1440,18 @@ def _render_table(table: TableBlock) -> str:
             return text
         gap = (x0 - ink_x0[col]) * scale
         return f"\\rule{{{gap:.2f}pt}}{{0pt}}" + text if gap > min_gap else text
+
+    def _fit_to_column(text: str, col: int) -> str:
+        """A one-line cell of a narrow column, boxed to the column's width
+        and set against its set edge: a cell wider than the column runs
+        into the padding on its ragged side, as the source printed it,
+        instead of wrapping or widening the column for everyone."""
+        if col_width_cm is None or is_wide[col] or not text:
+            return text
+        indent = _col_indent_pt[col] if col < len(_col_indent_pt) else 0.0
+        width = col_width_cm[col] * _PT_PER_CM - (indent if indent > 0.05 else 0.0)
+        side = "l" if col_is_right is not None and not col_is_right[col] else "r"
+        return f"\\makebox[{width:.2f}pt][{side}]{{{text}}}"
 
     def _span_spec(col: int, col_span: int, spec: str) -> str:
         """A \\multicolumn's own column spec, with the rules it replaces.
@@ -2334,6 +2359,10 @@ def _render_table(table: TableBlock) -> str:
                     and not (i == 0 and col < len(header_is_centered) and header_is_centered[col])
                 ):
                     c = _place_at_printed_x(c, col, *printed_x[(i, col)])
+                if isinstance(c, str) and (i, col) in one_line and not (
+                    i == 0 and col < len(header_is_centered) and header_is_centered[col]
+                ):
+                    c = _fit_to_column(c, col)
                 rendered.append(_render_cell(c, col, row_idx=i))
         extra = ""
         _row_extra_pt = raw_extra_pt[i] * _extra_scale if i < len(raw_extra_pt) else 0.0
