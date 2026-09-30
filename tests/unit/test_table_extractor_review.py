@@ -352,3 +352,37 @@ class TestHeaderPrintedPosition:
         snapped = _snap_row_to_columns(header, body)
         assert snapped[1].visual_layout.bounding_box.x0 == 0.30      # binned to its column
         assert snapped[1].metadata["printed_x"][0] == 0.34            # but printed here
+
+
+class TestRuleWeight:
+    def test_the_sources_rule_weight_is_measured(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _mark_cell_borders
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        pw, ph = page.rect.width, page.rect.height
+        for x in (200.0, 300.0, 400.0):
+            page.draw_line((x, 300), (x, 380), width=1.5)
+        for y in (300.0, 340.0, 380.0):
+            page.draw_line((200, y), (400, y), width=1.5)
+        cells = [
+            TableCell(
+                content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text="x")])])],
+                visual_layout=VisualLayout(
+                    bounding_box=NormalizedRect(x0=x0 / pw, y0=y0 / ph, x1=(x0 + 40) / pw, y1=(y0 + 12) / ph),
+                    page_or_screen_index=0,
+                ),
+            )
+            for x0, y0 in ((230, 314), (330, 314), (230, 354), (330, 354))
+        ]
+        table = TableBlock(
+            grid=[cells[:2], cells[2:]], row_count=2, column_count=2,
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=230 / pw, y0=314 / ph, x1=370 / pw, y1=366 / ph),
+                page_or_screen_index=0,
+            ),
+        )
+        _mark_cell_borders(np, pymupdf, page, table)
+        assert 1.0 <= table.metadata["rule_width_pt"] <= 2.0
+

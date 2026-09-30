@@ -267,6 +267,15 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
             md["table_rule_y0"] = outer_top
         if outer_bottom is not None:
             md["table_rule_y1"] = outer_bottom
+        # How heavy this table's rules are printed: the median width of its
+        # rule runs at the same ink threshold the rules were found with.
+        # Scanned tables print theirs at 1.0-2.0pt (decimal/binary median
+        # 1.67pt, voltage-regulator 1.33pt); drawing them at LaTeX's 0.4pt
+        # default put most of the voltage-regulator fixture's overlay
+        # mismatch (54% of it) on its nineteen rule lines alone.
+        _widths = sorted((b - a) / _RULE_ZOOM for a, b in horizontal + vertical)
+        if _widths:
+            md["rule_width_pt"] = _widths[len(_widths) // 2]
         if any(v is not None for v in ink_x0):
             md["column_ink_x0"] = ink_x0
             md["column_ink_x1"] = ink_x1
