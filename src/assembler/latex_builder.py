@@ -7,6 +7,7 @@ emits a .tex document, then compiles it to PDF with XeLaTeX (Cyrillic-capable
 via fontspec + polyglossia). Tombstoned nodes are skipped (RFC 0001 §2.4).
 """
 
+import bisect
 import logging
 import os
 import re
@@ -613,6 +614,9 @@ _PT_PER_CM = 72.27 / 2.54
 
 _A4_HEIGHT_PT = 29.7 * _PT_PER_CM
 _A4_WIDTH_PT = 21.0 * _PT_PER_CM
+# How far short of the table's edge a measured rule may stop and still be
+# drawn across all of it: scan edges are ragged by a point or so.
+_PARTIAL_RULE_TOL_PT = 2.0
 
 
 def _wrapped_line_count(text: str, width_pt: float, size_pt: float, bold: bool) -> Optional[int]:
@@ -959,6 +963,12 @@ def _render_table(table: TableBlock) -> str:
     # as table.metadata["column_rule_x"] - the real boundary BETWEEN two
     # columns, independent of how far either one's own content reaches.
     col_width_cm: Optional[List[float]] = None
+    # The column boundaries twice over: on the source page (page
+    # fractions) and in the emitted tabular (TeX pt from its left edge).
+    # Set only where the source's own rules gave the columns; used to
+    # draw a rule that stops short of the table where the source's does.
+    _source_bounds: Optional[List[float]] = None
+    _emitted_bounds_pt: Optional[List[float]] = None
     # Which side of ITS OWN column a narrow column's content hugs - a
     # binary code ("00000000") sits flush against its column's LEFT
     # rule, a decimal number sits flush against its RIGHT one, and
@@ -1218,6 +1228,12 @@ def _render_table(table: TableBlock) -> str:
                 max(2.2, f * _A4_FULL_WIDTH_CM - _sides_cm(i))
                 for i, f in enumerate(fractions)
             ]
+            _source_bounds = boundaries
+            _emitted_bounds_pt = [0.0 if _open_left else _rule_w_pt / 2.0]
+            for i in range(ncols):
+                _emitted_bounds_pt.append(
+                    _emitted_bounds_pt[-1] + (col_width_cm[i] + _sides_cm(i)) * _PT_PER_CM
+                )
             if col_x0_sum is not None and col_x1_sum is not None and col_count is not None:
                 col_is_right = []
                 for i in range(ncols):
@@ -1507,6 +1523,7 @@ def _render_table(table: TableBlock) -> str:
     # off against a 5.09pt reach) while inventing one under its "with
     # line" row, where the source prints none.
     _rules_pt = sorted(y * _A4_HEIGHT_PT for y in (_table_md.get("rule_y") or []))
+    _rule_extent = dict(zip(_rules_pt, _table_md.get("rule_x_extent") or []))
     _row_centre_pt: List[Optional[float]] = []
     _row_top_pt: List[Optional[float]] = []
     for _grow in grid:
@@ -1533,6 +1550,38 @@ def _render_table(table: TableBlock) -> str:
         if _rules_pt and _row_centre_pt and _row_centre_pt[0] is not None else None
     )
 
+    def _to_tabular_pt(x: float) -> float:
+        """A source x (page fraction) in the emitted tabular, column by
+        column, so a column set wider or narrower than its source carries
+        what lies inside it along."""
+        c = max(0, min(ncols - 1, bisect.bisect_right(_source_bounds, x) - 1))
+        lo, hi = _source_bounds[c], _source_bounds[c + 1]
+        share = (x - lo) / (hi - lo) if hi > lo else 0.0
+        e_lo, e_hi = _emitted_bounds_pt[c], _emitted_bounds_pt[c + 1]
+        return e_lo + max(0.0, min(1.0, share)) * (e_hi - e_lo)
+
+    def _rule_cmd(rule_pt: Optional[float]) -> str:
+        """The rule measured at rule_pt, as long as the source drew it.
+
+        Most rules cross the whole table and stay \\hline. A sub-row rule
+        does not: the voltage-regulator fixture rules "14.5 V < VIN < 30 V"
+        off from "16 V < VIN < 22 V" only from that sub-column on, and a
+        full \\hline struck through the label and "Tj = 25 C" beside them.
+        Such a rule is drawn as a bare \\vrule of the same weight in a
+        zero-width box, which takes exactly the height \\hline does.
+        """
+        extent = _rule_extent.get(rule_pt) if rule_pt is not None else None
+        if extent is None or _emitted_bounds_pt is None:
+            return "\\hline"
+        tol = _PARTIAL_RULE_TOL_PT / _A4_WIDTH_PT
+        if extent[0] <= _source_bounds[0] + tol and extent[1] >= _source_bounds[-1] - tol:
+            return "\\hline"
+        a, b = _to_tabular_pt(extent[0]), _to_tabular_pt(extent[1])
+        return (
+            f"\\noalign{{\\hbox to 0pt{{\\hskip {a:.2f}pt"
+            f"\\vrule width {b - a:.2f}pt height \\arrayrulewidth depth 0pt\\hss}}}}"
+        )
+
     def _row_ruled_below(index: int) -> bool:
         if _rules_pt:
             return _rule_below_pt(index) is not None
@@ -1554,7 +1603,7 @@ def _render_table(table: TableBlock) -> str:
         else bool(has_any_border and grid and _any_border(grid[0], "border_top"))
     )
     if _has_top_rule:
-        body_lines.append("\\hline")
+        body_lines.append(_rule_cmd(_top_rule_pt) if _rules_pt else "\\hline")
 
     # Each row's real height, from the same per-cell geometry used for
     # column measurement above (min y0 to max y1 across that row's own
@@ -2270,7 +2319,10 @@ def _render_table(table: TableBlock) -> str:
 
     for i, (cells, _) in enumerate(rendered_rows):
         if has_any_border:
-            rule = "\\hline" if i < len(grid) and _row_ruled_below(i) else ""
+            rule = (
+                _rule_cmd(_rule_below_pt(i) if _rules_pt else None)
+                if i < len(grid) and _row_ruled_below(i) else ""
+            )
         else:
             rule = "\\hline" if i in (0, len(rendered_rows) - 1) else ""
         # Skip positions occupied by spanned cells from previous rows

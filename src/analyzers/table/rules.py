@@ -52,6 +52,27 @@ def _rule_runs(flags) -> List[Tuple[int, int]]:
     return out
 
 
+# A printed rule is continuous; only scan dropout breaks it. A gap wider
+# than this is where the rule really stops (the voltage-regulator
+# fixture's sub-row rules start 32pt into their column).
+_RULE_GAP_PT = 2.0
+
+
+def _rule_extent(np, ink, run: Tuple[int, int]) -> Tuple[int, int]:
+    """The pixel columns a horizontal rule actually covers: the longest
+    stretch its band is inked along, bridging dropout gaps."""
+    covered = ink[run[0]:run[1]].mean(axis=0) > 0.5
+    max_gap = int(_RULE_GAP_PT * _RULE_ZOOM)
+    best, start, last = (0, 0), None, None
+    for x in np.nonzero(covered)[0]:
+        if start is None or x - last > max_gap:
+            start = x
+        last = x
+        if last + 1 - start > best[1] - best[0]:
+            best = (start, last + 1)
+    return best
+
+
 def _render_table_ink(np, pymupdf, page, bbox):
     """The table's region as an ink mask, with its rules found.
 
@@ -123,6 +144,14 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
 
     rule_x = [to_page(run, clip.x0, page_w) for run in vertical]
     rule_y = [to_page(run, clip.y0, page_h) for run in horizontal]
+    # Where each horizontal rule starts and ends. Not every rule crosses
+    # the whole table: the voltage-regulator fixture rules its sub-rows
+    # ("14.5 V < VIN < 30 V" over "16 V < VIN < 22 V") only from their own
+    # sub-column on, and leaves the label beside them unruled.
+    rule_x_extent = [
+        [(clip.x0 + px / _RULE_ZOOM) / page_w for px in _rule_extent(np, ink, run)]
+        for run in horizontal
+    ]
 
     # The INTERNAL vertical rules - the ones strictly between the table's
     # own left and right edges - are the real column boundaries the
@@ -263,6 +292,7 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
         # wrapped cells inside one ruled band put them anywhere in it.
         if rule_y:
             md["rule_y"] = sorted(rule_y)
+            md["rule_x_extent"] = [e for _, e in sorted(zip(rule_y, rule_x_extent))]
         if outer_top is not None:
             md["table_rule_y0"] = outer_top
         if outer_bottom is not None:

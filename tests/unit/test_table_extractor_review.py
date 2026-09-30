@@ -454,3 +454,24 @@ class TestOpenEdgesAndSpanRules:
         tex, _ = self._tex()
         assert "\\multicolumn{1}{c|}" in tex
         assert "\\multicolumn{1}{|" not in tex
+
+
+class TestPartialRules:
+    def test_a_rule_the_source_stops_short_is_drawn_short(self):
+        full, part = [0.10, 0.40], [0.20, 0.40]
+        tex, _ = TestOpenEdgesAndSpanRules._tex(
+            rule_y=[0.295, 0.315, 0.335, 0.355],
+            rule_x_extent=[full, part, full, full],
+        )
+        body = tex[tex.index("begin{tabular}"):tex.index("end{tabular}")]
+        assert body.count("\\hline") == 3
+        assert body.count("\\noalign{\\hbox to 0pt{\\hskip") == 1
+
+    def test_the_extent_of_a_rule_bridges_scan_dropout(self):
+        import numpy as np
+        from src.analyzers.table.rules import _rule_extent
+        ink = np.zeros((6, 300), dtype=bool)
+        ink[2:4, 60:280] = True
+        ink[2:4, 150:153] = False   # 1pt of dropout
+        ink[2:4, 10:40] = True      # a separate stroke 20pt to the left
+        assert _rule_extent(np, ink, (2, 4)) == (60, 280)
