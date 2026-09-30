@@ -342,3 +342,13 @@ class TestRuleDrivenRows:
         tex = build_latex(doc)
         body = tex[tex.index("\\begin{tabular}"):tex.index("\\end{tabular}")]
         assert body.count("\\hline") == 3
+
+
+class TestHeaderPrintedPosition:
+    def test_snapping_a_header_keeps_where_it_was_printed(self):
+        from src.analyzers.table.rules import _snap_row_to_columns
+        body = [[_cell("0", x0=0.20), _cell("00000000", x0=0.30)]]
+        header = [_cell("Decimal", x0=0.15), _cell("Binary", x0=0.34)]
+        snapped = _snap_row_to_columns(header, body)
+        assert snapped[1].visual_layout.bounding_box.x0 == 0.30      # binned to its column
+        assert snapped[1].metadata["printed_x"][0] == 0.34            # but printed here

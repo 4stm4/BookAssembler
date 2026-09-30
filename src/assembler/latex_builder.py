@@ -710,8 +710,8 @@ def _render_table(table: TableBlock) -> str:
     bins = _column_bins(grid)
     span_map = getattr(table, "span_map", {})
     # Where each lone placeholder mark sits in the source, by (row, col) -
-    # see _place_mark below. Filled only where cells are binned by x.
-    placeholder_x: Dict[Tuple[int, int], Tuple[float, float]] = {}
+    # see _place_at_printed_x below. Filled only where cells are binned by x.
+    printed_x: Dict[Tuple[int, int], Tuple[float, float]] = {}
     # Populated below only when bins are available (real per-column source
     # geometry); stays None otherwise so the fallback path further down
     # knows to fall back to the old content-length-driven estimate.
@@ -763,8 +763,11 @@ def _render_table(table: TableBlock) -> str:
                 # from it below, and font commands are not content.
                 text = _styled_cell_text(cell, _esc(raw).replace("\n", " "), median_pt, raw=raw)
                 texts[col] = raw
-                if raw.strip() in _PLACEHOLDER_MARKS and x0 is not None and x1 is not None:
-                    placeholder_x[(row_idx, col)] = (x0, x1)
+                _printed = (getattr(cell, "metadata", None) or {}).get("printed_x")
+                if _printed:
+                    printed_x[(row_idx, col)] = (_printed[0], _printed[1])
+                elif raw.strip() in _PLACEHOLDER_MARKS and x0 is not None and x1 is not None:
+                    printed_x[(row_idx, col)] = (x0, x1)
                 row_span = getattr(cell, "row_span", 1) or 1
                 col_span = getattr(cell, "col_span", 1) or 1
 
@@ -1336,15 +1339,17 @@ def _render_table(table: TableBlock) -> str:
         seps = ["|"] * (ncols + 1)
         col_spec = "|" + "|".join(col_spec_parts) + "|"
 
-    def _place_mark(text: str, col: int, x0: float, x1: float) -> str:
-        """Set a lone placeholder mark where the source printed it.
+    def _place_at_printed_x(text: str, col: int, x0: float, x1: float) -> str:
+        """Set a cell's text where the source printed it, not flush with
+        its column's values.
 
-        A column is set flush right or left for its NUMBERS, and a "•"
-        standing in for a missing number is not a number: the source
-        centres it under the figures, so flushing it against the
-        column's edge put every one of the decimal/binary fixture's dots
-        5-8px right of its printed position - two patches of mismatch
-        per dot instead of one. The gap between the mark and the
+        A column is set flush right or left for its VALUES. Two kinds of
+        cell do not follow them in print: a lone "•" standing in for a
+        missing number, which the source centres under the figures
+        (flushing it put every one of the decimal/binary fixture's dots
+        5-8px right), and a heading, which that fixture sets over its
+        column ("Binary" 16.4pt from its rule where the digits start at
+        7.3pt; flushing it put both headings 8.5pt left). The gap between the mark and the
         column's set edge is taken from their measured positions and
         held open with an invisible rule; an hspace would not do, since a
         trailing one on a raggedleft cell is trimmed away with the
@@ -2190,8 +2195,11 @@ def _render_table(table: TableBlock) -> str:
         rendered = []
         for col, c in enumerate(cells):
             if (i, col) not in span_map:  # Only render if not spanned from above
-                if isinstance(c, str) and (i, col) in placeholder_x:
-                    c = _place_mark(c, col, *placeholder_x[(i, col)])
+                if (
+                    isinstance(c, str) and (i, col) in printed_x
+                    and not (i == 0 and col < len(header_is_centered) and header_is_centered[col])
+                ):
+                    c = _place_at_printed_x(c, col, *printed_x[(i, col)])
                 rendered.append(_render_cell(c, col, row_idx=i))
         extra = ""
         _row_extra_pt = raw_extra_pt[i] * _extra_scale if i < len(raw_extra_pt) else 0.0

@@ -975,6 +975,11 @@ def _snap_row_to_columns(
             continue
         box = vl.bounding_box
         nearest = min(bins, key=lambda b: abs(b - box.x0))
+        # Where the cell was actually printed, kept before the box is moved:
+        # the snap puts it in the right COLUMN, but the assembler still has
+        # to draw it where the source did - a "Binary" heading centred
+        # over its column otherwise lands flush with the digits under it.
+        cell.metadata["printed_x"] = [box.x0, box.x1]
         cell.visual_layout = VisualLayout(
             bounding_box=NormalizedRect(
                 x0=nearest, y0=box.y0, x1=nearest + box.width, y1=box.y1,
