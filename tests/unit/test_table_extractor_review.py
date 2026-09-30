@@ -767,3 +767,23 @@ class TestSubColumnRules:
         assert tex.count("height 0pt depth") == 1
         # (0.3585 - 0.3185) x 845.04pt, less the 0.4pt rule weight
         assert "depth 33.40pt" in tex
+
+
+class TestRuleWeightEach:
+    def test_each_rule_is_drawn_at_its_own_weight(self):
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("L1", x0=0.10, y0=0.32), _cell("aa", x0=0.20, y0=0.32), _cell("1", x0=0.33, y0=0.32)]]
+        grid = [[_styled(c) for c in row] for row in rows]
+        table = TableBlock(grid=grid, row_count=2, column_count=3, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.40, y1=0.33), page_or_screen_index=0))
+        for row in grid:
+            for cell in row:
+                cell.border_left = cell.border_right = True
+        table.metadata = {"column_rule_x": [0.175, 0.275], "rule_y": [0.298, 0.3185, 0.3385],
+                          "rule_weight_pt": [1.0, 1.5, 2.0]}
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        tex = build_latex(doc)
+        for pt in (1.0, 1.5, 2.0):
+            assert f"\\hrule height {pt * 72.27 / 72:.2f}pt" in tex

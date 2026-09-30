@@ -1618,6 +1618,14 @@ def _render_table(table: TableBlock) -> str:
     # line" row, where the source prints none.
     _rules_pt = sorted(y * _A4_HEIGHT_PT for y in (_table_md.get("rule_y") or []))
     _rule_extent = dict(zip(_rules_pt, _table_md.get("rule_x_extent") or []))
+    # Each rule at the weight it was printed (TeX pt from PDF pt); the
+    # table's median, \arrayrulewidth, where it was not measured.
+    _rule_weight = {
+        r: w * 72.27 / 72.0 for r, w in zip(_rules_pt, _table_md.get("rule_weight_pt") or []) if w > 0
+    }
+
+    def _weight_of(rule_pt: Optional[float]) -> float:
+        return _rule_weight.get(rule_pt, _rule_w_pt) if rule_pt is not None else _rule_w_pt
     _row_centre_pt: List[Optional[float]] = []
     _row_top_pt: List[Optional[float]] = []
     for _grow in grid:
@@ -1665,15 +1673,17 @@ def _render_table(table: TableBlock) -> str:
         zero-width box, which takes exactly the height \\hline does.
         """
         extent = _rule_extent.get(rule_pt) if rule_pt is not None else None
+        weight = _weight_of(rule_pt)
+        full = f"\\noalign{{\\hrule height {weight:.2f}pt}}" if rule_pt in _rule_weight else "\\hline"
         if extent is None or _emitted_bounds_pt is None:
-            return "\\hline"
+            return full
         tol = _PARTIAL_RULE_TOL_PT / _A4_WIDTH_PT
         if extent[0] <= _source_bounds[0] + tol and extent[1] >= _source_bounds[-1] - tol:
-            return "\\hline"
+            return full
         a, b = _to_tabular_pt(extent[0]), _to_tabular_pt(extent[1])
         return (
             f"\\noalign{{\\hbox to 0pt{{\\hskip {a:.2f}pt"
-            f"\\vrule width {b - a:.2f}pt height \\arrayrulewidth depth 0pt\\hss}}}}"
+            f"\\vrule width {b - a:.2f}pt height {weight:.2f}pt depth 0pt\\hss}}}}"
         )
 
     _sub_rules = [
@@ -1694,7 +1704,9 @@ def _render_table(table: TableBlock) -> str:
         for x, y0, y1 in _sub_rules:
             if abs(y0 - rule_pt) > 0.5:
                 continue
-            depth = y1 - y0 - _rule_w_pt
+            depth = y1 - y0 - _weight_of(rule_pt) / 2.0 - _weight_of(
+                min(_rules_pt, key=lambda r: abs(r - y1))
+            ) / 2.0
             left = _to_tabular_pt(x) - _rule_w_pt / 2.0
             out += (
                 f"\\noalign{{\\hbox to 0pt{{\\hskip {left:.2f}pt\\vrule width {_rule_w_pt:.2f}pt "
@@ -2470,7 +2482,7 @@ def _render_table(table: TableBlock) -> str:
     # first drawn rule. Every target is taken from that anchor, not from
     # the previous row, so a row clamped at its floor does not carry its
     # error down the table.
-    _ARRAYRULE_PT = _rule_w_pt
+    _ARRAYRULE_PT = _weight_of(_top_rule_pt) if _rules_pt else _rule_w_pt
     _y_pt = 0.0            # emitted position of the current point
     _anchor = None         # (emitted centre, measured position) of the first drawn rule
     _pre_air_pt = 0.0      # vskip emitted under the rule just drawn
@@ -2559,6 +2571,7 @@ def _render_table(table: TableBlock) -> str:
         _row_h_pt = _base_line_pt + max(0, _row_line_count(i) - 1) * _unstretched_line_pt
         _y_pt += _pre_air_pt
         _measured = _rule_below_pt(i) if rule else None
+        _ARRAYRULE_PT = _weight_of(_measured) if (rule and _rules_pt) else _rule_w_pt
         if _measured is not None and _anchor is not None:
             _target = _anchor[0] + (_measured - _anchor[1])
             # A row keeps at least its own natural line boxes. Three

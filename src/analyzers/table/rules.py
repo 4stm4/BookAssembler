@@ -385,6 +385,13 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
         if rule_y:
             md["rule_y"] = sorted(rule_y)
             md["rule_x_extent"] = [e for _, e in sorted(zip(rule_y, rule_x_extent))]
+            # Each horizontal rule's own weight, in PDF points: a scan does
+            # not print its rules alike (the voltage-regulator fixture's
+            # run 1.0 to 1.7pt), and one median weight for all left every
+            # rule a pixel row or two off its source in the overlay.
+            md["rule_weight_pt"] = [
+                (b - a) / _RULE_ZOOM for _, (a, b) in sorted(zip(rule_y, horizontal), key=lambda z: z[0])
+            ]
             # Sub-column rules, by x and the two horizontal rules they join.
             md["sub_rule"] = [
                 [(clip.x0 + (x + 0.5) / _RULE_ZOOM) / page_w, rule_y[first], rule_y[last]]
