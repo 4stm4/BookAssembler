@@ -398,6 +398,9 @@ class TestSideBySideCells:
         doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
         tex = build_latex(doc)
         assert "Tj" in tex and "145V" in tex
+        # "Tj" is boxed to the printed distance from its start to "145V"'s
+        # (0.235 - 0.2 of the page), so "145V" starts where it was printed
+        assert "\\makebox[20.91pt][l]{" in tex
 
 
 class TestDisjointRowsInterleave:

@@ -986,11 +986,18 @@ def _render_table(table: TableBlock) -> str:
                     e[0] is None or e[1] is None or not isinstance(e[2], str) for e in entries
                 ):
                     continue
+                # Each one starts where it was printed: everything before it
+                # is boxed to the printed distance between their starts.
+                # Held apart by the printed gap instead, the second moved
+                # with the first's width, and ours is not the print's - the
+                # voltage-regulator fixture's "with line" sat 3.5pt left of
+                # its print behind a narrower "Quiescent Current Change".
                 entries.sort(key=lambda e: e[0])
-                joined = entries[0][2]
+                joined = ""
                 for prev, cur in zip(entries, entries[1:]):
-                    gap = max(0.0, (cur[0] - prev[1]) * _A4_WIDTH_PT)
-                    joined += f"\\rule{{{gap:.2f}pt}}{{0pt}}" + cur[2]
+                    advance = max(0.0, (cur[0] - prev[0]) * _A4_WIDTH_PT)
+                    joined += f"\\makebox[{advance:.2f}pt][l]{{{prev[2]}}}"
+                joined += entries[-1][2]
                 cells[col] = joined
                 texts[col] = " ".join(e[3] for e in entries)
                 printed_x[(row_idx, col)] = (entries[0][0], entries[-1][1], _PLACE_INDENT_PT)
