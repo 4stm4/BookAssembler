@@ -532,7 +532,7 @@ class TestNarrowCellsFitTheirColumn:
         spec = next(l for l in tex.splitlines() if "begin{tabular}" in l)
         # 0.055 * 21cm less one padding and half a rule, not its 1.05cm text
         assert spec.endswith("p{1.01cm}@{}}")
-        assert "[r]{\\latinfont \\fontsize{8.00}{9.60}\\selectfont mV/VOUT}" in tex
+        assert "[r]{\\latinfont \\fontsize{8.00}{9.60}\\selectfont mV/VOUT" in tex
 
 
 class TestStackedLines:
@@ -601,3 +601,21 @@ class TestTextUnderRules:
         }
         doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
         assert "\\noalign{\\vskip -" in build_latex(doc)
+
+
+class TestPlacementByBoxes:
+    def test_a_value_printed_past_its_column_edge_overhangs_it(self):
+        # right-set units ending at 0.37 of the page, one printed 5pt further
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("Unit", x0=0.32, y0=0.30)],
+                [_cell("L1", x0=0.10, y0=0.32), _cell("a", x0=0.20, y0=0.32), _cell("mV", x0=0.32, y0=0.32)],
+                [_cell("L2", x0=0.10, y0=0.34), _cell("b", x0=0.20, y0=0.34), _cell("mA", x0=0.32, y0=0.34)],
+                [_cell("L3", x0=0.10, y0=0.36), _cell("c", x0=0.20, y0=0.36), _cell("uV/VOUT", x0=0.3284, y0=0.36)]]
+        tex = _ruled_tex(rows)
+        assert "uV/VOUT\\kern-" in tex
+
+    def test_a_box_shared_out_by_character_count_is_not_placed_by(self):
+        from src.analyzers.table.rules import _make_cell, _split_numeric_pair
+        parts = _split_numeric_pair("63 00111111", NormalizedRect(x0=0.2, y0=0.3, x1=0.4, y1=0.31), None)
+        cells = [_make_cell(t, b, s, 0) for t, b, s in parts]
+        assert all(c.metadata.get("x_estimated") for c in cells)
+        assert not _make_cell("63", NormalizedRect(x0=0.2, y0=0.3, x1=0.25, y1=0.31), None, 0).metadata.get("x_estimated")

@@ -627,6 +627,13 @@ _A4_WIDTH_PT = 21.0 * _PT_PER_CM
 # How far short of the table's edge a measured rule may stop and still be
 # drawn across all of it: scan edges are ragged by a point or so.
 _PARTIAL_RULE_TOL_PT = 2.0
+# How far a column's set edge as the analyzer reads it off the ink lies
+# from where LaTeX has to place the glyphs' box for the two inks to
+# coincide: the glyphs' side bearing plus the anti-aliased edge the ink
+# threshold leaves out. Measured, not derived - on the decimal/binary
+# fixture every column sat 0.66pt too far in without it, and the
+# voltage-regulator fixture's overlay is best at the same figure.
+_INK_EDGE_INSET_PT = 0.7
 # The narrowest p{} a narrow column is given, only so that a degenerate
 # measurement cannot produce a zero or negative width.
 _MIN_NARROW_P_CM = 0.1
@@ -819,6 +826,10 @@ def _render_table(table: TableBlock) -> str:
     col_x0_sum: Optional[List[float]] = None
     col_x1_sum: Optional[List[float]] = None
     col_count: Optional[List[int]] = None
+    # Each column's usual left and right edge, the median of its cells'
+    # boxes: what a cell's own box is compared with to place it.
+    col_edge_x0: List[Optional[float]] = []
+    col_edge_x1: List[Optional[float]] = []
     # Row-span width, in characters, tracked per cell alongside its text -
     # needed below to give \multirow an explicit column width instead of
     # "*" (natural width), which a p{} column can't provide on its own.
@@ -843,6 +854,8 @@ def _render_table(table: TableBlock) -> str:
         col_x0_sum = [0.0] * ncols
         col_x1_sum = [0.0] * ncols
         col_count = [0] * ncols
+        _col_x0s: List[List[float]] = [[] for _ in range(ncols)]
+        _col_x1s: List[List[float]] = [[] for _ in range(ncols)]
         for row_idx, row in enumerate(grid):
             cells = [""] * ncols
             texts = [""] * ncols
@@ -857,13 +870,25 @@ def _render_table(table: TableBlock) -> str:
                 x0 = _cell_x0(cell)
                 col = min(range(ncols), key=lambda i: abs(bins[i] - x0))
                 x1 = _cell_x1(cell)
+                # A column's usual edge is its values': not a heading's, not a
+                # placeholder mark's (both placed on their own), and not a
+                # box shared out of a longer line by character count.
+                _measured = (
+                    row_idx > 0
+                    and not (cell.metadata or {}).get("x_estimated")
+                    and _cell_text(cell).strip() not in _PLACEHOLDER_MARKS
+                )
                 if x0 is not None:
                     col_min_x0[col] = x0 if col_min_x0[col] is None else min(col_min_x0[col], x0)
                     col_x0_sum[col] += x0
+                    if _measured:
+                        _col_x0s[col].append(x0)
                     col_count[col] += 1
                 if x1 is not None:
                     col_max_x1[col] = x1 if col_max_x1[col] is None else max(col_max_x1[col], x1)
                     col_x1_sum[col] += x1
+                    if _measured:
+                        _col_x1s[col].append(x1)
                 raw = _cell_text(cell)
                 # texts[] keeps the RAW string: column widths are measured
                 # from it below, and font commands are not content.
@@ -890,7 +915,7 @@ def _render_table(table: TableBlock) -> str:
                     printed_x[(row_idx, col)] = (_printed[0], _printed[1], _PLACE_EXPLICIT_PT)
                 elif raw.strip() in _PLACEHOLDER_MARKS and x0 is not None and x1 is not None:
                     printed_x[(row_idx, col)] = (x0, x1, _PLACE_EXPLICIT_PT)
-                elif x0 is not None and x1 is not None:
+                elif x0 is not None and x1 is not None and not (cell.metadata or {}).get("x_estimated"):
                     printed_x[(row_idx, col)] = (x0, x1, _PLACE_INDENT_PT)
                 row_span = getattr(cell, "row_span", 1) or 1
                 col_span = getattr(cell, "col_span", 1) or 1
@@ -970,6 +995,8 @@ def _render_table(table: TableBlock) -> str:
                 texts[col] = " ".join(e[3] for e in entries)
                 printed_x[(row_idx, col)] = (entries[0][0], entries[-1][1], _PLACE_INDENT_PT)
             rendered_rows.append((cells, texts))
+        col_edge_x0 = [sorted(v)[len(v) // 2] if v else None for v in _col_x0s]
+        col_edge_x1 = [sorted(v)[len(v) // 2] if v else None for v in _col_x1s]
     else:
         ncols = max((len(row) for row in grid), default=0)
         if ncols == 0:
@@ -1197,47 +1224,6 @@ def _render_table(table: TableBlock) -> str:
                 _tabcolsep_pt = max(0.5, min(4.0, min(_real_pads_pt) / 2.0))
             _TABCOLSEP_CM = _tabcolsep_pt / _PT_PER_CM
 
-            # What the source indents each column by, beyond the
-            # tabcolsep every column now gets. Taken from the analyzer's
-            # own pixel measurement of where each column's ink starts and
-            # ends (column_ink_x0/x1) - NOT from the KRM cell boxes,
-            # which cannot answer this: measured against the same pixels,
-            # a per-column median of those boxes is 33-39pt off on a
-            # right-set column (every row's number has its own digit
-            # count, so the ragged side never settles) and negative on
-            # another, where some cells' boxes cross a rule outright.
-            # The SET side - the one the column's text is flush against,
-            # i.e. whichever padding is smaller - is the one to
-            # reproduce; the ragged side follows from the width.
-            _ink_x0 = _table_md.get("column_ink_x0")
-            _ink_x1 = _table_md.get("column_ink_x1")
-            if _ink_x0 and _ink_x1 and len(_ink_x0) == ncols:
-                for _i in range(ncols):
-                    if _ink_x0[_i] is None or _ink_x1[_i] is None:
-                        continue
-                    _left_pt = (
-                        _ink_x0[_i] - boundaries[_i]
-                    ) * _A4_FULL_WIDTH_CM * _PT_PER_CM
-                    _right_pt = (
-                        boundaries[_i + 1] - _ink_x1[_i]
-                    ) * _A4_FULL_WIDTH_CM * _PT_PER_CM
-                    _set_side_pt = min(_left_pt, _right_pt)
-                    # The analyzer's ink scan has to start clear of the
-                    # rule (3pt) and a printed rule is only ~1.7pt wide
-                    # either side of where it is recorded, so whatever
-                    # content sits in the difference is invisible to it
-                    # and every padding it reports is that much too
-                    # large. Measured against independent word-box
-                    # positions on the decimal/binary fixture, the
-                    # overshoot is consistent: +1.6/+0.6/+1.6/+1.6pt on
-                    # the left edges and +1.6/+0.7/+1.0/+1.7 on the
-                    # right. Taking it back off here keeps the indent on
-                    # the real figure instead of a systematically
-                    # inflated one.
-                    _INK_EDGE_BIAS_PT = 1.5
-                    _col_indent_pt[_i] = max(
-                        0.0, _set_side_pt - _INK_EDGE_BIAS_PT - _tabcolsep_pt
-                    )
             # No floor from the column's content: a column is as wide as
             # its rules say, and a cell wider than that is set where the
             # source set it - into the column's padding (_fit_to_column).
@@ -1293,6 +1279,36 @@ def _render_table(table: TableBlock) -> str:
                         col_is_right.append(pad_right < pad_left)
                     else:
                         col_is_right.append(True)
+
+            # What the source indents each column by, beyond what LaTeX
+            # already sets between its boundary and its text. Taken from
+            # the analyzer's own pixel measurement of where each column's
+            # ink starts and ends (column_ink_x0/x1) - NOT from the KRM
+            # cell boxes, which cannot answer this: measured against the
+            # same pixels, a per-column median of those boxes is 33-39pt
+            # off on a right-set column and negative on another, where some
+            # cells' boxes cross a rule outright. It is measured on the
+            # column's SET side, the one col_is_right names: taking
+            # whichever side was nearer its rule picked the ragged side of
+            # the voltage-regulator fixture's TYP and UNITS columns, whose
+            # widest values nearly fill them, and gave them no indent.
+            _ink_x0 = _table_md.get("column_ink_x0")
+            _ink_x1 = _table_md.get("column_ink_x1")
+            if _ink_x0 and _ink_x1 and len(_ink_x0) == ncols:
+                for _i in range(ncols):
+                    if _ink_x0[_i] is None or _ink_x1[_i] is None:
+                        continue
+                    _right_set = col_is_right[_i] if col_is_right is not None else True
+                    _set_pt = (
+                        boundaries[_i + 1] - _ink_x1[_i] if _right_set
+                        else _ink_x0[_i] - boundaries[_i]
+                    ) * _A4_FULL_WIDTH_CM * _PT_PER_CM
+                    # \tabcolsep and half the rule, or nothing on an open
+                    # side; and the inset between the ink edge as read and
+                    # the glyph box LaTeX places (_INK_EDGE_INSET_PT).
+                    _open = (_i == ncols - 1 and _open_right) if _right_set else (_i == 0 and _open_left)
+                    _pad_pt = 0.0 if _open else _tabcolsep_pt + _rule_w_pt / 2.0
+                    _col_indent_pt[_i] = max(0.0, _set_pt - (0.0 if _open else _pad_pt + _INK_EDGE_INSET_PT))
 
             # A column-group header ("CONDITIONS") can be CENTERED over its
             # own wide column even though every DATA cell below it sets
@@ -1461,20 +1477,27 @@ def _render_table(table: TableBlock) -> str:
         trailing one on a raggedleft cell is trimmed away with the
         paragraph's last glue.
         """
-        ink_x0 = _table_md.get("column_ink_x0") or []
-        ink_x1 = _table_md.get("column_ink_x1") or []
-        if col_is_right is None or col >= len(col_is_right) or col >= len(ink_x0):
+        # Against the column's usual edge in the same boxes: where the
+        # column's set edge itself lands is the indent's business (from the
+        # ink), and a box compared with a box carries no OCR bias. A cell
+        # printed past the usual edge - "uV/VOUT" overhanging the voltage-
+        # regulator fixture's UNITS column - is given the overhang back with
+        # a negative kern.
+        if col_is_right is None or col >= len(col_is_right) or col >= len(col_edge_x0):
             return text
         scale = _A4_FULL_WIDTH_CM * _PT_PER_CM
         if col_is_right[col]:
-            if ink_x1[col] is None:
+            if col_edge_x1[col] is None:
                 return text
-            gap = (ink_x1[col] - x1) * scale
-            return text + f"\\rule{{{gap:.2f}pt}}{{0pt}}" if gap > min_gap else text
-        if ink_x0[col] is None:
+            gap = (col_edge_x1[col] - x1) * scale
+        else:
+            if col_edge_x0[col] is None:
+                return text
+            gap = (x0 - col_edge_x0[col]) * scale
+        if abs(gap) <= min_gap:
             return text
-        gap = (x0 - ink_x0[col]) * scale
-        return f"\\rule{{{gap:.2f}pt}}{{0pt}}" + text if gap > min_gap else text
+        hold = f"\\rule{{{gap:.2f}pt}}{{0pt}}" if gap > 0 else f"\\kern{gap:.2f}pt "
+        return text + hold if col_is_right[col] else hold + text
 
     def _fit_to_column(text: str, col: int) -> str:
         """A one-line cell of a narrow column, boxed to the column's width

@@ -3,6 +3,7 @@
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, X_OVERLAP_THRESHOLD, Y_STEP_TOLERANCE, _SEPARATOR_RE, _SINGLE_COL_PROSE_LEN, _TAB_SPLIT_RE, log
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 from src.krm.models import (
     ContainerUnit,
@@ -276,35 +277,43 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
     _rows_kept = ink[_row_keep] if _row_keep.any() else ink
     _MIN_INK_ROW_SHARE = 0.015
     _col_ink_rows = _rows_kept.sum(axis=0)
-    _inked_cols = _col_ink_rows > (_MIN_INK_ROW_SHARE * max(1, _rows_kept.shape[0]))
+    # Each vertical rule's pixel columns: its detected core, widened over
+    # its blurred flanks for as long as they stay inked on a tenth of the
+    # rows the core is, and one pixel more. Scan rules are neither solid
+    # (the decimal/binary fixture's core covers 53-75% of the rows) nor
+    # sharp (four flank pixels each side at 30-50%).
+    _cover = _rows_kept.mean(axis=0) if _rows_kept.shape[0] else np.zeros(width)
+    _rule_cols = np.zeros(width, dtype=bool)
+    for _a, _b in vertical:
+        _core = float(_cover[_a:_b].mean()) if _b > _a else 0.0
+        _l, _r = _a, _b
+        while _l > 0 and _cover[_l - 1] >= 0.1 * _core:
+            _l -= 1
+        while _r < width and _cover[_r] >= 0.1 * _core:
+            _r += 1
+        _rule_cols[max(0, _l - 1):min(width, _r + 1)] = True
     for _i in range(len(_bands) - 1):
-        # Keep clear of both rules so their own pixels are not read as
-        # the column's content. 1.5pt was not enough: profiled on the
-        # decimal/binary fixture, a printed rule is about 10px wide at
-        # this zoom (~3.3pt, so ~1.7pt each side of the position stored
-        # for it), and the leading flank landed inside the old margin -
-        # three of that table's four columns then reported their right
-        # padding as exactly the margin (1.5pt) instead of the real
-        # 5.6/8.2/11.8pt, because the rule itself was being read as the
-        # column's own ink. The fourth only escaped because it happens
-        # to have 19pt of clear space before its rule.
-        # An open side - no frame rule, the band ends at the text box -
-        # has no rule to keep clear of, and a clearance there cut 3pt off
-        # the very ink that sets that edge: the voltage-regulator
-        # fixture's UNITS column read its right ink edge 3pt short of
-        # "uV/VOUT", and every unit then looked flush with it.
-        _RULE_CLEARANCE_PT = 3.0
-        _lo_clear = _RULE_CLEARANCE_PT if (_i > 0 or outer_left is not None) else 0.0
-        _hi_clear = _RULE_CLEARANCE_PT if (_i < len(_bands) - 2 or outer_right is not None) else 0.0
-        _lo = int(((_bands[_i] * page_w + _lo_clear) - clip.x0) * _RULE_ZOOM)
-        _hi = int(((_bands[_i + 1] * page_w - _hi_clear) - clip.x0) * _RULE_ZOOM)
+        # The band runs from rule to rule; the rules' own pixels - core and
+        # blurred flanks alike - are taken out by what they are (_rule_cols),
+        # not by a fixed clearance: 3pt from each rule's centre also hid
+        # any glyph set closer than that to its rule.
+        _lo = int((_bands[_i] * page_w - clip.x0) * _RULE_ZOOM)
+        _hi = int((_bands[_i + 1] * page_w - clip.x0) * _RULE_ZOOM)
         _lo = max(0, min(width - 1, _lo))
         _hi = max(0, min(width, _hi))
         if _hi <= _lo:
             ink_x0.append(None)
             ink_x1.append(None)
             continue
-        _cols = np.nonzero(_inked_cols[_lo:_hi])[0]
+        # A glyph column is inked on a good share of the rows the column
+        # holds text on; a scan speck on a row or two. Against an absolute
+        # floor alone, specks at the floor carried the voltage-regulator
+        # fixture's TYP column 2.3pt past where its figures end, to 486.6
+        # where the print stops at 484.3. A tenth of the column's own
+        # densest pixel column separates the two there.
+        _band_rows = np.where(_rule_cols[_lo:_hi], 0, _col_ink_rows[_lo:_hi])
+        _noise = _MIN_INK_ROW_SHARE * max(1, _rows_kept.shape[0])
+        _cols = np.nonzero(_band_rows > max(_noise, 0.1 * float(_band_rows.max(initial=0))))[0]
         if _cols.size == 0:
             ink_x0.append(None)
             ink_x1.append(None)
@@ -647,6 +656,13 @@ def _line_rows(block: Any) -> List[Tuple[str, Optional[NormalizedRect], Optional
     return rows
 
 
+@dataclass(frozen=True)
+class _EstimatedRect(NormalizedRect):
+    """A box shared out of a longer line by character count, not measured:
+    its x can be off by several points (the decimal/binary fixture's split
+    binary values by 5pt), so nothing downstream should place by it."""
+
+
 def _split_numeric_pair(
     text: str, bbox: Optional[NormalizedRect], style: Optional[Any],
 ) -> List[Tuple[str, Optional[NormalizedRect], Optional[Any]]]:
@@ -683,7 +699,7 @@ def _split_numeric_pair(
     for match in re.finditer(r"\S+", text):
         parts.append((
             match.group(),
-            NormalizedRect(
+            _EstimatedRect(
                 x0=bbox.x0 + match.start() * char_w, y0=bbox.y0,
                 x1=bbox.x0 + match.end() * char_w, y1=bbox.y1,
             ),
@@ -719,6 +735,8 @@ def _make_cell(
     # and picks the wrong one).
     if source_block_id is not None:
         cell.metadata["source_block_id"] = source_block_id
+    if isinstance(bbox, _EstimatedRect):
+        cell.metadata["x_estimated"] = True
     return cell
 
 
@@ -1139,25 +1157,11 @@ def _table_from_lines(block: Any) -> Optional[TableBlock]:
         return None
 
     page_idx = _page_idx(block)
+    # Cell geometry and typography, not just the table's outer box - each
+    # cell's own bbox and StyleDescriptor, read straight off the source
+    # line (RFC 0002: TableCell is a BaseKRMNode with a visual_layout slot).
     grid: List[List[TableCell]] = [
-        [
-            TableCell(
-                content=[ParagraphBlock(
-                    inlines=[TextLineInline(spans=[StyledTextSpan(text=t)])],
-                )],
-                # Cell geometry (width/height via NormalizedRect.width/.height)
-                # and typography, not just the table's outer box — the row's
-                # and column's own bbox and StyleDescriptor, read straight off
-                # the source line (RFC 0002: TableCell is a BaseKRMNode, it
-                # already has a visual_layout slot; it was just left empty).
-                visual_layout=VisualLayout(
-                    bounding_box=bbox,
-                    page_or_screen_index=page_idx or 0,
-                    style=style,
-                ) if bbox is not None else None,
-            )
-            for t, bbox, style in row
-        ]
+        [_make_cell(t, bbox, style, page_idx) for t, bbox, style in row]
         for row in rows
     ]
 
