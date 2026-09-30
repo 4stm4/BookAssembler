@@ -425,3 +425,32 @@ class TestDisjointRowsInterleave:
         # "sub" beside "Label" in x cannot print over it, so the row may
         # close up to the source step; right under it, it may not.
         assert self._first_extra(sub_x0=0.20) < self._first_extra(sub_x0=0.10)
+
+
+class TestOpenEdgesAndSpanRules:
+    @staticmethod
+    def _tex(**metadata):
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        table = _table([["Name", "Head", "Unit"], ["Label", "Tj", "V"], ["L2", "X", "mA"]], y0=0.30)
+        for row in table.grid:
+            for cell in row:
+                cell.border_left = cell.border_right = True
+        table.metadata = {"column_rule_x": [0.175, 0.275], **metadata}
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        tex = build_latex(doc)
+        return tex, next(l for l in tex.splitlines() if "begin{tabular}" in l)
+
+    def test_a_side_without_a_frame_rule_is_not_padded(self):
+        _, spec = self._tex()
+        assert spec.startswith("\\begin{tabular}{@{}") and spec.endswith("@{}}")
+
+    def test_a_framed_side_keeps_its_rule(self):
+        _, spec = self._tex(table_rule_x0=0.09, table_rule_x1=0.36)
+        assert spec.startswith("\\begin{tabular}{|") and spec.endswith("|}")
+
+    def test_a_multicolumn_past_the_first_does_not_repeat_the_left_rule(self):
+        # "Head" is centred in its column, so it is set as a \multicolumn
+        tex, _ = self._tex()
+        assert "\\multicolumn{1}{c|}" in tex
+        assert "\\multicolumn{1}{|" not in tex

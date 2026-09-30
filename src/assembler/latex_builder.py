@@ -1006,6 +1006,14 @@ def _render_table(table: TableBlock) -> str:
         if _table_md.get("rule_width_pt") else 0.4
     )
     rule_x = _table_md.get("column_rule_x")
+    # A side the scan measured and found no frame rule on is bounded by
+    # the text itself (bb.x0/bb.x1 below). Nothing pads it: LaTeX's
+    # \tabcolsep there would push the outermost text off the edge the
+    # source printed it on - measured on the voltage-regulator fixture,
+    # which draws no frame, every rule landed 3-5pt off its source once
+    # the table was cut to its text.
+    _open_left = bool(rule_x) and _table_md.get("table_rule_x0") is None
+    _open_right = bool(rule_x) and _table_md.get("table_rule_x1") is None
     if bb is not None and rule_x and len(rule_x) == ncols - 1:
         # Every INTERNAL boundary here is a rule the source actually
         # printed; the outer two used to come from bb.x0/bb.x1 instead -
@@ -1144,23 +1152,13 @@ def _render_table(table: TableBlock) -> str:
             # its own real rule-measured width (4.96cm declared vs a
             # source column that measures much narrower) - the opposite
             # of what subtracting tabcolsep was trying to fix.
-            # Replacing the char-count estimate outright with the real
-            # measured extent (col_max_x1[i]-col_min_x0[i], already
-            # computed above) helped the decimal/binary fixture (15.7% ->
-            # 15.5%: its "Decimal" header is exactly what the estimate had
-            # been overestimating, 2.40cm declared vs 1.80cm real) but
-            # regressed the voltage-regulator fixture (24.2% -> 24.5%):
-            # its narrow MIN/TYP/MAX/UNITS columns shrank 32-36% under the
-            # real extent alone, with zero safety margin, more than the
-            # header case gained. Capping the estimate at the real extent
-            # PLUS a small margin - never LARGER than the old estimate,
-            # only ever pulled down toward real geometry when the
-            # estimate overshoots it by more than that margin - keeps the
-            # win without that regression: it cannot inflate a column
-            # beyond what the char-count formula already asked for, and it
-            # cannot starve one that real geometry says needs more than
-            # the margin covers alone.
-            _CONTENT_FLOOR_MARGIN_CM = 0.15
+            # The floor is the char-count estimate, pulled down to the
+            # column's real measured extent where that is smaller. Every
+            # boundary here is measured: a printed rule, or on an open side
+            # the text edge itself, now that nothing pads it. A 0.15cm
+            # hedge on top of the extent, kept for open sides while they
+            # were still padded, left the voltage-regulator fixture's UNITS
+            # column 5pt wider than its source.
 
             # Tried subtracting 2*tabcolsep from this floor too (the
             # fraction branch below already does, so its own FINAL
@@ -1189,25 +1187,10 @@ def _render_table(table: TableBlock) -> str:
                     and col_min_x0[i] is not None and col_max_x1[i] is not None
                 ):
                     real = (col_max_x1[i] - col_min_x0[i]) * _A4_FULL_WIDTH_CM
-                    # Both of this column's boundaries are rules the source
-                    # actually printed, so the width they give is not an
-                    # estimate to be hedged against - it IS the measurement.
-                    # The only thing a floor still has to guarantee there is
-                    # that the column's own ink fits, which is exactly the
-                    # glyph extent and not a hand's breadth more: the margin
-                    # is what kept the decimal/binary fixture's last column
-                    # at 2.69cm (extent 2.54 + 0.15) where its own rules say
-                    # 2.54, leaving it +3.3pt wide after tabcolsep was
-                    # already measured from the source. Columns whose outer
-                    # boundary fell back to the text box keep the margin -
-                    # there the width is a guess and the hedge is earned.
-                    _real_edges = (
-                        (i > 0 or _outer_left is not None)
-                        and (i < ncols - 1 or _outer_right is not None)
-                    )
-                    if _real_edges:
-                        return min(estimate, real)
-                    return min(estimate, real + _CONTENT_FLOOR_MARGIN_CM)
+                    # The ink has to fit, and exactly the glyph extent does
+                    # that: a hedge kept the decimal/binary fixture's last
+                    # column at 2.69cm where its own rules say 2.54.
+                    return min(estimate, real)
                 return estimate
 
             # A column's advance is p{} + 2*tabcolsep + the RULE beside
@@ -1220,12 +1203,19 @@ def _render_table(table: TableBlock) -> str:
             # +1.5 and +2.1pt out against the source's, about half a
             # point per column, with 5 rules x 0.4pt = 2.0pt of it.
             _ARRAYRULE_CM = _rule_w_pt / _PT_PER_CM
+
+            def _sides_cm(i: int) -> float:
+                """What column i's two sides add to its p{}: a \\tabcolsep
+                and half a rule each, or nothing on an open side."""
+                open_sides = (i == 0 and _open_left) + (i == ncols - 1 and _open_right)
+                return (2 - open_sides) * (_TABCOLSEP_CM + _ARRAYRULE_CM / 2)
+
             col_width_cm = [
                 max(
                     _content_floor_cm(i),
-                    f * _A4_FULL_WIDTH_CM - 2 * _TABCOLSEP_CM - _ARRAYRULE_CM,
+                    f * _A4_FULL_WIDTH_CM - _sides_cm(i),
                 ) if not is_wide[i] else
-                max(2.2, f * _A4_FULL_WIDTH_CM - 2 * _TABCOLSEP_CM - _ARRAYRULE_CM)
+                max(2.2, f * _A4_FULL_WIDTH_CM - _sides_cm(i))
                 for i, f in enumerate(fractions)
             ]
             if col_x0_sum is not None and col_x1_sum is not None and col_count is not None:
@@ -1374,8 +1364,8 @@ def _render_table(table: TableBlock) -> str:
         # column_rule_x present means it measured this table's
         # verticals and would have recorded a frame had one been drawn.
         if _table_md.get("column_rule_x"):
-            seps[0] = "|" if _table_md.get("table_rule_x0") is not None else ""
-            seps[ncols] = "|" if _table_md.get("table_rule_x1") is not None else ""
+            seps[0] = "@{}" if _open_left else "|"
+            seps[ncols] = "@{}" if _open_right else "|"
         col_spec = seps[0] + "".join(
             part + seps[i + 1] for i, part in enumerate(col_spec_parts)
         )
@@ -1422,6 +1412,20 @@ def _render_table(table: TableBlock) -> str:
         gap = (x0 - ink_x0[col]) * scale
         return f"\\rule{{{gap:.2f}pt}}{{0pt}}" + text if gap > min_gap else text
 
+    def _span_spec(col: int, col_span: int, spec: str) -> str:
+        """A \\multicolumn's own column spec, with the rules it replaces.
+
+        A column's left rule belongs to the column before it - only the
+        first column owns one - so a \\multicolumn repeats a left rule
+        only at column 0. Repeating it anywhere else draws it twice and
+        widens the column by a rule's width: the voltage-regulator
+        fixture's centred "CONDITIONS" heading pushed every rule right
+        of it 1.3pt out that way.
+        """
+        left = seps[col] if col == 0 else ""
+        right = seps[min(col + col_span, len(seps) - 1)]
+        return f"{left}{spec}{right}"
+
     def _render_cell(cell: Any, col: int, row_idx: int = -1) -> str:
         if (
             row_idx == 0
@@ -1440,9 +1444,7 @@ def _render_table(table: TableBlock) -> str:
                 cspec = f">{{\\centering\\arraybackslash}}p{{{width}}}" if is_wide[col] else "c"
             else:
                 cspec = "c"
-            left_bar = seps[col] if col < len(seps) else ""
-            right_bar = seps[col + 1] if col + 1 < len(seps) else ""
-            return f"\\multicolumn{{1}}{{{left_bar}{cspec}{right_bar}}}{{{cell}}}"
+            return f"\\multicolumn{{1}}{{{_span_spec(col, 1, cspec)}}}{{{cell}}}"
         if isinstance(cell, tuple):
             _, row_span, col_span, text = cell
             if col_span > 1:
@@ -1482,12 +1484,12 @@ def _render_table(table: TableBlock) -> str:
                     width = f"{wide_width_cm:.2f}cm" if is_wide[col] else "*"
                 if col_span > 1:
                     # Both row_span and col_span: \multicolumn{\multirow{...}{...}{...}}
-                    return f"\\multicolumn{{{col_span}}}{{|{spec}|}}{{\\multirow{{{row_span}}}{{{width}}}{{{text}}}}}"
+                    return f"\\multicolumn{{{col_span}}}{{{_span_spec(col, col_span, spec)}}}{{\\multirow{{{row_span}}}{{{width}}}{{{text}}}}}"
                 else:
                     return f"\\multirow{{{row_span}}}{{{width}}}{{{text}}}"
             else:
                 if col_span > 1:
-                    return f"\\multicolumn{{{col_span}}}{{|{spec}|}}{{{text}}}"
+                    return f"\\multicolumn{{{col_span}}}{{{_span_spec(col, col_span, spec)}}}{{{text}}}"
                 return text
         return cell  # Not a span tuple, render as-is
 
