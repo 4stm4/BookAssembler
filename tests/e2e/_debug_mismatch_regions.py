@@ -1,6 +1,6 @@
-"""Debug-only: which part of fixture A's fair overlay the mismatch sits in.
+"""Debug-only: which part of a fixture's overlay the mismatch sits in (arg: A or B).
 
-Splits the fair overlay's XOR (the same 400x600 masks _debug_fair_crop.py
+Splits the fair overlay's XOR (the same crops and 400x600 masks test_visual_overlay.py
 compares) into the header band, the body, and the four column bands, and
 reports each region's share of all mismatching pixels. A lever is only
 worth pulling where the mismatch actually is.
@@ -18,22 +18,21 @@ import numpy as np
 
 from src.assembler.latex_builder import build_latex, compile_xelatex
 from src.krm.models import ContainerUnit, KnowledgeDocument
-from tests.e2e.test_assembled_table_pdf import FIXTURE_A, _extract_table
-from tests.e2e.test_visual_overlay import _table_texts, _source_table_rect, _render_crop, _ink_mask
+from tests.e2e.test_assembled_table_pdf import FIXTURE_A, FIXTURE_B, _extract_table
+from tests.e2e.test_visual_overlay import (
+    _table_texts, _source_table_rect, _output_table_rect, _render_crop, _ink_mask,
+)
 
-table = _extract_table(FIXTURE_A)
+FIXTURE = FIXTURE_B if (len(sys.argv) > 1 and sys.argv[1].upper() == "B") else FIXTURE_A
+table = _extract_table(FIXTURE)
 texts = _table_texts(table)
 tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
-src_rect = _source_table_rect(fitz, FIXTURE_A, 0, table)
+src_rect = _source_table_rect(fitz, FIXTURE, 0, table)
 with tempfile.TemporaryDirectory() as td:
     Path(td, "t.tex").write_text(tex)
     pdf = compile_xelatex("t.tex", td)
-    d = fitz.open(pdf); p = d[1]
-    rs = [r for t in texts if len(t) >= 6 for r in p.search_for(t)]
-    d.close()
-    out_rect = fitz.Rect(min(r.x0 for r in rs) - 4, min(r.y0 for r in rs) - 2,
-                         max(r.x1 for r in rs) + 4, max(r.y1 for r in rs) + 4)
-    a = _ink_mask(_render_crop(fitz, FIXTURE_A, 0, src_rect))
+    out_rect = _output_table_rect(fitz, Path(pdf), 1, texts)
+    a = _ink_mask(_render_crop(fitz, FIXTURE, 0, src_rect))
     b = _ink_mask(_render_crop(fitz, Path(pdf), 1, out_rect))
 
 x = a ^ b
