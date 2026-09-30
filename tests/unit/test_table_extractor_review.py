@@ -533,3 +533,22 @@ class TestNarrowCellsFitTheirColumn:
         # 0.055 * 21cm less one padding and half a rule, not its 1.05cm text
         assert spec.endswith("p{1.01cm}@{}}")
         assert "[r]{\\latinfont \\fontsize{8.00}{9.60}\\selectfont mV/VOUT}" in tex
+
+
+class TestStackedLines:
+    @staticmethod
+    def _tex(cond_height):
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("15 V\n5 mA\nP", x0=0.20, y0=0.32), _cell("V", x0=0.33, y0=0.32)]]
+        box = rows[1][1].visual_layout.bounding_box
+        rows[1][1].visual_layout.bounding_box = NormalizedRect(x0=box.x0, y0=box.y0, x1=box.x1, y1=box.y0 + cond_height)
+        return _ruled_tex(rows)
+
+    def test_lines_printed_one_under_another_stay_so(self):
+        # 0.03 of the page is 25pt, three 9.6pt lines; \\ would end the row
+        tex = self._tex(0.03)
+        assert "15 V\\newline 5 mA\\newline P" in tex
+        assert "15 V\\\\" not in tex
+
+    def test_lines_printed_as_one_are_joined(self):
+        assert "15 V 5 mA P" in self._tex(0.01)

@@ -254,9 +254,16 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
         # 5.6/8.2/11.8pt, because the rule itself was being read as the
         # column's own ink. The fourth only escaped because it happens
         # to have 19pt of clear space before its rule.
+        # An open side - no frame rule, the band ends at the text box -
+        # has no rule to keep clear of, and a clearance there cut 3pt off
+        # the very ink that sets that edge: the voltage-regulator
+        # fixture's UNITS column read its right ink edge 3pt short of
+        # "uV/VOUT", and every unit then looked flush with it.
         _RULE_CLEARANCE_PT = 3.0
-        _lo = int(((_bands[_i] * page_w + _RULE_CLEARANCE_PT) - clip.x0) * _RULE_ZOOM)
-        _hi = int(((_bands[_i + 1] * page_w - _RULE_CLEARANCE_PT) - clip.x0) * _RULE_ZOOM)
+        _lo_clear = _RULE_CLEARANCE_PT if (_i > 0 or outer_left is not None) else 0.0
+        _hi_clear = _RULE_CLEARANCE_PT if (_i < len(_bands) - 2 or outer_right is not None) else 0.0
+        _lo = int(((_bands[_i] * page_w + _lo_clear) - clip.x0) * _RULE_ZOOM)
+        _hi = int(((_bands[_i + 1] * page_w - _hi_clear) - clip.x0) * _RULE_ZOOM)
         _lo = max(0, min(width - 1, _lo))
         _hi = max(0, min(width, _hi))
         if _hi <= _lo:

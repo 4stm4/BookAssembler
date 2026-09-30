@@ -531,18 +531,15 @@ def _cell_text(cell: Any) -> str:
 
 
 def _latex_linebreaks(escaped_text: str) -> str:
-    """Turn a cell's internal "\n" separators (multiple source lines folded
-    into one cell - a real rowspan, or lines merged across row-groups by
-    _merge_orphan_rows) into LaTeX line breaks.
+    """Turn a cell's internal "\n" separators (source lines stacked in one
+    cell) into LaTeX line breaks.
 
-    Run AFTER _esc() so the literal backslash a real line break needs is
-    never itself escaped. "\\\\ " (not bare "\\\\") keeps LaTeX from reading
-    the next line's first token as an optional vertical-space argument to
-    \\\\. Inside a p{} column this breaks the line within that cell, not the
-    table row - \\\\'s row-ending meaning only applies at the tabular's own
-    top level, not inside a nested parbox.
+    Run AFTER _esc() so the backslash is never itself escaped. \\newline,
+    not \\\\: inside a tabular's p{} cell \\\\ ends the table ROW, and the
+    stacked lines of the voltage-regulator fixture's "Output Voltage"
+    conditions landed in a row of their own under the wrong columns.
     """
-    return escaped_text.replace("\n", "\\\\ ")
+    return escaped_text.replace("\n", "\\newline ")
 
 
 def _cell_x0(cell: Any) -> Optional[float]:
@@ -788,8 +785,10 @@ def _render_table(table: TableBlock) -> str:
     # Where each lone placeholder mark sits in the source, by (row, col) -
     # see _place_at_printed_x below. Filled only where cells are binned by x.
     printed_x: Dict[Tuple[int, int], Tuple[float, float]] = {}
-    # (row, col) of the cells the source printed on a single line.
+    # (row, col) of the cells the source printed on a single line, and of
+    # those whose lines it printed stacked.
     one_line: set = set()
+    stacked: set = set()
     # Populated below only when bins are available (real per-column source
     # geometry); stays None otherwise so the fallback path further down
     # knows to fall back to the old content-length-driven estimate.
@@ -846,7 +845,21 @@ def _render_table(table: TableBlock) -> str:
                 raw = _cell_text(cell)
                 # texts[] keeps the RAW string: column widths are measured
                 # from it below, and font commands are not content.
-                text = _styled_cell_text(cell, _esc(raw).replace("\n", " "), median_pt, raw=raw)
+                # Lines the source stacked in the cell stay stacked: the
+                # voltage-regulator fixture prints "Output Voltage"'s three
+                # conditions one under another, and joined into one line
+                # they ran across half the column. Lines of a cell printed
+                # on one line are only text the analyzer joined, and join.
+                # \lineskiplimit lets \baselineskip alone space them: the
+                # cell's first and last lines carry the row's stretched
+                # struts, which otherwise push each line a strut apart
+                # (8.8pt a line on that fixture, where it prints 7).
+                if "\n" in raw and not _printed_on_one_line(cell):
+                    stacked.add((row_idx, col))
+                    body = "\\lineskiplimit=-\\maxdimen " + _latex_linebreaks(_esc(raw))
+                else:
+                    body = _esc(raw).replace("\n", " ")
+                text = _styled_cell_text(cell, body, median_pt, raw=raw)
                 if (getattr(cell, "row_span", 1) or 1) == 1:
                     text = _lowered_to_print(text, cell, _row_top_line)
                 texts[col] = raw
@@ -1823,10 +1836,14 @@ def _render_table(table: TableBlock) -> str:
                     styled = styled[3]
                 m = re.search(r"\\fontsize\{([0-9.]+)\}", styled or "")
                 size = float(m.group(1)) if m else (median_pt or 8.0)
-                lines = _wrapped_line_count(
-                    raw.replace("\n", " "), col_width_cm[col] * _PT_PER_CM, size,
-                    "\\bfseries" in (styled or ""),
-                )
+                segments = raw.split("\n") if (row_idx, col) in stacked else [raw.replace("\n", " ")]
+                counts = [
+                    _wrapped_line_count(
+                        seg, col_width_cm[col] * _PT_PER_CM, size, "\\bfseries" in (styled or ""),
+                    )
+                    for seg in segments
+                ]
+                lines = None if any(n is None for n in counts) else sum(counts)
                 if lines is None:
                     chars_per_line = max(1.0, col_width_cm[col] / max(_wrap_char_width_cm, 0.01))
                     lines = max(1, -(-len(raw) // int(chars_per_line)))
@@ -2434,7 +2451,15 @@ def _render_table(table: TableBlock) -> str:
             _y_pt += _ARRAYRULE_PT
         _pre_air_pt = _rule_air_pt
         if abs(_row_extra_pt) > 0.01:
-            extra = f"[{_row_extra_pt:.2f}pt]"
+            # array sets a positive extra as a strut that deep in the
+            # row's last cell, and a cell of several lines is already
+            # deeper than that by all but its first line - the strut then
+            # adds nothing. It has to reach past those lines to add the
+            # extra. A negative extra is a plain \vskip and adds as is.
+            _emitted_pt = _row_extra_pt
+            if _row_extra_pt > 0:
+                _emitted_pt += max(0, _row_line_count(i) - 1) * _unstretched_line_pt
+            extra = f"[{_emitted_pt:.2f}pt]"
         if _rule_air_pt > 0.01:
             rule = rule + f"\\noalign{{\\vskip {_rule_air_pt:.2f}pt}}"
         # \tabularnewline, not bare "\\ " - a row ending in a p{} column
