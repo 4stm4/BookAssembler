@@ -700,3 +700,12 @@ class TestSplitCellsAtRules:
         _split_cells_at_rules(page, table)
         assert [_cell_text_of(c) for c in table.grid[0]] == ["Output Voltage", "IOUT"]
         assert table.grid[0][1].visual_layout.bounding_box.x0 * pw >= 229
+
+
+class TestOneLineMultirow:
+    def test_a_label_printed_on_one_line_spans_its_rows_unwrapped(self):
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("aa", x0=0.20, y0=0.32), _cell("1", x0=0.33, y0=0.32)],
+                [_cell("bb", x0=0.20, y0=0.34), _cell("2", x0=0.33, y0=0.34)]]
+        rows[1][0].row_span = 2
+        assert "\\multirow{2}{*}{" in _ruled_tex(rows)

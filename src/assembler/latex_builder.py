@@ -1584,7 +1584,11 @@ def _render_table(table: TableBlock) -> str:
                 spec = (f"p{{{wide_width_cm:.2f}cm}}" if is_wide[col] else "r")
 
             if row_span > 1:
-                if col_width_cm is not None:
+                # A label the source printed on one line stays on one line:
+                # boxed to its column it wrapped wherever our face runs wider.
+                if (row_idx, col) in one_line:
+                    width = "*"
+                elif col_width_cm is not None:
                     width = f"{col_width_cm[col]:.2f}cm"
                 else:
                     width = f"{wide_width_cm:.2f}cm" if is_wide[col] else "*"
