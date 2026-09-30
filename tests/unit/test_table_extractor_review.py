@@ -386,3 +386,15 @@ class TestRuleWeight:
         _mark_cell_borders(np, pymupdf, page, table)
         assert 1.0 <= table.metadata["rule_width_pt"] <= 2.0
 
+
+class TestSideBySideCells:
+    def test_two_cells_in_one_column_are_both_drawn(self):
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        table = _table([["Head", "Cond", "Min"], ["Label", "Tj", "1"], ["L2", "X", "2"]], y0=0.30)
+        # a second condition printed beside "Tj", in the same column
+        extra = _cell("145V<VIN<30V", x0=0.235, y0=0.32)
+        table.grid[1].insert(2, extra)
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        tex = build_latex(doc)
+        assert "Tj" in tex and "145V" in tex

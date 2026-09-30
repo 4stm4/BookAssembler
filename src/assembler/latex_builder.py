@@ -612,6 +612,7 @@ def _column_bins(grid: List[List[Any]]) -> Optional[List[float]]:
 _PT_PER_CM = 72.27 / 2.54
 
 _A4_HEIGHT_PT = 29.7 * _PT_PER_CM
+_A4_WIDTH_PT = 21.0 * _PT_PER_CM
 
 
 def _wrapped_line_count(text: str, width_pt: float, size_pt: float, bold: bool) -> Optional[int]:
@@ -645,6 +646,14 @@ def _wrapped_line_count(text: str, width_pt: float, size_pt: float, bold: bool) 
             lines += 1
             current = width
     return lines
+
+
+# How far a cell must sit from its column's set edge before it is drawn
+# where it was printed: any distance for a heading or a placeholder mark
+# (they never follow the values), more than a real indent for any other
+# cell, so measurement noise does not move ordinary values.
+_PLACE_EXPLICIT_PT = 0.1
+_PLACE_INDENT_PT = 3.0
 
 
 # A lone mark standing in for a missing value, not a value itself.
@@ -754,6 +763,7 @@ def _render_table(table: TableBlock) -> str:
         for row_idx, row in enumerate(grid):
             cells = [""] * ncols
             texts = [""] * ncols
+            row_entries: Dict[int, List[Tuple[Any, Any, Any, str]]] = {}
             for cell in row:
                 x0 = _cell_x0(cell)
                 col = min(range(ncols), key=lambda i: abs(bins[i] - x0))
@@ -772,9 +782,11 @@ def _render_table(table: TableBlock) -> str:
                 texts[col] = raw
                 _printed = (getattr(cell, "metadata", None) or {}).get("printed_x")
                 if _printed:
-                    printed_x[(row_idx, col)] = (_printed[0], _printed[1])
+                    printed_x[(row_idx, col)] = (_printed[0], _printed[1], _PLACE_EXPLICIT_PT)
                 elif raw.strip() in _PLACEHOLDER_MARKS and x0 is not None and x1 is not None:
-                    printed_x[(row_idx, col)] = (x0, x1)
+                    printed_x[(row_idx, col)] = (x0, x1, _PLACE_EXPLICIT_PT)
+                elif x0 is not None and x1 is not None:
+                    printed_x[(row_idx, col)] = (x0, x1, _PLACE_INDENT_PT)
                 row_span = getattr(cell, "row_span", 1) or 1
                 col_span = getattr(cell, "col_span", 1) or 1
 
@@ -824,12 +836,34 @@ def _render_table(table: TableBlock) -> str:
                 # text, so refusing the height entirely just traded one
                 # inaccuracy for a bigger one. Not attempted further.
                 cells[col] = cell_content
+                row_entries.setdefault(col, []).append((x0, x1, cell_content, raw))
 
                 # Populate span_map for positions occupied by this cell
                 for r in range(row_idx, min(row_idx + row_span, len(grid))):
                     for c in range(col, min(col + col_span, ncols)):
                         if (r, c) != (row_idx, col):  # Don't map origin to itself
                             span_map[(r, c)] = (row_idx, col)
+            # Two cells of this row landing in one column are set SIDE BY
+            # SIDE, each where it was printed - the voltage-regulator
+            # fixture prints "Tj = 25 C" and its condition range next to
+            # each other in the CONDITIONS column (x 322 and 355pt), and
+            # the later one used to overwrite the earlier, which vanished
+            # from the rendered table. Stacking them was tried and lost
+            # (they are one printed line, not two); side by side, at
+            # their printed gap, is how they were printed.
+            for col, entries in row_entries.items():
+                if len(entries) < 2 or any(
+                    e[0] is None or e[1] is None or not isinstance(e[2], str) for e in entries
+                ):
+                    continue
+                entries.sort(key=lambda e: e[0])
+                joined = entries[0][2]
+                for prev, cur in zip(entries, entries[1:]):
+                    gap = max(0.0, (cur[0] - prev[1]) * _A4_WIDTH_PT)
+                    joined += f"\\rule{{{gap:.2f}pt}}{{0pt}}" + cur[2]
+                cells[col] = joined
+                texts[col] = " ".join(e[3] for e in entries)
+                printed_x[(row_idx, col)] = (entries[0][0], entries[-1][1], _PLACE_INDENT_PT)
             rendered_rows.append((cells, texts))
     else:
         ncols = max((len(row) for row in grid), default=0)
@@ -1352,7 +1386,7 @@ def _render_table(table: TableBlock) -> str:
         seps = ["|"] * (ncols + 1)
         col_spec = "|" + "|".join(col_spec_parts) + "|"
 
-    def _place_at_printed_x(text: str, col: int, x0: float, x1: float) -> str:
+    def _place_at_printed_x(text: str, col: int, x0: float, x1: float, min_gap: float) -> str:
         """Set a cell's text where the source printed it, not flush with
         its column's values.
 
@@ -1362,7 +1396,12 @@ def _render_table(table: TableBlock) -> str:
         (flushing it put every one of the decimal/binary fixture's dots
         5-8px right), and a heading, which that fixture sets over its
         column ("Binary" 16.4pt from its rule where the digits start at
-        7.3pt; flushing it put both headings 8.5pt left). The gap between the mark and the
+        7.3pt; flushing it put both headings 8.5pt left). The same holds
+        for a sub-column set inside another column: the voltage-regulator
+        fixture's condition ranges (33pt in from "Tj = 25 C") and its
+        "with line"/"with load" sub-labels (71pt in). Those are placed
+        only past _PLACE_INDENT_PT, so ordinary values keep the column's
+        calibrated indent. The gap between the text and the
         column's set edge is taken from their measured positions and
         held open with an invisible rule; an hspace would not do, since a
         trailing one on a raggedleft cell is trimmed away with the
@@ -1377,11 +1416,11 @@ def _render_table(table: TableBlock) -> str:
             if ink_x1[col] is None:
                 return text
             gap = (ink_x1[col] - x1) * scale
-            return text + f"\\rule{{{gap:.2f}pt}}{{0pt}}" if gap > 0.1 else text
+            return text + f"\\rule{{{gap:.2f}pt}}{{0pt}}" if gap > min_gap else text
         if ink_x0[col] is None:
             return text
         gap = (x0 - ink_x0[col]) * scale
-        return f"\\rule{{{gap:.2f}pt}}{{0pt}}" + text if gap > 0.1 else text
+        return f"\\rule{{{gap:.2f}pt}}{{0pt}}" + text if gap > min_gap else text
 
     def _render_cell(cell: Any, col: int, row_idx: int = -1) -> str:
         if (
