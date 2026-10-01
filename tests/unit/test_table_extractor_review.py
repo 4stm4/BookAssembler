@@ -1280,3 +1280,38 @@ class TestItalic:
 
     def test_upright_ink_is_not(self):
         assert not self._marked("helv")
+
+
+class TestLeaderWordsByText:
+    @staticmethod
+    def _page(*texts):
+        import pymupdf
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        for x, t in texts:
+            page.insert_text((x, 300), t, fontsize=10)
+        return doc, page
+
+    def test_a_drifted_box_does_not_keep_the_leader(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _cell_text_of, _drop_leaders
+        doc, page = self._page((100, "DIGI-DATA CORP"), (200, ". . . . . . . . . . . ."), (330, "20"))
+        name, leader = TestDotLeaders._row(page, ["DIGI-DATA CORP", ". . . . . . . . . . . . 20"])
+        # OCR boxed the cell short of its words: "20" falls outside it
+        b = leader.visual_layout.bounding_box
+        leader.visual_layout.bounding_box = NormalizedRect(x0=b.x0, y0=b.y0, x1=b.x0 + 40 / 595, y1=b.y1)
+        table = TableBlock(grid=[[name, leader]], row_count=1, column_count=2, visual_layout=name.visual_layout)
+        _drop_leaders(np, pymupdf, page, table)
+        assert [_cell_text_of(c) for c in table.grid[0]] == ["DIGI-DATA CORP", "20"]
+        assert table.grid[0][1].visual_layout.bounding_box.x0 * 595 > 325
+
+    def test_a_row_whose_number_ocr_lost_keeps_no_dot(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _cell_text_of, _drop_leaders
+        doc, page = self._page((100, "BOWERS CO"), (200, ". . . . . . . . . . . ."))
+        row = TestDotLeaders._row(page, ["BOWERS CO", ". . . . . . . . . . . ."])
+        table = TableBlock(grid=[row], row_count=1, column_count=2, visual_layout=row[0].visual_layout)
+        _drop_leaders(np, pymupdf, page, table)
+        assert [_cell_text_of(c) for c in table.grid[0]] == ["BOWERS CO"]

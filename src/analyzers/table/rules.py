@@ -1868,6 +1868,44 @@ def _mark_italic(np, pymupdf, page, table) -> int:
     return italic
 
 
+def _row_words(cells, words, pw: float, ph: float) -> List[Optional[List[Any]]]:
+    """The page words each of a row's cells (sorted by x) holds.
+
+    By text first: a cell's words are the next run of the row's words that
+    spells it. OCR's cell boxes drift from its word boxes - on the index
+    fixture a leader's "e eee neers" and "enece 20" were boxed from x 363
+    while their words run to 442, so a box test left the page number "20"
+    in no cell and kept the leader's last word in its place. A cell whose
+    text is not found so falls back to the words inside its box; a cell
+    with no box holds none (None)."""
+    boxes = [c.visual_layout.bounding_box if c.visual_layout else None for c in cells]
+    real = [b for b in boxes if b is not None]
+    if not real:
+        return [None] * len(cells)
+    y0, y1 = min(b.y0 for b in real) * ph - 1, max(b.y1 for b in real) * ph + 1
+    line = sorted((w for w in words if y0 <= (w[1] + w[3]) / 2 <= y1), key=lambda w: w[0])
+    texts = [w[4] for w in line]
+    out: List[Optional[List[Any]]] = []
+    start = 0
+    for cell, box in zip(cells, boxes):
+        if box is None:
+            out.append(None)
+            continue
+        tokens = _cell_text_of(cell).split()
+        at = next((i for i in range(start, len(line) - len(tokens) + 1)
+                   if tokens and texts[i:i + len(tokens)] == tokens), None)
+        if at is not None:
+            out.append(line[at:at + len(tokens)])
+            start = at + len(tokens)
+            continue
+        out.append([
+            w for w in line
+            if box.x0 * pw - 1 <= (w[0] + w[2]) / 2 <= box.x1 * pw + 1
+            and box.y0 * ph - 1 <= (w[1] + w[3]) / 2 <= box.y1 * ph + 1
+        ])
+    return out
+
+
 def _drop_leaders(np, pymupdf, page, table) -> int:
     """Take the dot leaders out of a table's cells.
 
@@ -1888,25 +1926,23 @@ def _drop_leaders(np, pymupdf, page, table) -> int:
     for row in table.grid:
         cells = sorted(row, key=_cell_x0)
         found = []
-        for cell in cells:
-            box = cell.visual_layout.bounding_box if cell.visual_layout else None
-            if box is None:
+        for cell, inside in zip(cells, _row_words(cells, words, pw, ph)):
+            if inside is None:
                 found.append(None)
                 continue
-            inside = [
-                w for w in words
-                if box.x0 * pw - 1 <= (w[0] + w[2]) / 2 <= box.x1 * pw + 1
-                and box.y0 * ph - 1 <= (w[1] + w[3]) / 2 <= box.y1 * ph + 1
-            ]
+            box = cell.visual_layout.bounding_box
             line_h = (box.y1 - box.y0) * ph
             found.append([(w, _dots(np, pymupdf, page, pymupdf.Rect(w[:4]), line_h)) for w in inside])
         # The row's last word is what the leader leads to - its page number
         # - and is kept whatever its box holds: OCR's boxes drift, and on
         # that fixture the page number "7" was boxed over two leader dots.
+        # Only a word with a figure in it is one: where OCR lost the number
+        # ("BOWERS ENGINEERING CO" ends in a lone ".") the last word is the
+        # leader's own.
         last = max(
             ((w, n) for ws in found if ws for w, n in ws), key=lambda wn: wn[0][2], default=None
         )
-        if last is not None:
+        if last is not None and any(ch.isdigit() for ch in last[0][4]):
             found = [[(w, None if w is last[0] else n) for w, n in ws] if ws else ws for ws in found]
         known = any((c.metadata or {}).get("leader_after") for c in cells)
         if not known and sum(n or 0 for ws in found if ws for _, n in ws) < _LEADER_MIN_DOTS:
