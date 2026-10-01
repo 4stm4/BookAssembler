@@ -1103,3 +1103,13 @@ class TestDotLeaders:
         table = TableBlock(grid=[row], row_count=1, column_count=3, visual_layout=row[0].visual_layout)
         _drop_leaders(np, pymupdf, page, table)
         assert [_cell_text_of(c) for c in table.grid[0]] == ["BOWERS CORP", "48"]
+
+
+class TestColumnSupport:
+    def test_a_stray_x0_is_not_a_column(self):
+        from src.assembler.latex_builder import _column_bins
+        grid = [[_cell("index to advertisers", x0=0.10, y0=0.20)]]
+        for k in range(8):
+            grid.append([_cell(f"NAME {k}", x0=0.10, y0=0.25 + 0.02 * k), _cell(f"{k}", x0=0.70, y0=0.25 + 0.02 * k)])
+        grid[3].insert(1, _cell("2...", x0=0.40, y0=0.29))       # an OCR'd leader's leftover
+        assert _column_bins(grid) == [0.10, 0.70]

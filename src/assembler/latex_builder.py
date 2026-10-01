@@ -621,6 +621,11 @@ def _cell_x1(cell: Any) -> Optional[float]:
     return box.x1 if box is not None else None
 
 
+# The share of a table's rows that must have a cell at an x for it to be
+# a column of its own, where no header row says where the columns are.
+_COLUMN_MIN_SUPPORT = 0.15
+
+
 def _column_bins(grid: List[List[Any]]) -> Optional[List[float]]:
     """Canonical column x0 positions, or None if any cell lacks geometry.
 
@@ -666,7 +671,16 @@ def _column_bins(grid: List[List[Any]]) -> Optional[List[float]]:
         if bins and x - bins[-1] < _COLUMN_X_TOLERANCE:
             continue
         bins.append(x)
-    return bins
+    # A column is where enough rows have a cell; a lone x0 is a stray, and
+    # its cell belongs in the column nearest it. Without a header to anchor
+    # on, every stray made a column: the index fixture's leftovers of OCR'd
+    # leaders opened eight where it prints two.
+    support = [0] * len(bins)
+    for x in x0s:
+        support[min(range(len(bins)), key=lambda k: abs(bins[k] - x))] += 1
+    rows = sum(1 for row in grid if row)
+    kept = [b for b, n in zip(bins, support) if n >= max(2, _COLUMN_MIN_SUPPORT * rows)]
+    return kept if len(kept) >= 2 else bins
 
 
 # TeX points per centimetre. A TeX "pt" is 1/72.27 in, not the PDF's
