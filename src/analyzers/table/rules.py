@@ -62,7 +62,11 @@ _RULE_GAP_PT = 2.0
 def _rule_extent(np, ink, run: Tuple[int, int]) -> Tuple[int, int]:
     """The pixel columns a horizontal rule actually covers: the longest
     stretch its band is inked along, bridging dropout gaps."""
-    covered = ink[run[0]:run[1]].mean(axis=0) > 0.5
+    # Inked on any of the rule's rows: a thin, pale rule (the DC
+    # characteristics fixture's is two pixels of mid grey) reaches the ink
+    # threshold on one row here and the other there, and asking for most
+    # of its rows broke it into pieces.
+    covered = ink[run[0]:run[1]].any(axis=0)
     max_gap = int(_RULE_GAP_PT * _RULE_ZOOM)
     best, start, last = (0, 0), None, None
     for x in np.nonzero(covered)[0]:
@@ -150,7 +154,28 @@ def _sub_column_rules(np, ink, horizontal, rule_cols) -> List[Tuple[float, int, 
     return found
 
 
-def _render_table_ink(np, pymupdf, page, bbox):
+def _frame_rules(np, pymupdf, page, bbox) -> List[Tuple[float, float, float]]:
+    """Every horizontal rule on the page that runs across most of the
+    table's width, as (y, x0, x1) page fractions - the rules that can
+    frame it, read down the whole page height within the table's columns."""
+    column = NormalizedRect(x0=bbox.x0, y0=0.0, x1=bbox.x1, y1=1.0)
+    rendered = _render_table_ink(np, pymupdf, page, column, height_share=False)
+    if rendered is None:
+        return []
+    ink, clip, horizontal, _ = rendered
+    page_w, page_h = page.rect.width, page.rect.height
+    out = []
+    for run in horizontal:
+        a, b = _rule_extent(np, ink, run)
+        out.append((
+            (clip.y0 + (run[0] + run[1]) / 2.0 / _RULE_ZOOM) / page_h,
+            (clip.x0 + a / _RULE_ZOOM) / page_w,
+            (clip.x0 + b / _RULE_ZOOM) / page_w,
+        ))
+    return out
+
+
+def _render_table_ink(np, pymupdf, page, bbox, height_share: bool = True):
     """The table's region as an ink mask, with its rules found.
 
     Returns (ink, clip, horizontal, vertical), or None when the region is
@@ -180,7 +205,7 @@ def _render_table_ink(np, pymupdf, page, bbox):
     table_w_px = max(1.0, (min(bbox.x1 * page_w, clip.x1) - max(bbox.x0 * page_w, clip.x0)) * _RULE_ZOOM)
     table_h_px = max(1.0, (min(bbox.y1 * page_h, clip.y1) - max(bbox.y0 * page_h, clip.y0)) * _RULE_ZOOM)
     horizontal = _rule_runs(ink.sum(axis=1) > _RULE_SPAN * table_w_px)
-    vertical = _rule_runs(ink.sum(axis=0) > _RULE_SPAN * table_h_px)
+    vertical = _rule_runs(ink.sum(axis=0) > _RULE_SPAN * table_h_px) if height_share else []
     return ink, clip, horizontal, vertical
 
 
@@ -1215,7 +1240,8 @@ def _table_from_lines(block: Any) -> Optional[TableBlock]:
     # cell's own bbox and StyleDescriptor, read straight off the source
     # line (RFC 0002: TableCell is a BaseKRMNode with a visual_layout slot).
     grid: List[List[TableCell]] = [
-        [_make_cell(t, bbox, style, page_idx) for t, bbox, style in row]
+        [_make_cell(t, bbox, style, page_idx, source_block_id=getattr(block, "id", None))
+         for t, bbox, style in row]
         for row in rows
     ]
 

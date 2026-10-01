@@ -787,3 +787,69 @@ class TestRuleWeightEach:
         tex = build_latex(doc)
         for pt in (1.0, 1.5, 2.0):
             assert f"\\hrule height {pt * 72.27 / 72:.2f}pt" in tex
+
+
+def _lines_block(lines):
+    """A ParagraphBlock of (text, x0, y0, x1) lines in points on an A4 page,
+    each line carrying its own box as PdfSourceAdapter gives it."""
+    pw, ph = 595.0, 842.0
+    inlines = []
+    for text, x0, y0, x1 in lines:
+        inline = TextLineInline(spans=[StyledTextSpan(text=text)])
+        inline.visual_layout = VisualLayout(
+            bounding_box=NormalizedRect(x0=x0 / pw, y0=y0 / ph, x1=x1 / pw, y1=(y0 + 8) / ph),
+            page_or_screen_index=0,
+        )
+        inlines.append(inline)
+    return ParagraphBlock(
+        inlines=inlines,
+        visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(
+                x0=min(l[1] for l in lines) / pw, y0=min(l[2] for l in lines) / ph,
+                x1=max(l[3] for l in lines) / pw, y1=(max(l[2] for l in lines) + 8) / ph,
+            ),
+            page_or_screen_index=0,
+        ),
+    )
+
+
+class TestFramedRows:
+    def _setup(self):
+        import pymupdf
+        from src.analyzers.table.rules import _table_from_lines
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        for y in (100.0, 120.0, 260.0):
+            page.draw_line((100, y), (500, y), width=1.0)
+        header = _lines_block([("SYMBOL", 110, 108, 150), ("MIN", 300, 108, 320), ("UNIT", 400, 108, 430)])
+        body = _lines_block([(f"V{k}", 110, 140 + 16 * k, 125) for k in range(4)]
+                            + [(f"{k}.0", 300, 140 + 16 * k, 315) for k in range(4)]
+                            + [("V", 400, 140 + 16 * k, 408) for k in range(4)])
+        tail = _lines_block([("IOS", 110, 220, 130), ("-15", 300, 220, 315), ("mA", 400, 220, 415)])
+        prose = _lines_block([("A note printed under the table", 110, 280, 300)])
+        table = _table_from_lines(body)
+        container = ContainerUnit(title="p", children=[header, table, tail, prose])
+        return page, container, table, header, tail, prose
+
+    def test_rows_inside_the_frame_rules_join_the_table(self):
+        import numpy as np
+        import pymupdf
+        page, container, table, header, tail, prose = self._setup()
+        TableDetectorAnalyzer()._absorb_into(container, table, np, pymupdf, page)
+        assert header.is_tombstoned and tail.is_tombstoned
+        assert not prose.is_tombstoned
+        texts = [c.content[0].inlines[0].spans[0].text for c in table.grid[0]]
+        assert texts == ["SYMBOL", "MIN", "UNIT"]
+        assert table.grid[-1][0].content[0].inlines[0].spans[0].text == "IOS"
+
+    def test_a_single_block_tables_cells_know_their_block(self):
+        _, _, table, _, _, _ = self._setup()
+        assert all(c.metadata.get("source_block_id") for row in table.grid for c in row)
+
+    def test_a_pale_rule_is_read_across_its_whole_length(self):
+        import numpy as np
+        from src.analyzers.table.rules import _rule_extent
+        ink = np.zeros((4, 300), dtype=bool)
+        ink[1, 20:280:2] = True      # one row inked here,
+        ink[2, 21:280:2] = True      # the other there
+        assert _rule_extent(np, ink, (1, 3)) == (20, 280)

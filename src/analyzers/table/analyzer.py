@@ -19,7 +19,7 @@ from src.krm.models import (
 from src.analyzers.caption.signals import _CAPTION_RE
 from src.analyzers.source_io import resolve_source_path
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
-from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _build_span_map, _cell_x0, _column_bins, _column_of, _find_placeholder_marks, _cluster_columns, _count_columns, _find_table_runs, _fold_label_rows, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _page_idx, _rows_from_block, _rows_from_group, _snap_row_to_columns, _split_cells_at_rules, _table_from_lines
+from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _build_span_map, _cell_x0, _column_bins, _column_of, _find_placeholder_marks, _frame_rules, _cluster_columns, _count_columns, _find_table_runs, _fold_label_rows, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _page_idx, _rows_from_block, _rows_from_group, _snap_row_to_columns, _split_cells_at_rules, _table_from_lines
 
 
 def _cell_y0(cell: "TableCell") -> float:
@@ -329,7 +329,127 @@ class TableDetectorAnalyzer(BaseAnalyzer):
             self._process_container(container)
         if self._table_count:
             log.info("TableDetectorAnalyzer: %d table(s) detected", self._table_count)
+        self._absorb_framed_rows(doc)
         self._mark_borders(doc)
+
+    def _absorb_framed_rows(self, doc: KnowledgeDocument) -> None:
+        """Take into a table the rows its own frame rules enclose.
+
+        Detection works on the page's blocks and their spacing, and stops
+        where they stop looking like rows - not where the table ends. The
+        DC characteristics fixture prints its header and first row above,
+        and its last five rows below, a stretch the detector took; all of
+        them inside the rules that frame the table. So from each edge of a
+        table the region up to the next rule across its width is taken in,
+        and then the region beyond that rule up to the next, for as long as
+        each region is closed by a rule, holds nothing wider than that rule,
+        no prose and no caption, and steps no wider than the table's own
+        rows do. A heading above a table's top rule has no rule above it
+        and stays where it is.
+        """
+        path = resolve_source_path(doc)
+        if not path:
+            return
+        try:
+            import numpy as np
+            import pymupdf
+        except ImportError:
+            return
+        try:
+            source = pymupdf.open(path)
+        except Exception:
+            return
+        try:
+            def walk(container: ContainerUnit) -> None:
+                for child in list(container.children):
+                    if isinstance(child, ContainerUnit):
+                        walk(child)
+                for child in list(container.children):
+                    if isinstance(child, TableBlock) and not child.is_tombstoned:
+                        page_index = _page_idx(child) or 0
+                        if child.visual_layout and page_index < source.page_count:
+                            self._absorb_into(container, child, np, pymupdf, source[page_index])
+            for root in doc.root_containers:
+                walk(root)
+        finally:
+            source.close()
+
+    def _absorb_into(self, container: ContainerUnit, table: TableBlock, np, pymupdf, page) -> None:
+        bb = table.visual_layout.bounding_box
+        rules = _frame_rules(np, pymupdf, page, bb)
+        if not rules:
+            return
+        page_index = _page_idx(table)
+        blocks = [
+            c for c in container.children
+            if isinstance(c, (ParagraphBlock, UnknownBlock)) and not c.is_tombstoned
+            and _bbox(c) is not None and _page_idx(c) == page_index
+        ]
+        tops = sorted({_cell_y0(cell) for row in table.grid for cell in row if cell.visual_layout})
+        steps = sorted(b - a for a, b in zip(tops, tops[1:]) if b - a > 0)
+        max_gap = 3.0 * steps[len(steps) // 2] if steps else 0.05
+        tol = 0.005
+
+        def region(lo: float, hi: float, rule) -> Optional[List[Any]]:
+            inside = [b for b in blocks if _bbox(b).y0 >= lo - tol and _bbox(b).y1 <= hi + tol]
+            for b in inside:
+                text = _get_text(b).strip()
+                box = _bbox(b)
+                if (
+                    box.x0 < rule[1] - tol or box.x1 > rule[2] + tol
+                    or len(text) > MAX_CELL_TEXT_LEN or _CAPTION_RE.match(text)
+                ):
+                    return None
+            ys = sorted([lo, hi] + [y for b in inside for y in (_bbox(b).y0, _bbox(b).y1)])
+            if inside and max(b - a for a, b in zip(ys, ys[1:])) > max_gap:
+                return None
+            return inside
+
+        above: List[Any] = []
+        edge = bb.y0
+        for rule in sorted((r for r in rules if r[0] < bb.y0), key=lambda r: -r[0]):
+            taken = region(rule[0], edge, rule)
+            if taken is None:
+                break
+            above = taken + above
+            edge = rule[0]
+        below: List[Any] = []
+        edge = bb.y1
+        for rule in sorted((r for r in rules if r[0] > bb.y1), key=lambda r: r[0]):
+            taken = region(edge, rule[0], rule)
+            if taken is None:
+                break
+            below += taken
+            edge = rule[0]
+        if not above and not below:
+            return
+
+        def rows_of(taken: List[Any]) -> List[List[TableCell]]:
+            rows: List[List[TableCell]] = []
+            for b in sorted(taken, key=lambda b: _bbox(b).y0):
+                rows.extend(_rows_from_block(b))
+            return rows
+
+        grid = rows_of(above) + list(table.grid) + rows_of(below)
+        grid = _merge_orphan_rows(grid)
+        _infer_rowspans(grid)
+        table.grid = grid
+        table.row_count = len(grid)
+        table.column_count = max((len(r) for r in grid), default=0)
+        table.span_map = _build_span_map(grid)
+        boxes = [c.visual_layout.bounding_box for r in grid for c in r if c.visual_layout]
+        table.visual_layout = VisualLayout(
+            bounding_box=NormalizedRect(
+                x0=min(b.x0 for b in boxes), y0=min(b.y0 for b in boxes),
+                x1=max(b.x1 for b in boxes), y1=max(b.y1 for b in boxes),
+            ),
+            page_or_screen_index=table.visual_layout.page_or_screen_index,
+        )
+        for b in above + below:
+            b.is_tombstoned = True
+            if not b.metadata:
+                b.metadata = {}
+            b.metadata["tombstone_reason"] = "merged_into_table_frame"
 
     def _mark_borders(self, doc: KnowledgeDocument) -> None:
         """Mark each cell's own edges from the rules printed on the source.
