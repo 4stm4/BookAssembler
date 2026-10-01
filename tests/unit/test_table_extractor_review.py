@@ -890,3 +890,51 @@ class TestColumnsByRules:
         # but between the second rule and the table's edge
         assert "prose" in line.split(" & ")[2]
 
+
+
+class TestRegridRuledBands:
+    def test_a_paragraph_band_becomes_one_row(self):
+        import pymupdf
+        from src.analyzers.table.rules import _cell_text_of, _regrid_ruled_bands
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        pw, ph = page.rect.width, page.rect.height
+        page.insert_text((110, 312), "ALE", fontsize=8)
+        page.insert_text((210, 312), "first line of the function", fontsize=8)
+        page.insert_text((210, 324), "and its continuation", fontsize=8)
+        page.insert_text((110, 352), "HOLD", fontsize=8)
+        page.insert_text((210, 352), "next row", fontsize=8)
+        words = page.get_text("words")
+
+        def cell(*texts):
+            ws = [w for w in words if w[4] in " ".join(texts).split()]
+            return TableCell(
+                content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text=" ".join(texts))])])],
+                visual_layout=VisualLayout(bounding_box=NormalizedRect(
+                    x0=min(w[0] for w in ws) / pw, y0=min(w[1] for w in ws) / ph,
+                    x1=max(w[2] for w in ws) / pw, y1=max(w[3] for w in ws) / ph), page_or_screen_index=0),
+            )
+        grid = [[cell("ALE"), cell("first line of the function")], [cell("and its continuation")],
+                [cell("HOLD"), cell("next row")]]
+        table = TableBlock(grid=grid, row_count=3, column_count=2, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=100 / pw, y0=300 / ph, x1=400 / pw, y1=360 / ph), page_or_screen_index=0))
+        table.metadata = {"column_rule_x": [200 / pw], "rule_y": [300 / ph, 335 / ph, 360 / ph]}
+        _regrid_ruled_bands(page, table)
+        assert table.row_count == 2
+        assert _cell_text_of(table.grid[0][1]) == "first line of the function\nand its continuation"
+        assert _cell_text_of(table.grid[1][0]) == "HOLD"
+
+    def test_a_band_of_full_rows_is_left_alone(self):
+        import pymupdf
+        from src.analyzers.table.rules import _regrid_ruled_bands
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        pw, ph = page.rect.width, page.rect.height
+        for k in range(3):
+            page.insert_text((110, 312 + 12 * k), f"{k}", fontsize=8)
+            page.insert_text((210, 312 + 12 * k), f"0000000{k}", fontsize=8)
+        table = TableBlock(grid=[[_cell("x")]], row_count=1, column_count=2, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=100 / pw, y0=300 / ph, x1=400 / pw, y1=350 / ph), page_or_screen_index=0))
+        table.metadata = {"column_rule_x": [200 / pw], "rule_y": [300 / ph, 350 / ph]}
+        _regrid_ruled_bands(page, table)
+        assert table.row_count == 1 and table.grid[0][0].content[0].inlines[0].spans[0].text == "x"

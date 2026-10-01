@@ -9,7 +9,9 @@ from src.assembler.latex_builder import _cell_text
 from tests.e2e.test_assembled_table_pdf import FIXTURE_A, FIXTURE_B, _extract_table
 
 PW, PH = 595.276, 841.89
-fx = FIXTURE_A if (sys.argv[1:] or ["A"])[0] == "A" else FIXTURE_B
+from pathlib import Path
+arg = (sys.argv[1:] or ["A"])[0]
+fx = FIXTURE_A if arg == "A" else FIXTURE_B if arg == "B" else Path(arg)
 t = _extract_table(fx)
 md = t.metadata or {}
 print("verticals:", " ".join(f"{x * PW:.1f}" for x in md.get("column_rule_x", [])))

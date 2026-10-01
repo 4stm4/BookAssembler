@@ -1433,6 +1433,100 @@ def _split_cells_at_rules(page, table) -> None:
     table.span_map = _build_span_map(table.grid)
 
 
+def _regrid_ruled_bands(page, table) -> None:
+    """Rebuild the rows of a ruled grid from its rules and the page's words.
+
+    In a table ruled both ways a row is the band between two horizontal
+    rules and a cell the rectangle between two rules each way; the text
+    layer's own grouping does not know that - tesseract runs a paragraph's
+    lines into one block across the rule under it, and the rows built from
+    those blocks carried one cell's lines into the next row (the pin
+    description fixture's "or peripheral is ready..." into HOLD's). So a
+    band whose lines after the first stay in one column - a paragraph and
+    its continuations, a nested list - becomes one row, each column's cell
+    the words inside it, line by line. A band whose lines fill several
+    columns is real rows of its own (the decimal/binary fixture's body,
+    ruled only above and below) and is left as it is.
+    """
+    md = getattr(table, "metadata", None) or {}
+    rule_x = md.get("column_rule_x") or []
+    rule_y = md.get("rule_y") or []
+    if not rule_x or len(rule_y) < 2:
+        return
+    pw, ph = page.rect.width, page.rect.height
+    xs = [x * pw for x in rule_x]
+    bb = table.visual_layout.bounding_box
+
+    def column(w) -> int:
+        return sum(1 for x in xs if (w[0] + w[2]) / 2 > x)
+
+    words = [
+        w for w in page.get_text("words")
+        if bb.x0 * pw - 2 <= (w[0] + w[2]) / 2 <= bb.x1 * pw + 2
+        and not (w[4] in _RULE_GLYPHS and any(w[0] - 1 <= x <= w[2] + 1 for x in xs))
+    ]
+    cells = [c for row in table.grid for c in row if c.visual_layout and c.visual_layout.bounding_box]
+
+    def style_at(r: NormalizedRect):
+        def overlap(c):
+            b = c.visual_layout.bounding_box
+            return max(0.0, min(b.x1, r.x1) - max(b.x0, r.x0)) * max(0.0, min(b.y1, r.y1) - max(b.y0, r.y0))
+        best = max(cells, key=overlap, default=None)
+        return best.visual_layout.style if best is not None and overlap(best) > 0 else None
+
+    def centre_y(cell) -> float:
+        b = cell.visual_layout.bounding_box
+        return (b.y0 + b.y1) / 2
+
+    new_grid: List[List["TableCell"]] = []
+    changed = False
+    bands = list(zip(rule_y, rule_y[1:]))
+    for lo, hi in bands:
+        in_band = [w for w in words if lo * ph < (w[1] + w[3]) / 2 < hi * ph]
+        lines: Dict[Tuple[int, int, int], List[Any]] = {}
+        for w in in_band:
+            lines.setdefault((w[5], w[6], column(w)), []).append(w)
+        by_y = sorted(lines.items(), key=lambda kv: (min(w[1] for w in kv[1]), kv[0][2]))
+        rows_y: List[List[Tuple[int, List[Any]]]] = []
+        for (_, _, col), ws in by_y:
+            y = min(w[1] for w in ws)
+            if rows_y and abs(min(w[1] for w in rows_y[-1][0][1]) - y) < 3:
+                rows_y[-1].append((col, ws))
+            else:
+                rows_y.append([(col, ws)])
+        old_rows = [row for row in table.grid if row and lo < centre_y(row[0]) < hi]
+        one_row = len(rows_y) > 1 and all(len({col for col, _ in r}) == 1 for r in rows_y[1:])
+        if not one_row:
+            new_grid.extend(old_rows)
+            continue
+        changed = True
+        per_column: Dict[int, List[List[Any]]] = {}
+        for r in rows_y:
+            for col, ws in r:
+                per_column.setdefault(col, []).append(sorted(ws, key=lambda w: w[0]))
+        row: List["TableCell"] = []
+        for col in sorted(per_column):
+            ws_lines = per_column[col]
+            flat = [w for line in ws_lines for w in line]
+            r = NormalizedRect(
+                x0=min(w[0] for w in flat) / pw, y0=min(w[1] for w in flat) / ph,
+                x1=max(w[2] for w in flat) / pw, y1=max(w[3] for w in flat) / ph,
+            )
+            text = "\n".join(" ".join(w[4] for w in line) for line in ws_lines)
+            row.append(_make_cell(text, r, style_at(r), table.visual_layout.page_or_screen_index))
+        new_grid.append(row)
+    if not changed:
+        return
+    # rows outside every band (above the first rule, below the last) stay
+    first, last = rule_y[0], rule_y[-1]
+    above = [row for row in table.grid if row and centre_y(row[0]) <= first]
+    below = [row for row in table.grid if row and centre_y(row[0]) >= last]
+    table.grid = above + new_grid + below
+    table.row_count = len(table.grid)
+    table.column_count = max((len(r) for r in table.grid), default=0)
+    table.span_map = _build_span_map(table.grid)
+
+
 def _fold_label_rows(table) -> None:
     """Fold a row holding nothing but a label beside a block of sub-rows
     into the sub-row above it, once the rules are known.
