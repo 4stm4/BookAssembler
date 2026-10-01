@@ -878,3 +878,14 @@ class TestGriddedFrame:
         assert header.is_tombstoned and prose.is_tombstoned and rest.is_tombstoned
         texts = [c.content[0].inlines[0].spans[0].text for row in table.grid for c in row]
         assert texts[0] == "Symbol" and "T2" in texts and any(t.startswith("A long") for t in texts)
+
+
+class TestColumnsByRules:
+    def test_a_cell_goes_to_the_band_its_centre_is_in(self):
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Type", x0=0.22, y0=0.30), _cell("Function", x0=0.36, y0=0.30)],
+                [_cell("L1", x0=0.10, y0=0.32), _cell("O", x0=0.22, y0=0.32), _cell("prose", x0=0.28, y0=0.32)]]
+        tex = _ruled_tex(rows, x1=0.42)
+        line = next(l for l in tex.splitlines() if "prose" in l)
+        # nearer the Type heading's x0 than the centred Function heading's,
+        # but between the second rule and the table's edge
+        assert "prose" in line.split(" & ")[2]

@@ -810,6 +810,28 @@ def _render_table(table: TableBlock) -> str:
     line_box = _median_line_box(grid)
 
     bins = _column_bins(grid)
+    # Where the source's own column rules were measured, they are the
+    # columns: a cell belongs to the band between two rules its centre lies
+    # in. Snapping x0s to the header's instead sends a left-set paragraph
+    # under a centred heading to the column before it - the pin description
+    # fixture's "Name and Function" heading starts at 300pt, its paragraphs
+    # at 171pt, nearer the 147pt "Type".
+    _grid_rules = sorted((getattr(table, "metadata", None) or {}).get("column_rule_x") or [])
+    if bins is not None and _grid_rules:
+        _bb = table.visual_layout.bounding_box if table.visual_layout else None
+        bins = [(_bb.x0 if _bb is not None else 0.0)] + _grid_rules
+
+    def _column_index(cell: Any) -> int:
+        x0, x1 = _cell_x0(cell), _cell_x1(cell)
+        # A heading snapped onto its column keeps where it was printed in
+        # printed_x; its box has been moved and no longer says.
+        printed = (getattr(cell, "metadata", None) or {}).get("printed_x")
+        if _grid_rules and printed:
+            return sum(1 for r in _grid_rules if (printed[0] + printed[1]) / 2.0 > r)
+        if _grid_rules and x0 is not None and x1 is not None:
+            return sum(1 for r in _grid_rules if (x0 + x1) / 2.0 > r)
+        return min(range(len(bins)), key=lambda i: abs(bins[i] - x0))
+
     span_map = getattr(table, "span_map", {})
     # Where each lone placeholder mark sits in the source, by (row, col) -
     # see _place_at_printed_x below. Filled only where cells are binned by x.
@@ -863,12 +885,11 @@ def _render_table(table: TableBlock) -> str:
             _row_lines = [c for c in (_first_line_centre(cell, line_box) for cell in row) if c is not None]
             for cell in row:
                 if _printed_on_one_line(cell, line_box):
-                    x0 = _cell_x0(cell)
-                    one_line.add((row_idx, min(range(ncols), key=lambda i: abs(bins[i] - x0))))
+                    one_line.add((row_idx, _column_index(cell)))
             _row_top_line = min(_row_lines) if _row_lines else None
             for cell in row:
                 x0 = _cell_x0(cell)
-                col = min(range(ncols), key=lambda i: abs(bins[i] - x0))
+                col = _column_index(cell)
                 x1 = _cell_x1(cell)
                 # A column's usual edge is its values': not a heading's, not a
                 # placeholder mark's (both placed on their own), and not a
@@ -1341,7 +1362,7 @@ def _render_table(table: TableBlock) -> str:
                     hx1 = _cell_x1(cell)
                     if hx0 is None or hx1 is None:
                         continue
-                    hcol = min(range(ncols), key=lambda i: abs(bins[i] - hx0))
+                    hcol = _column_index(cell)
                     col_w = boundaries[hcol + 1] - boundaries[hcol]
                     if col_w <= 0:
                         continue

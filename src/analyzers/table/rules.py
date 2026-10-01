@@ -1351,62 +1351,85 @@ _MARK_CELL_MARGIN_PT = 1.5  # swallows glyph overhang the OCR box clips
 _RULE_SIDE_MARGIN_PT = 2.0
 
 
-def _split_cells_at_rules(page, table) -> None:
-    """Split a cell whose words stand on both sides of a column rule.
+# What OCR makes of a vertical rule it reads as a character.
+_RULE_GLYPHS = set("|[]!lI1")
 
-    The text layer can run two cells together across the rule between
-    them: on the voltage-regulator fixture "Average Temperature Coefficient
-    of Output Voltage" and "IOUT = 5 mA" came as one line, and the rebuild
-    set it all in CHARACTERISTICS, where it wrapped and ran into the next
-    column. The rules are the grid, so each part goes to its side, placed
-    by its words' own boxes on the page. Only a one-line cell whose words
-    are exactly its text is touched.
+
+def _split_cells_at_rules(page, table) -> None:
+    """Split a cell whose words stand in more than one column.
+
+    The text layer can run cells together across the rules between them:
+    on the voltage-regulator fixture "Average Temperature Coefficient of
+    Output Voltage" and "IOUT = 5 mA" came as one line; on the pin
+    description fixture every row's "O | ADDRESS BUS: ..." did, its rule
+    read as a "|", and each paragraph was set in the narrow Type column. The
+    rules are the grid, so each word goes to the column its centre is in,
+    line by line, placed by its own box on the page; a rule read as a
+    character is dropped. Only a cell whose words are exactly its text is
+    touched.
     """
     md = getattr(table, "metadata", None) or {}
     rules = md.get("column_rule_x") or []
     if not rules:
         return
     pw, ph = page.rect.width, page.rect.height
+    xs = [r * pw for r in rules]
     words = page.get_text("words")
-    for r, row in enumerate(table.grid):
+
+    def column(w) -> int:
+        centre = (w[0] + w[2]) / 2
+        return sum(1 for x in xs if centre > x)
+
+    def on_rule(w) -> bool:
+        return w[4] in _RULE_GLYPHS and any(w[0] - 1 <= x <= w[2] + 1 for x in xs)
+
+    def rect(ws):
+        return NormalizedRect(
+            x0=min(w[0] for w in ws) / pw, y0=min(w[1] for w in ws) / ph,
+            x1=max(w[2] for w in ws) / pw, y1=max(w[3] for w in ws) / ph,
+        )
+
+    for row in table.grid:
         for cell in list(row):
             box = cell.visual_layout.bounding_box if cell.visual_layout else None
-            text = _cell_text_of(cell)
-            if box is None or "\n" in text:
+            if box is None:
                 continue
             inside = [
                 w for w in words
                 if box.x0 * pw - 1 <= (w[0] + w[2]) / 2 <= box.x1 * pw + 1
                 and box.y0 * ph - 1 <= (w[1] + w[3]) / 2 <= box.y1 * ph + 1
             ]
-            if " ".join(w[4] for w in inside) != " ".join(text.split()):
+            if not inside or " ".join(w[4] for w in inside) != " ".join(_cell_text_of(cell).split()):
                 continue
-            for rule in rules:
-                x = rule * pw
-                left = [w for w in inside if (w[0] + w[2]) / 2 < x - _RULE_SIDE_MARGIN_PT]
-                right = [w for w in inside if (w[0] + w[2]) / 2 > x + _RULE_SIDE_MARGIN_PT]
-                if not left or not right or len(left) + len(right) != len(inside):
-                    continue
-
-                def rect(ws):
-                    return NormalizedRect(
-                        x0=min(w[0] for w in ws) / pw, y0=min(w[1] for w in ws) / ph,
-                        x1=max(w[2] for w in ws) / pw, y1=max(w[3] for w in ws) / ph,
-                    )
-
-                style = cell.visual_layout.style
-                cell.content = [ParagraphBlock(
-                    inlines=[TextLineInline(spans=[StyledTextSpan(text=" ".join(w[4] for w in left))])],
-                )]
-                cell.visual_layout = VisualLayout(
-                    bounding_box=rect(left), page_or_screen_index=cell.visual_layout.page_or_screen_index,
-                    style=style,
+            kept = [w for w in inside if not on_rule(w)]
+            by_column: Dict[int, List[Any]] = {}
+            for w in kept:
+                by_column.setdefault(column(w), []).append(w)
+            if len(by_column) < 2 and len(kept) == len(inside):
+                continue
+            style = cell.visual_layout.style
+            page_index = cell.visual_layout.page_or_screen_index
+            parts = []
+            for col in sorted(by_column):
+                ws = by_column[col]
+                lines: Dict[Tuple[int, int], List[Any]] = {}
+                for w in ws:
+                    lines.setdefault((w[5], w[6]), []).append(w)
+                text = "\n".join(
+                    " ".join(w[4] for w in sorted(line, key=lambda w: w[7]))
+                    for line in sorted(lines.values(), key=lambda l: min(w[1] for w in l))
                 )
-                part = _make_cell(" ".join(w[4] for w in right), rect(right), style,
-                                  cell.visual_layout.page_or_screen_index)
-                row.append(part)
-                row.sort(key=_cell_x0)
-                break
+                parts.append((text, rect(ws)))
+            first, rest = parts[0], parts[1:]
+            cell.content = [ParagraphBlock(
+                inlines=[TextLineInline(spans=[StyledTextSpan(text=first[0])])],
+            )]
+            cell.visual_layout = VisualLayout(
+                bounding_box=first[1], page_or_screen_index=page_index, style=style,
+            )
+            for text, r in rest:
+                row.append(_make_cell(text, r, style, page_index))
+            row.sort(key=_cell_x0)
     table.span_map = _build_span_map(table.grid)
 
 
