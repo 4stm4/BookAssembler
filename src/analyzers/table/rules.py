@@ -1779,6 +1779,49 @@ def _mark_fill(np, pymupdf, page, table) -> Optional[Tuple[int, int, int]]:
     return rgb
 
 
+# How saturated ink must be - its channels' spread over the brightest - to
+# be a coloured ink. Black ink scanned on tinted paper takes the paper's
+# hue but stays dull: the index fixture's black text reads (120, 80, 55) on
+# its orange, 0.58, where its orange heading reads (230, 94, 2), 0.99.
+_COLOUR_SATURATION = 0.7
+
+
+def _mark_text_colour(np, pymupdf, page, table) -> int:
+    """Set each cell's text colour (style.text_color_rgb) to the colour its
+    ink was printed in, where that is a colour: the median of the darkest
+    third of the cell's ink pixels, taken when it is saturated
+    (_COLOUR_SATURATION) - not black, grey, or black on tinted paper.
+    The index fixture prints its "index to advertisers" in orange. Returns
+    how many cells were given a colour."""
+    from dataclasses import replace
+    pw, ph = page.rect.width, page.rect.height
+    coloured = 0
+    for row in table.grid:
+        for cell in row:
+            vl = cell.visual_layout
+            if vl is None or vl.bounding_box is None or vl.style is None:
+                continue
+            b = vl.bounding_box
+            clip = pymupdf.Rect(b.x0 * pw, b.y0 * ph, b.x1 * pw, b.y1 * ph) & page.rect
+            if clip.is_empty:
+                continue
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(2, 2), clip=clip)
+            arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
+            ink = arr[arr.mean(axis=2) < _RULE_INK_LEVEL]
+            if ink.shape[0] < 10:
+                continue
+            # The strokes' cores, the darkest third: a glyph's edge pixels
+            # blend with the paper under them, and on the index fixture's
+            # orange they turned its black text brown.
+            core = ink[np.argsort(ink.mean(axis=1))[: max(1, ink.shape[0] // 3)]]
+            rgb = tuple(int(v) for v in np.median(core, axis=0))
+            if max(rgb) == 0 or (max(rgb) - min(rgb)) / max(rgb) < _COLOUR_SATURATION:
+                continue
+            vl.style = replace(vl.style, text_color_rgb=rgb)
+            coloured += 1
+    return coloured
+
+
 def _drop_leaders(np, pymupdf, page, table) -> int:
     """Take the dot leaders out of a table's cells.
 

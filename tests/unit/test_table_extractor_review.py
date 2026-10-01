@@ -1172,3 +1172,42 @@ class TestStaleSpans:
         rows[1].insert(1, stray)
         tex = _ruled_tex(rows)
         assert "BOWERS" in tex and "CLARY" in tex
+
+
+class TestTextColour:
+    @staticmethod
+    def _page_with(colour, paper=None):
+        import pymupdf
+        from src.krm.models import StyleDescriptor
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        if paper:
+            page.draw_rect(pymupdf.Rect(90, 280, 400, 320), color=None, fill=paper)
+        page.insert_text((100, 305), "index to advertisers", fontsize=20, fontname="hebo", color=colour)
+        words = page.get_text("words")
+        cell = TableCell(
+            content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text="index to advertisers")])])],
+            visual_layout=VisualLayout(bounding_box=NormalizedRect(
+                x0=min(w[0] for w in words) / 595, y0=min(w[1] for w in words) / 842,
+                x1=max(w[2] for w in words) / 595, y1=max(w[3] for w in words) / 842),
+                page_or_screen_index=0, style=StyleDescriptor(font_size_pt=20)),
+        )
+        return doc, page, TableBlock(grid=[[cell]], row_count=1, column_count=1, visual_layout=cell.visual_layout)
+
+    def test_coloured_ink_is_kept(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _mark_text_colour
+        doc, page, table = self._page_with((230 / 255, 94 / 255, 2 / 255))
+        assert _mark_text_colour(np, pymupdf, page, table) == 1
+        rgb = table.grid[0][0].visual_layout.style.text_color_rgb
+        assert abs(rgb[0] - 230) <= 6 and abs(rgb[1] - 94) <= 6 and rgb[2] <= 10
+
+    def test_black_ink_on_tinted_paper_stays_black(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _mark_text_colour
+        # black ink a scan shows in the paper's hue
+        doc, page, table = self._page_with((120 / 255, 80 / 255, 55 / 255), paper=(240 / 255, 198 / 255, 167 / 255))
+        assert _mark_text_colour(np, pymupdf, page, table) == 0
+        assert table.grid[0][0].visual_layout.style.text_color_rgb == (0, 0, 0)
