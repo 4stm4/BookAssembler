@@ -1016,3 +1016,54 @@ class TestWordBold:
         assert "\\textbf{ADDRESS BUS:} the bus" in tex
         line = next(l for l in tex.splitlines() if "ADDRESS" in l)
         assert "\\bfseries \\textbf" not in line and "\\selectfont \\bfseries ADDRESS" not in line
+
+
+class TestDotLeaders:
+    @staticmethod
+    def _row(page, texts):
+        pw, ph = page.rect.width, page.rect.height
+        words = page.get_text("words")
+        cells = []
+        for t in texts:
+            ws = [w for w in words if w[4] in t.split()]
+            cells.append(TableCell(
+                content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text=t)])])],
+                visual_layout=VisualLayout(bounding_box=NormalizedRect(
+                    x0=min(w[0] for w in ws) / pw, y0=min(w[1] for w in ws) / ph,
+                    x1=max(w[2] for w in ws) / pw, y1=max(w[3] for w in ws) / ph), page_or_screen_index=0),
+            ))
+        return cells
+
+    def test_a_leader_goes_and_the_page_number_stays(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _cell_text_of, _drop_leaders
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((100, 300), "CLARY CORP", fontsize=10)
+        page.insert_text((180, 300), ". . . . . . . . . . . .", fontsize=10)
+        page.insert_text((330, 300), "37", fontsize=10)
+        row = self._row(page, ["CLARY CORP", ". . . . . . . . . . . .", "37"])
+        table = TableBlock(grid=[row], row_count=1, column_count=3, visual_layout=row[0].visual_layout)
+        _drop_leaders(np, pymupdf, page, table)
+        assert [_cell_text_of(c) for c in table.grid[0]] == ["CLARY CORP", "37"]
+        assert table.grid[0][0].metadata.get("leader_after")
+
+    def test_a_lone_placeholder_mark_is_not_a_leader(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _drop_leaders
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((100, 300), "33", fontsize=10)
+        page.insert_text((200, 300), ".", fontsize=10)
+        page.insert_text((300, 300), "00100001", fontsize=10)
+        row = self._row(page, ["33", ".", "00100001"])
+        table = TableBlock(grid=[row], row_count=1, column_count=3, visual_layout=row[0].visual_layout)
+        assert _drop_leaders(np, pymupdf, page, table) == 0 and len(table.grid[0]) == 3
+
+    def test_the_builder_runs_the_leader_on(self):
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("CLARY CORP", x0=0.10, y0=0.32), _cell("x", x0=0.20, y0=0.32), _cell("37", x0=0.33, y0=0.32)]]
+        rows[1][0].metadata["leader_after"] = True
+        assert "CLARY CORP\\dotfill" in _ruled_tex(rows)

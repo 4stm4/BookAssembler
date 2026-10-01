@@ -998,6 +998,10 @@ def _render_table(table: TableBlock) -> str:
                         line_pitch[(row_idx, col)] = _leading
                 else:
                     body = " ".join(_line_texts(cell, raw))
+                # A dot leader the source printed after this cell runs on to
+                # the end of its column.
+                if (cell.metadata or {}).get("leader_after"):
+                    body += "\\dotfill"
                 text = _styled_cell_text(cell, body, median_pt, raw=raw, line_box=line_box,
                                          leading_pt=_leading)
                 if (getattr(cell, "row_span", 1) or 1) == 1:

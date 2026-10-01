@@ -1721,6 +1721,104 @@ def _ink_blobs(np, mask) -> List[List[Tuple[int, int]]]:
     return out
 
 
+# A leader's dots are small against its line; a letter or figure is not.
+_LEADER_DOT_SHARE = 0.35
+_LEADER_MIN_DOTS = 3
+_LEADER_ZOOM = 4.0
+
+
+def _dots(np, pymupdf, page, rect, line_h: float) -> Optional[int]:
+    """How many dots of ink a rect holds, or None when any blob in it is
+    bigger than a dot - more than _LEADER_DOT_SHARE of the line high or
+    wide: a letter, a figure."""
+    clip = rect & page.rect
+    if clip.is_empty:
+        return 0
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(_LEADER_ZOOM, _LEADER_ZOOM), clip=clip)
+    arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+    ink = arr[:, :, :3].mean(axis=2) < _RULE_INK_LEVEL
+    limit = _LEADER_DOT_SHARE * line_h * _LEADER_ZOOM
+    count = 0
+    for blob in _ink_blobs(np, ink):
+        if len(blob) < 2:
+            continue
+        ys = [y for y, _ in blob]
+        xs = [x for _, x in blob]
+        if max(ys) - min(ys) + 1 > limit or max(xs) - min(xs) + 1 > limit:
+            return None
+        count += 1
+    return count
+
+
+def _drop_leaders(np, pymupdf, page, table) -> int:
+    """Take the dot leaders out of a table's cells.
+
+    OCR reads a leader's dots as text - on the index fixture "..... 2...
+    0-0 e", "cece", "eee", lone "." - as cells of their own or run into the
+    page number after them. What a leader is shows in the pixels whatever
+    OCR made of it: each word of a cell is looked at, and a word that holds
+    only dots of ink is a leader's - where the row has three dots of it or
+    more, so a lone placeholder mark between figures is not one. A cell
+    left with no words goes; one left with some keeps those, on their own
+    boxes. The cell before the leader is marked (metadata["leader_after"])
+    so the builder can run the leader on from it. Returns how many cells
+    lost words."""
+    pw, ph = page.rect.width, page.rect.height
+    words = page.get_text("words")
+    changed = 0
+    for row in table.grid:
+        cells = sorted(row, key=_cell_x0)
+        found = []
+        for cell in cells:
+            box = cell.visual_layout.bounding_box if cell.visual_layout else None
+            if box is None:
+                found.append(None)
+                continue
+            inside = [
+                w for w in words
+                if box.x0 * pw - 1 <= (w[0] + w[2]) / 2 <= box.x1 * pw + 1
+                and box.y0 * ph - 1 <= (w[1] + w[3]) / 2 <= box.y1 * ph + 1
+            ]
+            line_h = (box.y1 - box.y0) * ph
+            # A word with a figure in it is kept whatever its box holds:
+            # OCR's boxes drift, and on that fixture the page number "7" was
+            # boxed over two leader dots short of where it is printed.
+            found.append([
+                (w, None if any(ch.isdigit() for ch in w[4])
+                 else _dots(np, pymupdf, page, pymupdf.Rect(w[:4]), line_h))
+                for w in inside
+            ])
+        if sum(n or 0 for ws in found if ws for _, n in ws) < _LEADER_MIN_DOTS:
+            continue
+        keep: List["TableCell"] = []
+        for cell, ws in zip(cells, found):
+            leader = [w for w, n in (ws or []) if n is not None]
+            if not leader or not keep:
+                keep.append(cell)
+                continue
+            rest = [w for w, n in ws if n is None]
+            keep[-1].metadata["leader_after"] = True
+            changed += 1
+            if not rest:
+                continue
+            cell.content = [ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(
+                text=" ".join(w[4] for w in rest))])])]
+            cell.visual_layout = VisualLayout(
+                bounding_box=NormalizedRect(
+                    x0=min(w[0] for w in rest) / pw, y0=min(w[1] for w in rest) / ph,
+                    x1=max(w[2] for w in rest) / pw, y1=max(w[3] for w in rest) / ph,
+                ),
+                page_or_screen_index=cell.visual_layout.page_or_screen_index,
+                style=cell.visual_layout.style,
+            )
+            keep.append(cell)
+        row[:] = keep
+    if changed:
+        table.column_count = max((len(r) for r in table.grid), default=0)
+        table.span_map = _build_span_map(table.grid)
+    return changed
+
+
 def _find_placeholder_marks(np, pymupdf, page, table) -> int:
     """Find the "•" placeholder marks the OCR layer missed, in the pixels.
 
