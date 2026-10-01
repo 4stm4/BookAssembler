@@ -986,3 +986,33 @@ class TestPositionedLines:
         # words 10pt tall: a 7pt stretched space stays, a 14pt gap splits
         line = [(100, 0, 130, 10, "the"), (137, 0, 160, 10, "bus"), (174, 0, 200, 10, "Status")]
         assert [[w[4] for w in r] for r in _runs(line)] == [["the", "bus"], ["Status"]]
+
+
+class TestWordBold:
+    def test_bold_words_are_told_from_regular_ones(self):
+        import pymupdf
+        from src.analyzers.table.rules import _bold_words
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((100, 300), "ADDRESS BUS:", fontsize=10, fontname="hebo")
+        page.insert_text((180, 300), "The most significant bits of memory address", fontsize=10, fontname="helv")
+        words = page.get_text("words")
+        bold = _bold_words(page, words)
+        assert [w[4] for k, w in enumerate(words) if bold.get(k)] == ["ADDRESS", "BUS:"]
+
+    def test_a_lone_word_takes_its_neighbours_weight(self):
+        from src.analyzers.table.rules import _smoothed
+        # "ADDRESS LATCH ENABLE: it is set to guarantee": LATCH missed, set misread
+        flags = [True, False, True, False, False, True, False, False]
+        assert _smoothed(flags) == [True, True, True, False, False, False, False, False]
+
+    def test_only_the_bold_words_are_set_bold(self):
+        from src.krm.models import StyleDescriptor
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("L1", x0=0.10, y0=0.32), _cell("ADDRESS BUS: the bus", x0=0.20, y0=0.32), _cell("1", x0=0.33, y0=0.32)]]
+        rows[1][1].visual_layout.style = StyleDescriptor(font_size_pt=8.0, is_bold=True)
+        rows[1][1].metadata["line_bold"] = [[True, True, False, False]]
+        tex = _ruled_tex(rows)
+        assert "\\textbf{ADDRESS BUS:} the bus" in tex
+        line = next(l for l in tex.splitlines() if "ADDRESS" in l)
+        assert "\\bfseries \\textbf" not in line and "\\selectfont \\bfseries ADDRESS" not in line

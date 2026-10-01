@@ -1433,6 +1433,73 @@ def _split_cells_at_rules(page, table) -> None:
     table.span_map = _build_span_map(table.grid)
 
 
+# How much heavier than the table's usual word a word's strokes must be
+# to have been printed bold.
+_BOLD_STROKE_RATIO = 1.3
+_STROKE_ZOOM = 6.0
+
+
+def _bold_words(page, words: List[Any]) -> Dict[int, bool]:
+    """Which words, by index into `words`, were printed bold.
+
+    Each word's stroke is read off the page at _STROKE_ZOOM: the median
+    length of its runs of ink along pixel rows, a stem's width for most of
+    them. A word is bold when its strokes are clearly heavier than the
+    median word's in the same table - measured against the table itself,
+    since a scan's absolute stroke widths depend on its resolution and
+    blur, while a key phrase set bold in a regular paragraph (the pin
+    description fixture's "ADDRESS BUS:") stands out against its own
+    neighbours."""
+    try:
+        import numpy as np
+        import pymupdf
+    except ImportError:
+        return {}
+    if not words:
+        return {}
+    region = pymupdf.Rect(
+        min(w[0] for w in words), min(w[1] for w in words),
+        max(w[2] for w in words), max(w[3] for w in words),
+    )
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(_STROKE_ZOOM, _STROKE_ZOOM), clip=region)
+    arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+    ink = arr[:, :, :3].mean(axis=2) < _RULE_INK_LEVEL
+    strokes: Dict[int, float] = {}
+    for k, w in enumerate(words):
+        x0 = int((w[0] - region.x0) * _STROKE_ZOOM)
+        x1 = int((w[2] - region.x0) * _STROKE_ZOOM)
+        y0 = int((w[1] - region.y0) * _STROKE_ZOOM)
+        y1 = int((w[3] - region.y0) * _STROKE_ZOOM)
+        patch = ink[max(0, y0):y1, max(0, x0):x1]
+        if patch.size == 0:
+            continue
+        runs = []
+        for row in patch:
+            edges = np.flatnonzero(np.diff(np.concatenate(([0], row.astype(np.int8), [0]))))
+            runs.extend(edges[1::2] - edges[::2])
+        if runs:
+            strokes[k] = float(np.median(runs)) / _STROKE_ZOOM
+    if not strokes:
+        return {}
+    usual = sorted(strokes.values())[len(strokes) // 2]
+    return {k: v > _BOLD_STROKE_RATIO * usual for k, v in strokes.items()}
+
+
+def _smoothed(flags: List[bool]) -> List[bool]:
+    """A line's bold flags with each lone word between two neighbours
+    that agree taking their weight: a word's stroke is measured on a few
+    letters and is noisy, while a bold phrase runs on - the pin description
+    fixture read "LATCH" in "ADDRESS LATCH ENABLE:" as regular and a lone
+    "set" in a regular paragraph as bold."""
+    out = list(flags)
+    # left to right, against the corrected word before: judged against the
+    # raw one, "ENABLE:" saw a regular "LATCH" beside it and turned regular
+    for k in range(1, len(flags) - 1):
+        if out[k - 1] == flags[k + 1] != flags[k]:
+            out[k] = out[k - 1]
+    return out
+
+
 def _runs(line: List[Any]) -> List[List[Any]]:
     """A printed line's words in runs, split where the gap between two
     words is wider than the words are tall - a column of a nested table.
@@ -1479,6 +1546,8 @@ def _regrid_ruled_bands(page, table) -> None:
         if bb.x0 * pw - 2 <= (w[0] + w[2]) / 2 <= bb.x1 * pw + 2
         and not (w[4] in _RULE_GLYPHS and any(w[0] - 1 <= x <= w[2] + 1 for x in xs))
     ]
+    bold = _bold_words(page, words)
+    is_bold = {id(w): bold.get(k, False) for k, w in enumerate(words)}
     cells = [c for row in table.grid for c in row if c.visual_layout and c.visual_layout.bounding_box]
 
     def style_at(r: NormalizedRect):
@@ -1545,6 +1614,8 @@ def _regrid_ruled_bands(page, table) -> None:
                 [[seg[0][0] / pw, " ".join(w[4] for w in seg)] for seg in _runs(line)]
                 for line in ws_lines
             ]
+            # and which of its words were printed bold, word by word
+            part.metadata["line_bold"] = [_smoothed([is_bold[id(w)] for w in line]) for line in ws_lines]
             row.append(part)
         new_grid.append(row)
     if not changed:

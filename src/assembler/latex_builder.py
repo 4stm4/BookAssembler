@@ -516,7 +516,8 @@ def _styled_cell_text(
         prefix += f"\\fontsize{{{size_pt:.2f}}}{{{leading:.2f}}}\\selectfont "
     if getattr(style, "is_monospace", False):
         prefix += "\\ttfamily "
-    if getattr(style, "is_bold", False):
+    # A cell that says which of its words were bold sets those alone.
+    if getattr(style, "is_bold", False) and not (getattr(cell, "metadata", None) or {}).get("line_bold"):
         prefix += "\\bfseries "
     if getattr(style, "is_italic", False):
         prefix += "\\itshape "
@@ -545,6 +546,32 @@ def _cell_text(cell: Any) -> str:
     return "\n".join(parts)
 
 
+def _bold_marked(words: List[str], bold: List[bool]) -> str:
+    """Escaped words, each run of bold ones set in \\textbf."""
+    out, run = [], []
+    for word, b in zip(words, bold + [False] * (len(words) - len(bold))):
+        if b:
+            run.append(_esc(word))
+            continue
+        if run:
+            out.append("\\textbf{" + " ".join(run) + "}")
+            run = []
+        out.append(_esc(word))
+    if run:
+        out.append("\\textbf{" + " ".join(run) + "}")
+    return " ".join(out)
+
+
+def _line_texts(cell: Any, raw: str) -> List[str]:
+    """A cell's lines, escaped, with the words the source printed bold set
+    bold - where it says which those were (line_bold), else as they are."""
+    lines = raw.split("\n")
+    flags = (getattr(cell, "metadata", None) or {}).get("line_bold")
+    if not flags or len(flags) != len(lines):
+        return [_esc(line) for line in lines]
+    return [_bold_marked(line.split(), f) for line, f in zip(lines, flags)]
+
+
 def _positioned_lines(cell: Any, raw: str) -> str:
     """A stacked cell's lines with each run of words set where it was
     printed, or "" when the cell does not carry its runs.
@@ -556,35 +583,30 @@ def _positioned_lines(cell: Any, raw: str) -> str:
     rule, each later one by boxing what comes before it to the printed
     distance between their starts, so our face's widths do not move it.
     """
-    segments = (getattr(cell, "metadata", None) or {}).get("line_segments")
+    md = getattr(cell, "metadata", None) or {}
+    segments = md.get("line_segments")
     box = getattr(getattr(cell, "visual_layout", None), "bounding_box", None)
     if not segments or box is None or len(segments) != raw.count("\n") + 1:
         return ""
+    flags = md.get("line_bold") or []
     lines = []
-    for runs in segments:
+    for n, runs in enumerate(segments):
+        line_flags = flags[n] if n < len(flags) else []
         out = ""
         indent = (runs[0][0] - box.x0) * _A4_WIDTH_PT
         if indent > _PLACE_MIN_PT:
             out += f"\\rule{{{indent:.2f}pt}}{{0pt}}"
+        used = 0
         for (x, text), nxt in zip(runs, runs[1:] + [None]):
+            words = text.split()
+            marked = _bold_marked(words, line_flags[used:used + len(words)])
+            used += len(words)
             if nxt is None:
-                out += _esc(text)
+                out += marked
             else:
-                out += f"\\makebox[{(nxt[0] - x) * _A4_WIDTH_PT:.2f}pt][l]{{{_esc(text)}}}"
+                out += f"\\makebox[{(nxt[0] - x) * _A4_WIDTH_PT:.2f}pt][l]{{{marked}}}"
         lines.append(out)
     return "\\newline ".join(lines)
-
-
-def _latex_linebreaks(escaped_text: str) -> str:
-    """Turn a cell's internal "\n" separators (source lines stacked in one
-    cell) into LaTeX line breaks.
-
-    Run AFTER _esc() so the backslash is never itself escaped. \\newline,
-    not \\\\: inside a tabular's p{} cell \\\\ ends the table ROW, and the
-    stacked lines of the voltage-regulator fixture's "Output Voltage"
-    conditions landed in a row of their own under the wrong columns.
-    """
-    return escaped_text.replace("\n", "\\newline ")
 
 
 def _cell_x0(cell: Any) -> Optional[float]:
@@ -967,7 +989,7 @@ def _render_table(table: TableBlock) -> str:
                 if "\n" in raw and not _printed_on_one_line(cell, line_box):
                     stacked.add((row_idx, col))
                     body = "\\lineskiplimit=-\\maxdimen " + (
-                        _positioned_lines(cell, raw) or _latex_linebreaks(_esc(raw))
+                        _positioned_lines(cell, raw) or "\\newline ".join(_line_texts(cell, raw))
                     )
                     _n = raw.count("\n") + 1
                     _h = _box_height(cell)
@@ -975,7 +997,7 @@ def _render_table(table: TableBlock) -> str:
                         _leading = max(0.0, (_h - line_box) * _A4_HEIGHT_PT / (_n - 1))
                         line_pitch[(row_idx, col)] = _leading
                 else:
-                    body = _esc(raw).replace("\n", " ")
+                    body = " ".join(_line_texts(cell, raw))
                 text = _styled_cell_text(cell, body, median_pt, raw=raw, line_box=line_box,
                                          leading_pt=_leading)
                 if (getattr(cell, "row_span", 1) or 1) == 1:
