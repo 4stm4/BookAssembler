@@ -14,7 +14,9 @@ from src.krm.models import ParagraphBlock, TableBlock
 from tests.e2e.test_assembled_table_pdf import FIXTURE_A, FIXTURE_B
 
 PH = 841.89
-fx = FIXTURE_A if (sys.argv[1:] or ["A"])[0] == "A" else FIXTURE_B
+from pathlib import Path
+arg = (sys.argv[1:] or ["A"])[0]
+fx = FIXTURE_A if arg == "A" else FIXTURE_B if arg == "B" else Path(arg)
 doc = PdfSourceAdapter().parse(open(fx, "rb"), f"file://{fx}")
 TableDetectorAnalyzer().run(doc, ReadingGraph(), KnowledgeGraph())
 for child in doc.root_containers[0].children:
