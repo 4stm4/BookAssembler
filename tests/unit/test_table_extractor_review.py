@@ -1113,3 +1113,40 @@ class TestColumnSupport:
             grid.append([_cell(f"NAME {k}", x0=0.10, y0=0.25 + 0.02 * k), _cell(f"{k}", x0=0.70, y0=0.25 + 0.02 * k)])
         grid[3].insert(1, _cell("2...", x0=0.40, y0=0.29))       # an OCR'd leader's leftover
         assert _column_bins(grid) == [0.10, 0.70]
+
+
+class TestTableFill:
+    def test_the_colour_a_table_is_printed_on_is_recorded_and_set(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _mark_fill
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.draw_rect(pymupdf.Rect(90, 280, 400, 360), color=None, fill=(240 / 255, 198 / 255, 167 / 255))
+        page.insert_text((100, 300), "CLARY CORP", fontsize=10)
+        table = TableBlock(grid=[[_cell("CLARY CORP")]], row_count=1, column_count=1, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=95 / 595, y0=285 / 842, x1=395 / 595, y1=355 / 842), page_or_screen_index=0))
+        rgb = _mark_fill(np, pymupdf, page, table)
+        assert rgb is not None and all(abs(a - b) <= 2 for a, b in zip(rgb, (240, 198, 167)))
+
+    def test_paper_is_not_a_fill(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _mark_fill
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((100, 300), "CLARY CORP", fontsize=10)
+        table = TableBlock(grid=[[_cell("CLARY CORP")]], row_count=1, column_count=1, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=95 / 595, y0=285 / 842, x1=395 / 595, y1=355 / 842), page_or_screen_index=0))
+        assert _mark_fill(np, pymupdf, page, table) is None and "fill_rgb" not in (table.metadata or {})
+
+    def test_the_builder_sets_the_table_on_it(self):
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("CLARY CORP", x0=0.10, y0=0.32), _cell("37", x0=0.33, y0=0.32)]]
+        table = TableBlock(grid=rows, row_count=2, column_count=2, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.40, y1=0.33), page_or_screen_index=0))
+        table.metadata = {"fill_rgb": [240, 198, 167]}
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        assert "\\colorbox[RGB]{240,198,167}{\\begin{tabular}" in build_latex(doc)

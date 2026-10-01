@@ -2781,6 +2781,15 @@ def _render_table(table: TableBlock) -> str:
     # minus the extent its own glyphs occupy). A table whose rules were
     # measured keeps its own value; one without rule geometry still gets
     # the 4pt that was tuned here.
+    # A table printed on a colour is set on it: the whole tabular, rows and
+    # the space between them, boxed in that colour with no margin added.
+    _fill = _table_md.get("fill_rgb")
+    if _fill:
+        r, g, b = (max(0, min(255, int(v))) for v in _fill)
+        tabular = (
+            f"{{\\setlength{{\\fboxsep}}{{0pt}}\\colorbox[RGB]{{{r},{g},{b}}}{{"
+            + tabular + "}}"
+        )
     lines = [
         "\\begin{center}",
         f"\\renewcommand{{\\arraystretch}}{{{dynamic_arraystretch:.3f}}}",

@@ -19,7 +19,7 @@ from src.krm.models import (
 from src.analyzers.caption.signals import _CAPTION_RE
 from src.analyzers.source_io import resolve_source_path
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
-from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _build_span_map, _cell_x0, _column_bins, _column_of, _find_placeholder_marks, _frame_rules, _cluster_columns, _count_columns, _drop_leaders, _find_table_runs, _fold_label_rows, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _page_idx, _regrid_ruled_bands, _rows_from_block, _rows_from_group, _snap_row_to_columns, _split_cells_at_rules, _table_from_lines
+from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _build_span_map, _cell_x0, _column_bins, _column_of, _find_placeholder_marks, _frame_rules, _cluster_columns, _count_columns, _drop_leaders, _find_table_runs, _fold_label_rows, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _mark_fill, _page_idx, _regrid_ruled_bands, _rows_from_block, _rows_from_group, _snap_row_to_columns, _split_cells_at_rules, _table_from_lines
 
 
 def _cell_y0(cell: "TableCell") -> float:
@@ -526,6 +526,7 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                 page_index = vl.page_or_screen_index or 0
                 if page_index >= source.page_count:
                     continue
+                _mark_fill(np, pymupdf, source[page_index], table)
                 _find_placeholder_marks(np, pymupdf, source[page_index], table)
                 _drop_leaders(np, pymupdf, source[page_index], table)
                 _mark_cell_borders(np, pymupdf, source[page_index], table)

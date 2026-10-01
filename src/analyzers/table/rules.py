@@ -1750,6 +1750,35 @@ def _dots(np, pymupdf, page, rect, line_h: float) -> Optional[int]:
     return count
 
 
+# How far a background may sit from white and still be paper, not a fill.
+_PAPER_LEVEL = 235
+
+
+def _mark_fill(np, pymupdf, page, table) -> Optional[Tuple[int, int, int]]:
+    """Record the colour a table is printed on (metadata["fill_rgb"]), the
+    median of its region's pixels that are not ink - when that is a colour
+    and not paper. The index fixture is printed on orange."""
+    bbox = table.visual_layout.bounding_box
+    pw, ph = page.rect.width, page.rect.height
+    clip = pymupdf.Rect(bbox.x0 * pw, bbox.y0 * ph, bbox.x1 * pw, bbox.y1 * ph) & page.rect
+    if clip.is_empty:
+        return None
+    pix = page.get_pixmap(clip=clip)
+    arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3]
+    paper = arr[arr.mean(axis=2) >= _RULE_INK_LEVEL]
+    if paper.size == 0:
+        return None
+    rgb = tuple(int(v) for v in np.median(paper, axis=0))
+    if min(rgb) >= _PAPER_LEVEL:
+        return None
+    md = getattr(table, "metadata", None)
+    if md is None:
+        md = {}
+        table.metadata = md
+    md["fill_rgb"] = list(rgb)
+    return rgb
+
+
 def _drop_leaders(np, pymupdf, page, table) -> int:
     """Take the dot leaders out of a table's cells.
 
