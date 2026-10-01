@@ -1150,3 +1150,25 @@ class TestTableFill:
         table.metadata = {"fill_rgb": [240, 198, 167]}
         doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
         assert "\\colorbox[RGB]{240,198,167}{\\begin{tabular}" in build_latex(doc)
+
+
+class TestStaleSpans:
+    def test_a_span_stops_at_a_row_with_its_own_cell(self):
+        from src.analyzers.table.rules import _clip_row_spans
+        grid = [[_cell("APPLIED", x0=0.10, y0=0.30), _cell("8,9", x0=0.40, y0=0.30)],
+                [_cell("BOWERS", x0=0.10, y0=0.32), _cell("48", x0=0.40, y0=0.32)],
+                [_cell("CLARY", x0=0.10, y0=0.34)]]
+        grid[0][1].row_span = 2
+        grid[1][1].row_span = 2
+        _clip_row_spans(grid)
+        assert grid[0][1].row_span == 1 and grid[1][1].row_span == 2
+
+    def test_a_spanning_cell_beside_another_loses_its_span_not_its_text(self):
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("BOWERS", x0=0.10, y0=0.32), _cell("x", x0=0.20, y0=0.32), _cell("1", x0=0.33, y0=0.32)],
+                [_cell("CLARY", x0=0.10, y0=0.34), _cell("y", x0=0.20, y0=0.34), _cell("2", x0=0.33, y0=0.34)]]
+        stray = _cell(".", x0=0.14, y0=0.32)
+        stray.row_span = 2
+        rows[1].insert(1, stray)
+        tex = _ruled_tex(rows)
+        assert "BOWERS" in tex and "CLARY" in tex

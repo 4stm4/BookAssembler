@@ -1847,8 +1847,32 @@ def _drop_leaders(np, pymupdf, page, table) -> int:
         row[:] = keep
     if changed:
         table.column_count = max((len(r) for r in table.grid), default=0)
+        _clip_row_spans(table.grid)
         table.span_map = _build_span_map(table.grid)
     return changed
+
+
+def _clip_row_spans(grid: List[List["TableCell"]]) -> None:
+    """Shorten each row span so it covers no row that has a cell of its
+    own in that column. Spans are inferred over empty cells; a cell that a
+    later step left there (a page number kept where a leader went) would
+    otherwise sit under a span, and the builder had one overwrite the
+    other - "BOWERS ENGINEERING CO" vanished under a "." spanning down."""
+    bins = _column_bins(grid)
+    if not bins:
+        return
+    for r, row in enumerate(grid):
+        for cell in row:
+            span = getattr(cell, "row_span", 1) or 1
+            if span <= 1:
+                continue
+            col = _column_of(cell, bins)
+            reach = 1
+            while reach < span and r + reach < len(grid) and not any(
+                _column_of(c, bins) == col for c in grid[r + reach]
+            ):
+                reach += 1
+            cell.row_span = reach
 
 
 def _find_placeholder_marks(np, pymupdf, page, table) -> int:

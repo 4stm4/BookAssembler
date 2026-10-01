@@ -1093,10 +1093,14 @@ def _render_table(table: TableBlock) -> str:
             # (they are one printed line, not two); side by side, at
             # their printed gap, is how they were printed.
             for col, entries in row_entries.items():
-                if len(entries) < 2 or any(
-                    e[0] is None or e[1] is None or not isinstance(e[2], str) for e in entries
-                ):
+                if len(entries) < 2 or any(e[0] is None or e[1] is None for e in entries):
                     continue
+                # A spanning cell set beside another gives up its span: the
+                # two share one cell of this row, and neither may be lost.
+                if any(isinstance(e[2], tuple) for e in entries):
+                    for key in [k for k, v in span_map.items() if v == (row_idx, col)]:
+                        del span_map[key]
+                entries = [(e[0], e[1], e[2][3] if isinstance(e[2], tuple) else e[2], e[3]) for e in entries]
                 # Each one starts where it was printed: everything before it
                 # is boxed to the printed distance between their starts.
                 # Held apart by the printed gap instead, the second moved
