@@ -34,7 +34,9 @@ import pytest
 
 from src.assembler.latex_builder import build_latex, compile_xelatex
 from src.krm.models import ContainerUnit, KnowledgeDocument, TableBlock
-from tests.e2e.test_assembled_table_pdf import FIXTURE_A, FIXTURE_B, _extract_table
+from tests.e2e.test_assembled_table_pdf import (
+    FIXTURE_A, FIXTURE_B, FIXTURE_C, FIXTURE_D, FIXTURE_E, _extract_table,
+)
 
 
 def _table_texts(table: TableBlock, min_len: int = 1) -> list:
@@ -226,6 +228,9 @@ def _build_single_table_pdf(table: TableBlock, work_dir: str, name: str) -> str:
     [
         (FIXTURE_A, 0),
         (FIXTURE_B, 0),
+        (FIXTURE_C, 0),
+        (FIXTURE_D, 0),
+        (FIXTURE_E, 0),
     ],
 )
 def test_table_visual_overlay_matches_source(tmp_path, fixture_path, source_page):

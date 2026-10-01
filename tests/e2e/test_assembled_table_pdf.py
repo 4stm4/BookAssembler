@@ -36,6 +36,13 @@ from src.krm.models import ContainerUnit, KnowledgeDocument, TableBlock
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 FIXTURE_A = FIXTURES / "z80_decimal_binary_table.pdf"
 FIXTURE_B = FIXTURES / "dc_characteristics_table.pdf"
+# Further scanned tables, built from tests/fixtures/src/ by
+# tests/fixtures/build_scanned_fixture.py: a ruled pin description table
+# with prose cells and its caption, an index page on a coloured fill, and a
+# composite diagram of coloured boxes with soft edges and its caption.
+FIXTURE_C = FIXTURES / "pin_description_table.pdf"
+FIXTURE_D = FIXTURES / "index_to_advertisers.pdf"
+FIXTURE_E = FIXTURES / "software_architecture.pdf"
 
 
 def _extract_table(pdf_path: Path, index: int = 0) -> TableBlock:
