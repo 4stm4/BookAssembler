@@ -526,8 +526,8 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                 page_index = vl.page_or_screen_index or 0
                 if page_index >= source.page_count:
                     continue
-                _drop_leaders(np, pymupdf, source[page_index], table)
                 _find_placeholder_marks(np, pymupdf, source[page_index], table)
+                _drop_leaders(np, pymupdf, source[page_index], table)
                 _mark_cell_borders(np, pymupdf, source[page_index], table)
                 _regrid_ruled_bands(source[page_index], table)
                 _split_cells_at_rules(source[page_index], table)

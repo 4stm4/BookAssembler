@@ -1758,7 +1758,8 @@ def _drop_leaders(np, pymupdf, page, table) -> int:
     page number after them. What a leader is shows in the pixels whatever
     OCR made of it: each word of a cell is looked at, and a word that holds
     only dots of ink is a leader's - where the row has three dots of it or
-    more, so a lone placeholder mark between figures is not one. A cell
+    more, or is already known to carry a leader (_find_placeholder_marks
+    saw one), so a lone placeholder mark between figures is not one. A cell
     left with no words goes; one left with some keeps those, on their own
     boxes. The cell before the leader is marked (metadata["leader_after"])
     so the builder can run the leader on from it. Returns how many cells
@@ -1780,15 +1781,17 @@ def _drop_leaders(np, pymupdf, page, table) -> int:
                 and box.y0 * ph - 1 <= (w[1] + w[3]) / 2 <= box.y1 * ph + 1
             ]
             line_h = (box.y1 - box.y0) * ph
-            # A word with a figure in it is kept whatever its box holds:
-            # OCR's boxes drift, and on that fixture the page number "7" was
-            # boxed over two leader dots short of where it is printed.
-            found.append([
-                (w, None if any(ch.isdigit() for ch in w[4])
-                 else _dots(np, pymupdf, page, pymupdf.Rect(w[:4]), line_h))
-                for w in inside
-            ])
-        if sum(n or 0 for ws in found if ws for _, n in ws) < _LEADER_MIN_DOTS:
+            found.append([(w, _dots(np, pymupdf, page, pymupdf.Rect(w[:4]), line_h)) for w in inside])
+        # The row's last word is what the leader leads to - its page number
+        # - and is kept whatever its box holds: OCR's boxes drift, and on
+        # that fixture the page number "7" was boxed over two leader dots.
+        last = max(
+            ((w, n) for ws in found if ws for w, n in ws), key=lambda wn: wn[0][2], default=None
+        )
+        if last is not None:
+            found = [[(w, None if w is last[0] else n) for w, n in ws] if ws else ws for ws in found]
+        known = any((c.metadata or {}).get("leader_after") for c in cells)
+        if not known and sum(n or 0 for ws in found if ws for _, n in ws) < _LEADER_MIN_DOTS:
             continue
         keep: List["TableCell"] = []
         for cell, ws in zip(cells, found):
@@ -1889,6 +1892,7 @@ def _find_placeholder_marks(np, pymupdf, page, table) -> int:
 
     marks: List[Dict[str, Any]] = []
     taken = set()
+    dots_per_row: Dict[int, int] = {}
     for pixels in _ink_blobs(np, ink):
         ys = [p[0] for p in pixels]
         xs = [p[1] for p in pixels]
@@ -1911,6 +1915,7 @@ def _find_placeholder_marks(np, pymupdf, page, table) -> int:
         dist, row_idx = min(candidates)
         if dist > text_h / 2.0:
             continue
+        dots_per_row[row_idx] = dots_per_row.get(row_idx, 0) + 1
         x0 = (clip.x0 + min(xs) / z) / page_w
         box = [
             x0, (clip.y0 + min(ys) / z) / page_h,
@@ -1922,6 +1927,17 @@ def _find_placeholder_marks(np, pymupdf, page, table) -> int:
             continue
         taken.add((row_idx, col))
         marks.append({"row": row_idx, "bbox": box})
+
+    # A placeholder stands alone in its cell; a row of dots is a leader. On
+    # the index fixture every leader's dots were taken for placeholders, a
+    # "•" in each gap, and each opened a column of its own. A row with
+    # _LEADER_MIN_DOTS of them or more is given its leader instead.
+    leader_rows = {r for r, n in dots_per_row.items() if n >= _LEADER_MIN_DOTS}
+    marks = [m for m in marks if m["row"] not in leader_rows]
+    for r in leader_rows:
+        row = sorted(table.grid[r], key=_cell_x0)
+        if row:
+            row[0].metadata["leader_after"] = True
 
     if marks:
         md = getattr(table, "metadata", None)

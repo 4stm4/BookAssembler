@@ -1067,3 +1067,39 @@ class TestDotLeaders:
                 [_cell("CLARY CORP", x0=0.10, y0=0.32), _cell("x", x0=0.20, y0=0.32), _cell("37", x0=0.33, y0=0.32)]]
         rows[1][0].metadata["leader_after"] = True
         assert "CLARY CORP\\dotfill" in _ruled_tex(rows)
+
+    def test_dots_the_ocr_did_not_read_make_a_leader_not_placeholders(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _find_placeholder_marks
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        rows = []
+        for k, (name, num) in enumerate((("CLARY CORP", "37"), ("DATA GENERAL", "7"), ("ELGAR INC", "23"))):
+            y = 300 + 20 * k
+            page.insert_text((100, y), name, fontsize=10)
+            page.insert_text((330, y), num, fontsize=10)
+            for x in range(190, 320, 9):                    # a leader OCR never read
+                page.draw_circle((x, y - 3), 1.8, color=(0, 0, 0), fill=(0, 0, 0))
+            rows.append(self._row(page, [name, num]))
+        table = TableBlock(grid=rows, row_count=3, column_count=2, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=100 / 595, y0=290 / 842, x1=345 / 595, y1=345 / 842),
+            page_or_screen_index=0))
+        _find_placeholder_marks(np, pymupdf, page, table)
+        assert not (table.metadata or {}).get("placeholder_marks")
+        assert all(row[0].metadata.get("leader_after") for row in table.grid)
+
+    def test_in_a_leader_row_a_stray_dot_goes_and_the_last_word_stays(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _cell_text_of, _drop_leaders
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((100, 300), "BOWERS CORP", fontsize=10)
+        page.insert_text((200, 300), ".", fontsize=10)
+        page.insert_text((330, 300), "48", fontsize=10)
+        row = self._row(page, ["BOWERS CORP", ".", "48"])
+        row[0].metadata["leader_after"] = True                  # its leader is known
+        table = TableBlock(grid=[row], row_count=1, column_count=3, visual_layout=row[0].visual_layout)
+        _drop_leaders(np, pymupdf, page, table)
+        assert [_cell_text_of(c) for c in table.grid[0]] == ["BOWERS CORP", "48"]
