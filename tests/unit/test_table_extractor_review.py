@@ -949,3 +949,23 @@ class TestStackedPitch:
         tex = _ruled_tex(rows)
         # three lines in a 0.03 box over a 0.01 line: (0.02 x 845.04pt) / 2
         assert "\\fontsize{8.00}{8.45}\\selectfont \\lineskiplimit" in tex
+
+    def test_lines_are_the_printed_ones_and_spans_are_reset(self):
+        import pymupdf
+        from src.analyzers.table.rules import _cell_text_of, _regrid_ruled_bands
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        pw, ph = page.rect.width, page.rect.height
+        page.insert_text((110, 312), "S0", fontsize=8)
+        page.insert_text((210, 312), "MACHINE CYCLE STATUS:", fontsize=8)
+        page.insert_text((215, 324), "IO/M", fontsize=8)     # each inserted apart:
+        page.insert_text((260, 324), "Status", fontsize=8)   # a block of its own
+        heading = _cell("Name", x0=210 / pw, y0=285 / ph)
+        heading.row_span = 2
+        table = TableBlock(grid=[[heading], [_cell("S0", x0=110 / pw, y0=305 / ph)]], row_count=2, column_count=2,
+                           visual_layout=VisualLayout(bounding_box=NormalizedRect(
+                               x0=100 / pw, y0=280 / ph, x1=400 / pw, y1=335 / ph), page_or_screen_index=0))
+        table.metadata = {"column_rule_x": [200 / pw], "rule_y": [295 / ph, 335 / ph]}
+        _regrid_ruled_bands(page, table)
+        assert _cell_text_of(table.grid[-1][1]) == "MACHINE CYCLE STATUS:\nIO/M Status"
+        assert all(c.row_span == 1 for row in table.grid for c in row)

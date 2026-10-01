@@ -1482,18 +1482,28 @@ def _regrid_ruled_bands(page, table) -> None:
     changed = False
     bands = list(zip(rule_y, rule_y[1:]))
     for lo, hi in bands:
-        in_band = [w for w in words if lo * ph < (w[1] + w[3]) / 2 < hi * ph]
-        lines: Dict[Tuple[int, int, int], List[Any]] = {}
+        in_band = sorted(
+            (w for w in words if lo * ph < (w[1] + w[3]) / 2 < hi * ph),
+            key=lambda w: (w[1] + w[3]) / 2,
+        )
+        # Printed lines, by where the words sit, not by tesseract's own
+        # block and line numbers: it reads a nested table's columns as
+        # blocks of their own ("IO/M", "S1", "S0", "Status" on one line came
+        # as four), and a paragraph's last words as a line apart.
+        printed: List[List[Any]] = []
         for w in in_band:
-            lines.setdefault((w[5], w[6], column(w)), []).append(w)
-        by_y = sorted(lines.items(), key=lambda kv: (min(w[1] for w in kv[1]), kv[0][2]))
-        rows_y: List[List[Tuple[int, List[Any]]]] = []
-        for (_, _, col), ws in by_y:
-            y = min(w[1] for w in ws)
-            if rows_y and abs(min(w[1] for w in rows_y[-1][0][1]) - y) < 3:
-                rows_y[-1].append((col, ws))
+            centre = (w[1] + w[3]) / 2
+            if printed and abs(centre - sum((v[1] + v[3]) / 2 for v in printed[-1]) / len(printed[-1])) \
+                    < 0.5 * (w[3] - w[1]):
+                printed[-1].append(w)
             else:
-                rows_y.append([(col, ws)])
+                printed.append([w])
+        rows_y: List[List[Tuple[int, List[Any]]]] = []
+        for line in printed:
+            by_col: Dict[int, List[Any]] = {}
+            for w in line:
+                by_col.setdefault(column(w), []).append(w)
+            rows_y.append(sorted(by_col.items()))
         old_rows = [row for row in table.grid if row and lo < centre_y(row[0]) < hi]
         one_row = len(rows_y) > 1 and all(len({col for col, _ in r}) == 1 for r in rows_y[1:])
         if not one_row:
@@ -1522,6 +1532,12 @@ def _regrid_ruled_bands(page, table) -> None:
     above = [row for row in table.grid if row and centre_y(row[0]) <= first]
     below = [row for row in table.grid if row and centre_y(row[0]) >= last]
     table.grid = above + new_grid + below
+    # In a grid the rules say which rows a cell covers, and every cell here
+    # is one band's; a span inferred before (a heading over the empty cells
+    # of the next line) would now reach over a real row and hide it.
+    for row in table.grid:
+        for cell in row:
+            cell.row_span = 1
     table.row_count = len(table.grid)
     table.column_count = max((len(r) for r in table.grid), default=0)
     table.span_map = _build_span_map(table.grid)
