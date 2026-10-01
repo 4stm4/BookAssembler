@@ -889,3 +889,4 @@ class TestColumnsByRules:
         # nearer the Type heading's x0 than the centred Function heading's,
         # but between the second rule and the table's edge
         assert "prose" in line.split(" & ")[2]
+

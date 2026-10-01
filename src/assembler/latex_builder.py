@@ -2332,8 +2332,14 @@ def _render_table(table: TableBlock) -> str:
     raw_extra_pt = []
     for i in range(len(rendered_rows)):
         gap = row_gaps[i] if i < len(row_gaps) else None
+        # The step to the next row holds this row's own lines too, which
+        # its height already counts (_row_h_pt below): the extra is what
+        # the step leaves beyond them. Counted in both, the pin description
+        # fixture's stacked status lines reserved them twice - 116pt and
+        # 74pt of blank under two rows, and the table no longer fit a page.
         surplus = (
             (gap * _A4_FULL_HEIGHT_CM * _PT_PER_CM) - _baseline_gap_pt
+            - max(0, _row_line_count(i) - 1) * _unstretched_line_pt
             if gap and _baseline_gap_pt > 0 else 0.0
         )
         content = (

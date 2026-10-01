@@ -136,5 +136,9 @@ def run(name, fixture):
         print(f"  {i:<5} {src_s}     {extra}   {text}")
 
 
-run("FIXTURE_A (decimal/binary)", FIXTURE_A)
-run("FIXTURE_B (voltage regulator)", FIXTURE_B)
+if len(sys.argv) > 1:
+    from pathlib import Path
+    run(sys.argv[1], Path(sys.argv[1]))
+else:
+    run("FIXTURE_A", FIXTURE_A)
+    run("FIXTURE_B", FIXTURE_B)
