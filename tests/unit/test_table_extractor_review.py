@@ -1211,3 +1211,44 @@ class TestTextColour:
         doc, page, table = self._page_with((120 / 255, 80 / 255, 55 / 255), paper=(240 / 255, 198 / 255, 167 / 255))
         assert _mark_text_colour(np, pymupdf, page, table) == 0
         assert table.grid[0][0].visual_layout.style.text_color_rgb == (0, 0, 0)
+
+
+class TestUnruledSetSide:
+    @staticmethod
+    def _boxed(text, x0, x1, y0):
+        cell = _styled(_cell(text, x0=x0, y0=y0))
+        cell.visual_layout.bounding_box = NormalizedRect(x0=x0, y0=y0, x1=x1, y1=y0 + 0.01)
+        return cell
+
+    def _tex(self):
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        # names flush left at 0.10, page numbers flush right at 0.80, one
+        # sub-entry printed 0.012 in from the names
+        names = [("APPLIED DATA", 0.30), ("BOWERS CO", 0.26), ("CLARY CORP", 0.27),
+                 ("DIABLO SYSTEMS", 0.33), ("A XEROX CO", 0.29), ("ELGAR CORP", 0.27)]
+        pages = [("8, 9", 0.77), ("48", 0.785), ("37", 0.785), ("11", 0.785), ("Cover 4", 0.74), ("23", 0.785)]
+        grid = []
+        for k, ((name, nx1), (num, px0)) in enumerate(zip(names, pages)):
+            y0 = 0.30 + 0.02 * k
+            nx0 = 0.112 if name == "A XEROX CO" else 0.10
+            grid.append([self._boxed(name, nx0, nx1, y0), self._boxed(num, px0, 0.80, y0)])
+        table = TableBlock(
+            grid=grid, row_count=len(grid), column_count=2,
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.80, y1=0.30 + 0.02 * len(grid)),
+                page_or_screen_index=0,
+            ),
+        )
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        return build_latex(doc)
+
+    def test_a_sub_entry_keeps_its_indent(self):
+        import re
+        assert re.search(r"\\rule\{[\d.]+pt\}\{0pt\}[^&]*A XEROX CO", self._tex())
+
+    def test_right_set_values_are_set_right(self):
+        import re
+        spec = re.search(r"\\begin\{tabular\}\{(.*)\}", self._tex()).group(1)
+        # the last column: right-set, whatever else its prefix carries
+        assert re.search(r"\\raggedleft[^p]*\}p\{[\d.]+cm\}\|?$", spec), spec

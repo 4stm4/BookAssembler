@@ -11,6 +11,7 @@ import bisect
 import logging
 import os
 import re
+import statistics
 import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -624,6 +625,12 @@ def _cell_x1(cell: Any) -> Optional[float]:
 # The share of a table's rows that must have a cell at an x for it to be
 # a column of its own, where no header row says where the columns are.
 _COLUMN_MIN_SUPPORT = 0.15
+
+
+def _edge_spread(xs: List[float]) -> float:
+    """How far a column's edges disagree: their interquartile range."""
+    q1, _, q3 = statistics.quantiles(xs, n=4)
+    return q3 - q1
 
 
 def _column_bins(grid: List[List[Any]]) -> Optional[List[float]]:
@@ -1486,6 +1493,20 @@ def _render_table(table: TableBlock) -> str:
                 for i, f in enumerate(fractions)
             ]
 
+    # Which side each column's values are set against, where no rules gave
+    # it above: the side where their edges agree. Without it nothing in a
+    # borderless table could be placed where it was printed - the index
+    # fixture's sub-entries ("A XEROX CO.") sat flush with the names they
+    # are indented under. The spread is the middle half's, so a few OCR
+    # boxes swallowing a leader's dots do not turn a right-set column of
+    # page numbers left.
+    if col_is_right is None and col_x0_sum is not None:
+        col_is_right = [
+            _edge_spread(_col_x1s[i]) < _edge_spread(_col_x0s[i])
+            if len(_col_x0s[i]) >= 4 and len(_col_x1s[i]) >= 4 else False
+            for i in range(ncols)
+        ]
+
     # Narrow columns hold short numeric-ish values (MIN/TYP/MAX/UNITS) that
     # the source right-aligns, not the wide CHARACTERISTICS/CONDITIONS text
     # columns (those stay p{}, left/paragraph-set as the source sets them).
@@ -1514,8 +1535,12 @@ def _render_table(table: TableBlock) -> str:
         )
 
     if col_width_cm is not None:
+        # A wide column is set ragged right like prose - unless its values
+        # are set right, as the index fixture's page numbers are.
         col_spec_parts = [
-            f"p{{{col_width_cm[i]:.2f}cm}}" if wide
+            (f">{{\\raggedleft}}p{{{col_width_cm[i]:.2f}cm}}"
+             if col_is_right is not None and col_is_right[i]
+             else f"p{{{col_width_cm[i]:.2f}cm}}") if wide
             else f">{{{_narrow_align_prefix(i)}}}p{{{col_width_cm[i]:.2f}cm}}"
             for i, wide in enumerate(is_wide)
         ]
