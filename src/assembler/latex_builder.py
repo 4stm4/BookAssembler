@@ -545,6 +545,36 @@ def _cell_text(cell: Any) -> str:
     return "\n".join(parts)
 
 
+def _positioned_lines(cell: Any, raw: str) -> str:
+    """A stacked cell's lines with each run of words set where it was
+    printed, or "" when the cell does not carry its runs.
+
+    The pin description fixture nests a status table inside one cell -
+    "IO/M  S1  S0  Status" over rows of figures - and set as plain lines
+    its columns ran together at the left. Each run starts at its printed
+    distance from the cell's left edge: the first held open by an invisible
+    rule, each later one by boxing what comes before it to the printed
+    distance between their starts, so our face's widths do not move it.
+    """
+    segments = (getattr(cell, "metadata", None) or {}).get("line_segments")
+    box = getattr(getattr(cell, "visual_layout", None), "bounding_box", None)
+    if not segments or box is None or len(segments) != raw.count("\n") + 1:
+        return ""
+    lines = []
+    for runs in segments:
+        out = ""
+        indent = (runs[0][0] - box.x0) * _A4_WIDTH_PT
+        if indent > _PLACE_MIN_PT:
+            out += f"\\rule{{{indent:.2f}pt}}{{0pt}}"
+        for (x, text), nxt in zip(runs, runs[1:] + [None]):
+            if nxt is None:
+                out += _esc(text)
+            else:
+                out += f"\\makebox[{(nxt[0] - x) * _A4_WIDTH_PT:.2f}pt][l]{{{_esc(text)}}}"
+        lines.append(out)
+    return "\\newline ".join(lines)
+
+
 def _latex_linebreaks(escaped_text: str) -> str:
     """Turn a cell's internal "\n" separators (source lines stacked in one
     cell) into LaTeX line breaks.
@@ -680,6 +710,8 @@ def _wrapped_line_count(text: str, width_pt: float, size_pt: float, bold: bool) 
 # cell, so measurement noise does not move ordinary values.
 _PLACE_EXPLICIT_PT = 0.1
 _PLACE_INDENT_PT = 3.0
+# The smallest printed indent of a run of words inside a cell worth setting.
+_PLACE_MIN_PT = 0.2
 
 # How far below its row's first line a one-line cell must have been
 # printed before it is lowered to where it was printed, in the table's
@@ -934,7 +966,9 @@ def _render_table(table: TableBlock) -> str:
                 _leading = 0.0
                 if "\n" in raw and not _printed_on_one_line(cell, line_box):
                     stacked.add((row_idx, col))
-                    body = "\\lineskiplimit=-\\maxdimen " + _latex_linebreaks(_esc(raw))
+                    body = "\\lineskiplimit=-\\maxdimen " + (
+                        _positioned_lines(cell, raw) or _latex_linebreaks(_esc(raw))
+                    )
                     _n = raw.count("\n") + 1
                     _h = _box_height(cell)
                     if _h is not None and _n > 1:

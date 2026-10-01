@@ -969,3 +969,20 @@ class TestStackedPitch:
         _regrid_ruled_bands(page, table)
         assert _cell_text_of(table.grid[-1][1]) == "MACHINE CYCLE STATUS:\nIO/M Status"
         assert all(c.row_span == 1 for row in table.grid for c in row)
+
+
+class TestPositionedLines:
+    def test_runs_start_where_they_were_printed(self):
+        from src.assembler.latex_builder import _A4_WIDTH_PT, _positioned_lines
+        cell = _cell("IO/M Status\n0 Memory write", x0=0.30, y0=0.40)
+        cell.metadata["line_segments"] = [[[0.30, "IO/M"], [0.36, "Status"]], [[0.31, "0"], [0.36, "Memory write"]]]
+        out = _positioned_lines(cell, "IO/M Status\n0 Memory write")
+        first, second = out.split("\\newline ")
+        assert first == f"\\makebox[{0.06 * _A4_WIDTH_PT:.2f}pt][l]{{IO/M}}Status"
+        assert second.startswith(f"\\rule{{{0.01 * _A4_WIDTH_PT:.2f}pt}}{{0pt}}")
+
+    def test_a_justified_word_space_is_not_a_column(self):
+        from src.analyzers.table.rules import _runs
+        # words 10pt tall: a 7pt stretched space stays, a 14pt gap splits
+        line = [(100, 0, 130, 10, "the"), (137, 0, 160, 10, "bus"), (174, 0, 200, 10, "Status")]
+        assert [[w[4] for w in r] for r in _runs(line)] == [["the", "bus"], ["Status"]]

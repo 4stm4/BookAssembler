@@ -1433,6 +1433,20 @@ def _split_cells_at_rules(page, table) -> None:
     table.span_map = _build_span_map(table.grid)
 
 
+def _runs(line: List[Any]) -> List[List[Any]]:
+    """A printed line's words in runs, split where the gap between two
+    words is wider than the words are tall - a column of a nested table.
+    A justified paragraph stretches its word spaces to half that and more,
+    and split there its words ran into each other in our wider face."""
+    runs: List[List[Any]] = [[line[0]]]
+    for prev, w in zip(line, line[1:]):
+        if w[0] - prev[2] > (w[3] - w[1]):
+            runs.append([w])
+        else:
+            runs[-1].append(w)
+    return runs
+
+
 def _regrid_ruled_bands(page, table) -> None:
     """Rebuild the rows of a ruled grid from its rules and the page's words.
 
@@ -1523,7 +1537,15 @@ def _regrid_ruled_bands(page, table) -> None:
                 x1=max(w[2] for w in flat) / pw, y1=max(w[3] for w in flat) / ph,
             )
             text = "\n".join(" ".join(w[4] for w in line) for line in ws_lines)
-            row.append(_make_cell(text, r, style_at(r), table.visual_layout.page_or_screen_index))
+            part = _make_cell(text, r, style_at(r), table.visual_layout.page_or_screen_index)
+            # Where each run of words on a line was printed - a nested
+            # table's columns, an indented sub-item - so the builder can set
+            # it there: runs split where the gap is wider than a line is tall.
+            part.metadata["line_segments"] = [
+                [[seg[0][0] / pw, " ".join(w[4] for w in seg)] for seg in _runs(line)]
+                for line in ws_lines
+            ]
+            row.append(part)
         new_grid.append(row)
     if not changed:
         return
