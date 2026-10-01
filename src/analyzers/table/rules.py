@@ -1822,6 +1822,52 @@ def _mark_text_colour(np, pymupdf, page, table) -> int:
     return coloured
 
 
+_ITALIC_SLANT = 0.12        # tan of the lean; an italic leans 0.2 or so
+_ITALIC_MIN_LETTERS = 6     # a few glyphs lean by their shapes alone ("A8-A15")
+
+
+def _slant(np, ink) -> float:
+    """How far a block of ink leans right, as the shear that stands its
+    strokes upright: the one that piles the ink into the fewest columns."""
+    ys, xs = np.nonzero(ink)
+    ys = ys - ys.mean()
+    best, best_score = 0.0, -1.0
+    for shear in np.linspace(-0.1, 0.4, 26):
+        cols = np.round(xs + shear * ys).astype(int)
+        score = float((np.bincount(cols - cols.min()) ** 2).sum())
+        if score > best_score:
+            best, best_score = float(shear), score
+    return best
+
+
+def _mark_italic(np, pymupdf, page, table) -> int:
+    """Set style.is_italic on each cell whose ink leans as an italic does
+    (_ITALIC_SLANT). OCR reports no slant; the index fixture sets its
+    sub-entries ("A XEROX CO.", "INDUSTRIAL CONTROLS DIV") in italic
+    under upright names. Returns how many cells were found italic."""
+    from dataclasses import replace
+    pw, ph = page.rect.width, page.rect.height
+    italic = 0
+    for row in table.grid:
+        for cell in row:
+            vl = cell.visual_layout
+            if vl is None or vl.bounding_box is None or vl.style is None:
+                continue
+            if sum(ch.isalpha() for ch in _cell_text_of(cell)) < _ITALIC_MIN_LETTERS:
+                continue
+            b = vl.bounding_box
+            clip = pymupdf.Rect(b.x0 * pw, b.y0 * ph, b.x1 * pw, b.y1 * ph) & page.rect
+            if clip.is_empty:
+                continue
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(_RULE_ZOOM, _RULE_ZOOM), clip=clip, colorspace=pymupdf.csGRAY)
+            ink = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width) < _RULE_INK_LEVEL
+            if ink.sum() < 50 or _slant(np, ink) < _ITALIC_SLANT:
+                continue
+            vl.style = replace(vl.style, is_italic=True)
+            italic += 1
+    return italic
+
+
 def _drop_leaders(np, pymupdf, page, table) -> int:
     """Take the dot leaders out of a table's cells.
 

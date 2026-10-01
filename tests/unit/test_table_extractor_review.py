@@ -1252,3 +1252,31 @@ class TestUnruledSetSide:
         spec = re.search(r"\\begin\{tabular\}\{(.*)\}", self._tex()).group(1)
         # the last column: right-set, whatever else its prefix carries
         assert re.search(r"\\raggedleft[^p]*\}p\{[\d.]+cm\}\|?$", spec), spec
+
+
+class TestItalic:
+    @staticmethod
+    def _marked(fontname):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _mark_italic
+        from src.krm.models import StyleDescriptor
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((100, 305), "INDUSTRIAL CONTROLS DIV", fontsize=10, fontname=fontname)
+        words = page.get_text("words")
+        box = NormalizedRect(x0=min(w[0] for w in words) / 595, y0=min(w[1] for w in words) / 842,
+                             x1=max(w[2] for w in words) / 595, y1=max(w[3] for w in words) / 842)
+        cell = TableCell(
+            content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text="INDUSTRIAL CONTROLS DIV")])])],
+            visual_layout=VisualLayout(bounding_box=box, page_or_screen_index=0, style=StyleDescriptor(font_size_pt=10)),
+        )
+        table = TableBlock(grid=[[cell]], row_count=1, column_count=1, visual_layout=cell.visual_layout)
+        _mark_italic(np, pymupdf, page, table)
+        return cell.visual_layout.style.is_italic
+
+    def test_leaning_ink_is_italic(self):
+        assert self._marked("heit")
+
+    def test_upright_ink_is_not(self):
+        assert not self._marked("helv")
