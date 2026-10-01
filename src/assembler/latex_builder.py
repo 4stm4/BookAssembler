@@ -1477,21 +1477,24 @@ def _render_table(table: TableBlock) -> str:
 
     # Fallback when the source printed no rules to read (a borderless
     # table) or the count doesn't line up with this table's own column
-    # count: each column's own text extent, at least a defensive
-    # content-length floor wide.
+    # count: each column reaches from where its text starts to where the
+    # next column's does, less the \tabcolsep either side of the gap, and
+    # the last one over its own text; each at least a defensive
+    # content-length floor wide. Not each column's own text extent: a
+    # leader runs a column's text up to the next one's, and the index
+    # fixture's two columns, measured so, came to 15cm where the source
+    # printed 12cm, its page numbers pushed far out past the source's.
     if col_width_cm is None and col_min_x0 is not None and col_max_x1 is not None:
+        _gap = 2 * _tabcolsep_pt / (_A4_FULL_WIDTH_CM * _PT_PER_CM)
         fractions = [
-            (col_max_x1[i] - col_min_x0[i])
-            if col_min_x0[i] is not None and col_max_x1[i] is not None else None
+            (col_max_x1[i] - col_min_x0[i]) if i == ncols - 1
+            else (col_min_x0[i + 1] - col_min_x0[i] - _gap)
+            if all(v is not None for v in (col_min_x0[i], col_max_x1[i], col_min_x0[min(i + 1, ncols - 1)]))
+            else None
             for i in range(ncols)
         ]
         if all(f is not None and f > 0 for f in fractions):
-            col_width_cm = [
-                max(f * _A4_FULL_WIDTH_CM, narrow_total_cm and (
-                    min(col_max_len[i], _WIDE_CHAR_THRESHOLD) * _CHAR_WIDTH_CM + 0.3
-                ))
-                for i, f in enumerate(fractions)
-            ]
+            col_width_cm = [f * _A4_FULL_WIDTH_CM for f in fractions]
 
     # Which side each column's values are set against, where no rules gave
     # it above: the side where their edges agree. Without it nothing in a

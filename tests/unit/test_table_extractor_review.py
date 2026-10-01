@@ -1315,3 +1315,26 @@ class TestLeaderWordsByText:
         table = TableBlock(grid=[row], row_count=1, column_count=2, visual_layout=row[0].visual_layout)
         _drop_leaders(np, pymupdf, page, table)
         assert [_cell_text_of(c) for c in table.grid[0]] == ["BOWERS CO"]
+
+
+class TestUnruledWidths:
+    def test_a_column_reaches_to_where_the_next_begins(self):
+        import re
+        import pytest
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        boxed = TestUnruledSetSide._boxed
+        # names from 0.10 whose leaders run to 0.76, page numbers 0.74..0.80
+        grid = [[boxed(f"NAME {k}", 0.10, 0.76 if k % 2 else 0.30, 0.30 + 0.02 * k),
+                 boxed(str(k), 0.74 if k == 0 else 0.78, 0.80, 0.30 + 0.02 * k)] for k in range(6)]
+        table = TableBlock(
+            grid=grid, row_count=len(grid), column_count=2,
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.80, y1=0.42), page_or_screen_index=0,
+            ),
+        )
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        widths = [float(w) for w in re.findall(r"p\{([\d.]+)cm\}", build_latex(doc))]
+        # 0.64 of the page less a \tabcolsep either side of the gap; the
+        # numbers over their own 0.06
+        assert widths == [pytest.approx(0.64 * 21 - 8 / 28.3465, abs=0.01), pytest.approx(0.06 * 21, abs=0.01)]
