@@ -1338,3 +1338,39 @@ class TestUnruledWidths:
         # 0.64 of the page less a \tabcolsep either side of the gap; the
         # numbers over their own 0.06
         assert widths == [pytest.approx(0.64 * 21 - 8 / 28.3465, abs=0.01), pytest.approx(0.06 * 21, abs=0.01)]
+
+
+class TestBareFrame:
+    def _spec(self):
+        import re
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        boxed = TestUnruledSetSide._boxed
+        grid = [[boxed(f"NAME {k}", 0.10, 0.30, 0.30 + 0.02 * k), boxed(str(k), 0.78, 0.80, 0.30 + 0.02 * k)]
+                for k in range(6)]
+        for row in grid:
+            for cell in row:
+                cell.border_left = cell.border_right = True    # the frame's two sides bound every band
+        table = TableBlock(
+            grid=grid, row_count=len(grid), column_count=2,
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.80, y1=0.42), page_or_screen_index=0,
+            ),
+        )
+        # a frame 0.02 out from the names and 0.03 out from the numbers
+        table.metadata = {"table_rule_x0": 0.08, "table_rule_x1": 0.83}
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        return re.search(r"\\begin\{tabular\}\{(.*)\}", build_latex(doc)).group(1)
+
+    def test_no_rule_inside_a_frame_that_has_none(self):
+        assert self._spec().count("|") == 2
+
+    def test_the_frame_stands_off_the_text_as_printed(self):
+        import re
+        import pytest
+        spec = self._spec()
+        scale = 21 * 28.3465
+        left = re.match(r"\|@\{\\hspace\{([\d.]+)pt\}\}", spec)
+        right = re.search(r"@\{\\hspace\{([\d.]+)pt\}\}\|$", spec)
+        assert left and float(left.group(1)) == pytest.approx(0.02 * scale, abs=0.1)
+        assert right and float(right.group(1)) == pytest.approx(0.03 * scale, abs=0.1)

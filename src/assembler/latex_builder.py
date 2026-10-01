@@ -1596,6 +1596,23 @@ def _render_table(table: TableBlock) -> str:
         if _table_md.get("column_rule_x"):
             seps[0] = "@{}" if _open_left else "|"
             seps[ncols] = "@{}" if _open_right else "|"
+        elif "table_rule_x0" in _table_md or "table_rule_x1" in _table_md:
+            # The scan measured a frame and no rule inside it. A cell's
+            # border flags name the rules bounding its band - here the
+            # frame's two sides - not the boundary next to it: read as
+            # that, they ruled the index fixture's names off from its page
+            # numbers, where the source has only a frame.
+            for boundary in range(1, ncols):
+                seps[boundary] = ""
+            # And the frame stands where it was printed from the text, not
+            # a \tabcolsep off it: the index fixture's frame is 22pt out
+            # from its names and 21pt from its page numbers.
+            _scale = _A4_FULL_WIDTH_CM * _PT_PER_CM
+            _fx0, _fx1 = _table_md.get("table_rule_x0"), _table_md.get("table_rule_x1")
+            if _fx0 is not None and seps[0] == "|" and col_min_x0 and col_min_x0[0] is not None:
+                seps[0] = f"|@{{\hspace{{{max(0.0, (col_min_x0[0] - _fx0) * _scale):.2f}pt}}}}"
+            if _fx1 is not None and seps[ncols] == "|" and col_max_x1 and col_max_x1[-1] is not None:
+                seps[ncols] = f"@{{\hspace{{{max(0.0, (_fx1 - col_max_x1[-1]) * _scale):.2f}pt}}}}|"
         col_spec = seps[0] + "".join(
             part + seps[i + 1] for i, part in enumerate(col_spec_parts)
         )
