@@ -2,7 +2,7 @@
 
 Fixtures:
   - z80_decimal_binary_table.pdf   (Fig. 1.2, clean text layer, one table)
-  - z80_voltage_regulator_table.pdf (messier OCR'd text layer, several tables)
+  - dc_characteristics_table.pdf    (scanned DC characteristics table, tesseract text layer)
 
 Both go through the real extraction chain (PdfSourceAdapter ->
 TableDetectorAnalyzer, same as tests/e2e/test_krm_roundtrip.py) to get a real
@@ -35,7 +35,7 @@ from src.krm.models import ContainerUnit, KnowledgeDocument, TableBlock
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 FIXTURE_A = FIXTURES / "z80_decimal_binary_table.pdf"
-FIXTURE_B = FIXTURES / "z80_voltage_regulator_table.pdf"
+FIXTURE_B = FIXTURES / "dc_characteristics_table.pdf"
 
 
 def _extract_table(pdf_path: Path, index: int = 0) -> TableBlock:
@@ -53,17 +53,13 @@ def _extract_table(pdf_path: Path, index: int = 0) -> TableBlock:
 @pytest.fixture(scope="module")
 def two_source_doc() -> KnowledgeDocument:
     table_a = _extract_table(FIXTURE_A)
-    # index 0: the nA7812 spec table (28 rows once merged - see
-    # tests/e2e/test_krm_roundtrip.py history: this fixture was also used to
-    # catch a prose false-positive, a fragmentation regression, and the
-    # adjacent-table-merge fix in _merge_adjacent_tables).
     table_b = _extract_table(FIXTURE_B, index=0)
 
     return KnowledgeDocument(
         title="Two Sources",
         root_containers=[
             ContainerUnit(title="Decimal-Binary Table", level=1, children=[table_a]),
-            ContainerUnit(title="Voltage Regulator Spec", level=1, children=[table_b]),
+            ContainerUnit(title="DC Characteristics", level=1, children=[table_b]),
         ],
     )
 
@@ -77,13 +73,8 @@ def test_latex_contains_both_source_tables(two_source_doc):
     # A cell from the decimal-binary table (Fig. 1.2).
     assert "00000000" in tex
     assert "00100000" in tex
-    # A cell from the voltage-regulator spec table. The descriptive
-    # paragraph above it ("jiA7812 ELECTRICAL CHARACTERISTICS: ...") is
-    # prose, not a table row - TableDetectorAnalyzer now trims exactly that
-    # kind of leading single-cell, sentence-length block off a detected
-    # run (src/analyzers/table/analyzer.py _process_container) instead of
-    # folding it into the table, so it correctly does not appear here.
-    assert "Output Voltage" in tex
+    # A cell from the DC characteristics table.
+    assert "Power Supply Current" in tex
     assert "CONDITIONS" in tex
 
 
@@ -118,8 +109,5 @@ def test_assembled_pdf_compiles_and_keeps_both_tables(two_source_doc):
         compiled.close()
 
         assert "00000000" in full_text
-        # See test_latex_contains_both_source_tables: "7812" only ever
-        # appeared via the descriptive paragraph above the table, which
-        # TableDetectorAnalyzer now correctly excludes as prose, not a row.
-        assert "Output Voltage" in full_text
+        assert "Power Supply Current" in full_text
         assert "CONDITIONS" in full_text
