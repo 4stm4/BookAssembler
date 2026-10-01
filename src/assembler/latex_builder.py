@@ -475,6 +475,7 @@ def _is_latin_only(text: str) -> bool:
 
 def _styled_cell_text(
     cell: Any, text: str, median_pt: float = 0.0, raw: str = "", line_box: float = 0.0,
+    leading_pt: float = 0.0,
 ) -> str:
     """Wrap a cell's escaped text in the typography the source printed it in.
 
@@ -511,7 +512,8 @@ def _styled_cell_text(
     ):
         size_pt = median_pt
     if size_pt > 0:
-        prefix += f"\\fontsize{{{size_pt:.2f}}}{{{size_pt * 1.2:.2f}}}\\selectfont "
+        leading = leading_pt if leading_pt > 0 else size_pt * 1.2
+        prefix += f"\\fontsize{{{size_pt:.2f}}}{{{leading:.2f}}}\\selectfont "
     if getattr(style, "is_monospace", False):
         prefix += "\\ttfamily "
     if getattr(style, "is_bold", False):
@@ -840,6 +842,8 @@ def _render_table(table: TableBlock) -> str:
     # those whose lines it printed stacked.
     one_line: set = set()
     stacked: set = set()
+    # (row, col) of a stacked cell -> the pitch its lines were printed at.
+    line_pitch: Dict[Tuple[int, int], float] = {}
     # Populated below only when bins are available (real per-column source
     # geometry); stays None otherwise so the fallback path further down
     # knows to fall back to the old content-length-driven estimate.
@@ -922,12 +926,24 @@ def _render_table(table: TableBlock) -> str:
                 # cell's first and last lines carry the row's stretched
                 # struts, which otherwise push each line a strut apart
                 # (8.8pt a line on that fixture, where it prints 7).
+                # Stacked lines are spaced as the source spaced them: the
+                # cell's box holds its lines' pitch, (height - one line) /
+                # (lines - 1). At the face's own 1.2 of the size, the pin
+                # description fixture's paragraphs ran 0.7pt a line taller
+                # than print and the table 76pt past its page.
+                _leading = 0.0
                 if "\n" in raw and not _printed_on_one_line(cell, line_box):
                     stacked.add((row_idx, col))
                     body = "\\lineskiplimit=-\\maxdimen " + _latex_linebreaks(_esc(raw))
+                    _n = raw.count("\n") + 1
+                    _h = _box_height(cell)
+                    if _h is not None and _n > 1:
+                        _leading = max(0.0, (_h - line_box) * _A4_HEIGHT_PT / (_n - 1))
+                        line_pitch[(row_idx, col)] = _leading
                 else:
                     body = _esc(raw).replace("\n", " ")
-                text = _styled_cell_text(cell, body, median_pt, raw=raw, line_box=line_box)
+                text = _styled_cell_text(cell, body, median_pt, raw=raw, line_box=line_box,
+                                         leading_pt=_leading)
                 if (getattr(cell, "row_span", 1) or 1) == 1:
                     text = _lowered_to_print(text, cell, _row_top_line, line_box)
                 texts[col] = raw
@@ -1935,6 +1951,12 @@ def _render_table(table: TableBlock) -> str:
     # variable, which only exists when real column rules were found.
     _wrap_char_width_cm = 0.17 * ((median_pt or 8.0) / 8.0)
 
+    def _row_line_step(row_idx: int) -> float:
+        """How far apart the lines of a row's tallest cell are set: its
+        printed pitch where it is a stacked cell, the face's line else."""
+        pitches = [v for (r, _), v in line_pitch.items() if r == row_idx and v > 0]
+        return max(pitches) if pitches else _unstretched_line_pt
+
     def _row_line_count(row_idx: int) -> int:
         if col_width_cm is None or row_idx >= len(rendered_rows):
             return 1
@@ -2339,7 +2361,7 @@ def _render_table(table: TableBlock) -> str:
         # 74pt of blank under two rows, and the table no longer fit a page.
         surplus = (
             (gap * _A4_FULL_HEIGHT_CM * _PT_PER_CM) - _baseline_gap_pt
-            - max(0, _row_line_count(i) - 1) * _unstretched_line_pt
+            - max(0, _row_line_count(i) - 1) * _row_line_step(i)
             if gap and _baseline_gap_pt > 0 else 0.0
         )
         content = (
@@ -2595,7 +2617,7 @@ def _render_table(table: TableBlock) -> str:
         ):
             _rule_air_pt = min(_top_air_pt, max(0.0, _row_extra_pt))
             _row_extra_pt -= _rule_air_pt
-        _row_h_pt = _base_line_pt + max(0, _row_line_count(i) - 1) * _unstretched_line_pt
+        _row_h_pt = _base_line_pt + max(0, _row_line_count(i) - 1) * _row_line_step(i)
         _y_pt += _pre_air_pt
         _measured = _rule_below_pt(i) if rule else None
         _ARRAYRULE_PT = _weight_of(_measured) if (rule and _rules_pt) else _rule_w_pt
@@ -2610,7 +2632,7 @@ def _render_table(table: TableBlock) -> str:
             # the rows after it recover, since each aims at the anchor.
             _floor = (
                 -(_row_h_pt - 0.5) if _disjoint_below(i)
-                else -(_row_h_pt - _row_line_count(i) * _unstretched_line_pt)
+                else -(_row_h_pt - _row_line_count(i) * _row_line_step(i))
             )
             _row_extra_pt = max(_floor, _target - _ARRAYRULE_PT / 2.0 - _y_pt - _row_h_pt)
         _y_pt += _row_h_pt + _row_extra_pt
@@ -2627,7 +2649,7 @@ def _render_table(table: TableBlock) -> str:
             # extra. A negative extra is a plain \vskip and adds as is.
             _emitted_pt = _row_extra_pt
             if _row_extra_pt > 0:
-                _emitted_pt += max(0, _row_line_count(i) - 1) * _unstretched_line_pt
+                _emitted_pt += max(0, _row_line_count(i) - 1) * _row_line_step(i)
             extra = f"[{_emitted_pt:.2f}pt]"
         if rule and _rules_pt:
             rule += _sub_rules_from(_rule_below_pt(i))

@@ -938,3 +938,14 @@ class TestRegridRuledBands:
         table.metadata = {"column_rule_x": [200 / pw], "rule_y": [300 / ph, 350 / ph]}
         _regrid_ruled_bands(page, table)
         assert table.row_count == 1 and table.grid[0][0].content[0].inlines[0].spans[0].text == "x"
+
+
+class TestStackedPitch:
+    def test_stacked_lines_take_their_printed_pitch(self):
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("15 V\n5 mA\nP", x0=0.20, y0=0.32), _cell("V", x0=0.33, y0=0.32)]]
+        box = rows[1][1].visual_layout.bounding_box
+        rows[1][1].visual_layout.bounding_box = NormalizedRect(x0=box.x0, y0=box.y0, x1=box.x1, y1=box.y0 + 0.03)
+        tex = _ruled_tex(rows)
+        # three lines in a 0.03 box over a 0.01 line: (0.02 x 845.04pt) / 2
+        assert "\\fontsize{8.00}{8.45}\\selectfont \\lineskiplimit" in tex
