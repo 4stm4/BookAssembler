@@ -154,28 +154,47 @@ def _sub_column_rules(np, ink, horizontal, rule_cols) -> List[Tuple[float, int, 
     return found
 
 
-def _frame_rules(np, pymupdf, page, bbox) -> List[Tuple[float, float, float]]:
-    """Every horizontal rule on the page that runs across most of the
-    table's width, as (y, x0, x1) page fractions - the rules that can
-    frame it, read down the whole page height within the table's columns."""
-    column = NormalizedRect(x0=bbox.x0, y0=0.0, x1=bbox.x1, y1=1.0)
-    rendered = _render_table_ink(np, pymupdf, page, column, height_share=False)
-    if rendered is None:
-        return []
-    ink, clip, horizontal, _ = rendered
+def _frame_rules(np, pymupdf, page, bbox):
+    """The rules that can frame a table, read down the whole page height
+    within its columns.
+
+    Returns (rules, ruled_between): every horizontal rule across most of
+    the table's width as (y, x0, x1) page fractions, and a test for whether
+    a band of the page between two y's is crossed top to bottom by a
+    vertical rule - a cell of a ruled grid, whatever its text."""
+    # The whole page is rendered so a rule is measured for its full length,
+    # past the part of the table detection found; a row is a rule when it
+    # is inked across most of that part's width.
     page_w, page_h = page.rect.width, page.rect.height
-    out = []
+    clip = page.rect
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(_RULE_ZOOM, _RULE_ZOOM), clip=clip)
+    arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+    ink = arr[:, :, :3].mean(axis=2) < _RULE_INK_LEVEL
+    lo_px = int(bbox.x0 * page_w * _RULE_ZOOM)
+    hi_px = int(bbox.x1 * page_w * _RULE_ZOOM)
+    horizontal = _rule_runs(ink[:, lo_px:hi_px].sum(axis=1) > _RULE_SPAN * max(1, hi_px - lo_px))
+    rules = []
     for run in horizontal:
         a, b = _rule_extent(np, ink, run)
-        out.append((
+        rules.append((
             (clip.y0 + (run[0] + run[1]) / 2.0 / _RULE_ZOOM) / page_h,
             (clip.x0 + a / _RULE_ZOOM) / page_w,
             (clip.x0 + b / _RULE_ZOOM) / page_w,
         ))
-    return out
+    rule_rows = np.zeros(ink.shape[0], dtype=bool)
+    for a, b in horizontal:
+        rule_rows[max(0, a - 2):b + 2] = True
+
+    def ruled_between(lo: float, hi: float) -> bool:
+        top = int((lo * page_h - clip.y0) * _RULE_ZOOM)
+        bottom = int((hi * page_h - clip.y0) * _RULE_ZOOM)
+        band = ink[max(0, top):max(0, bottom)][~rule_rows[max(0, top):max(0, bottom)]]
+        return band.shape[0] >= 3 and bool((band.mean(axis=0) >= _SUB_RULE_COVER).any())
+
+    return rules, ruled_between
 
 
-def _render_table_ink(np, pymupdf, page, bbox, height_share: bool = True):
+def _render_table_ink(np, pymupdf, page, bbox):
     """The table's region as an ink mask, with its rules found.
 
     Returns (ink, clip, horizontal, vertical), or None when the region is
@@ -205,7 +224,7 @@ def _render_table_ink(np, pymupdf, page, bbox, height_share: bool = True):
     table_w_px = max(1.0, (min(bbox.x1 * page_w, clip.x1) - max(bbox.x0 * page_w, clip.x0)) * _RULE_ZOOM)
     table_h_px = max(1.0, (min(bbox.y1 * page_h, clip.y1) - max(bbox.y0 * page_h, clip.y0)) * _RULE_ZOOM)
     horizontal = _rule_runs(ink.sum(axis=1) > _RULE_SPAN * table_w_px)
-    vertical = _rule_runs(ink.sum(axis=0) > _RULE_SPAN * table_h_px) if height_share else []
+    vertical = _rule_runs(ink.sum(axis=0) > _RULE_SPAN * table_h_px)
     return ink, clip, horizontal, vertical
 
 

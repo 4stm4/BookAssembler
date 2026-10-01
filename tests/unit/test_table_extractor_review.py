@@ -853,3 +853,28 @@ class TestFramedRows:
         ink[1, 20:280:2] = True      # one row inked here,
         ink[2, 21:280:2] = True      # the other there
         assert _rule_extent(np, ink, (1, 3)) == (20, 280)
+
+
+class TestGriddedFrame:
+    def test_a_ruled_grid_takes_its_prose_cells_and_fragments(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _table_from_lines
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        for y in (100.0, 120.0, 200.0, 280.0):
+            page.draw_line((100, y), (500, y), width=1.0)
+        for x in (100.0, 200.0, 500.0):
+            page.draw_line((x, 100), (x, 280), width=1.0)
+        header = _lines_block([("Symbol", 110, 108, 150), ("Name and Function", 210, 108, 300)])
+        body = _lines_block([(f"S{k}", 110, 130 + 16 * k, 125) for k in range(4)]
+                            + [(f"value {k}", 210, 130 + 16 * k, 260) for k in range(4)])
+        prose = _lines_block([("A long description of the pin and what it does in every mode " * 3, 210, 210, 495)])
+        table = _table_from_lines(body)
+        rest = _table_from_lines(_lines_block([(f"T{k}", 110, 230 + 12 * k, 125) for k in range(3)]
+                                              + [(f"more {k}", 210, 230 + 12 * k, 260) for k in range(3)]))
+        container = ContainerUnit(title="p", children=[header, table, prose, rest])
+        TableDetectorAnalyzer()._absorb_into(container, table, np, pymupdf, page)
+        assert header.is_tombstoned and prose.is_tombstoned and rest.is_tombstoned
+        texts = [c.content[0].inlines[0].spans[0].text for row in table.grid for c in row]
+        assert texts[0] == "Symbol" and "T2" in texts and any(t.startswith("A long") for t in texts)

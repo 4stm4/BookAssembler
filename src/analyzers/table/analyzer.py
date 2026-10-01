@@ -376,14 +376,14 @@ class TableDetectorAnalyzer(BaseAnalyzer):
 
     def _absorb_into(self, container: ContainerUnit, table: TableBlock, np, pymupdf, page) -> None:
         bb = table.visual_layout.bounding_box
-        rules = _frame_rules(np, pymupdf, page, bb)
+        rules, ruled_between = _frame_rules(np, pymupdf, page, bb)
         if not rules:
             return
         page_index = _page_idx(table)
         blocks = [
             c for c in container.children
-            if isinstance(c, (ParagraphBlock, UnknownBlock)) and not c.is_tombstoned
-            and _bbox(c) is not None and _page_idx(c) == page_index
+            if isinstance(c, (ParagraphBlock, UnknownBlock, TableBlock)) and not c.is_tombstoned
+            and c is not table and _bbox(c) is not None and _page_idx(c) == page_index
         ]
         tops = sorted({_cell_y0(cell) for row in table.grid for cell in row if cell.visual_layout})
         steps = sorted(b - a for a, b in zip(tops, tops[1:]) if b - a > 0)
@@ -392,45 +392,62 @@ class TableDetectorAnalyzer(BaseAnalyzer):
 
         def region(lo: float, hi: float, rule) -> Optional[List[Any]]:
             inside = [b for b in blocks if _bbox(b).y0 >= lo - tol and _bbox(b).y1 <= hi + tol]
+            # A band a vertical rule crosses is a row of a ruled grid: its
+            # cells may hold whole paragraphs (the pin description fixture's
+            # "Name and Function" column does), and the prose and spacing
+            # tests below are for telling rows from prose where no grid says.
+            gridded = ruled_between(lo, hi)
             for b in inside:
-                text = _get_text(b).strip()
                 box = _bbox(b)
-                if (
-                    box.x0 < rule[1] - tol or box.x1 > rule[2] + tol
-                    or len(text) > MAX_CELL_TEXT_LEN or _CAPTION_RE.match(text)
-                ):
+                if box.x0 < rule[1] - tol or box.x1 > rule[2] + tol:
                     return None
+                if gridded or isinstance(b, TableBlock):
+                    continue
+                text = _get_text(b).strip()
+                if len(text) > MAX_CELL_TEXT_LEN or _CAPTION_RE.match(text):
+                    return None
+            if gridded:
+                return inside
             ys = sorted([lo, hi] + [y for b in inside for y in (_bbox(b).y0, _bbox(b).y1)])
             if inside and max(b - a for a, b in zip(ys, ys[1:])) > max_gap:
                 return None
             return inside
 
-        above: List[Any] = []
-        edge = bb.y0
+        top = bb.y0
         for rule in sorted((r for r in rules if r[0] < bb.y0), key=lambda r: -r[0]):
-            taken = region(rule[0], edge, rule)
-            if taken is None:
+            if region(rule[0], top, rule) is None:
                 break
-            above = taken + above
-            edge = rule[0]
-        below: List[Any] = []
-        edge = bb.y1
+            top = rule[0]
+        bottom = bb.y1
         for rule in sorted((r for r in rules if r[0] > bb.y1), key=lambda r: r[0]):
-            taken = region(edge, rule[0], rule)
-            if taken is None:
+            if region(bottom, rule[0], rule) is None:
                 break
-            below += taken
-            edge = rule[0]
-        if not above and not below:
+            bottom = rule[0]
+        # Everything the frame then holds within the table's width: blocks
+        # in the regions just walked, a block or table fragment running over
+        # several of its rows, and blocks lying beside the table's own rows
+        # that detection left out (the pin description fixture's nested
+        # status columns).
+        x0 = min(r[1] for r in rules)
+        x1 = max(r[2] for r in rules)
+        taken = [
+            b for b in blocks
+            if _bbox(b).y0 >= top - tol and _bbox(b).y1 <= bottom + tol
+            and _bbox(b).x0 >= x0 - tol and _bbox(b).x1 <= x1 + tol
+        ]
+        if not taken:
             return
 
-        def rows_of(taken: List[Any]) -> List[List[TableCell]]:
-            rows: List[List[TableCell]] = []
-            for b in sorted(taken, key=lambda b: _bbox(b).y0):
-                rows.extend(_rows_from_block(b))
-            return rows
+        def rows_of(block: Any) -> List[List[TableCell]]:
+            return block.grid if isinstance(block, TableBlock) else _rows_from_block(block)
 
-        grid = rows_of(above) + list(table.grid) + rows_of(below)
+        def row_y(row: List[TableCell]) -> float:
+            ys = [_cell_y0(c) for c in row if c.visual_layout]
+            return min(ys) if ys else 0.0
+
+        grid = sorted(
+            list(table.grid) + [row for b in taken for row in rows_of(b)], key=row_y
+        )
         grid = _merge_orphan_rows(grid)
         _infer_rowspans(grid)
         table.grid = grid
@@ -445,11 +462,13 @@ class TableDetectorAnalyzer(BaseAnalyzer):
             ),
             page_or_screen_index=table.visual_layout.page_or_screen_index,
         )
-        for b in above + below:
+        for b in taken:
             b.is_tombstoned = True
             if not b.metadata:
                 b.metadata = {}
-            b.metadata["tombstone_reason"] = "merged_into_table_frame"
+            b.metadata["tombstone_reason"] = (
+                "merged_into_adjacent_table" if isinstance(b, TableBlock) else "merged_into_table_frame"
+            )
 
     def _mark_borders(self, doc: KnowledgeDocument) -> None:
         """Mark each cell's own edges from the rules printed on the source.
