@@ -1374,3 +1374,40 @@ class TestBareFrame:
         right = re.search(r"@\{\\hspace\{([\d.]+)pt\}\}\|$", spec)
         assert left and float(left.group(1)) == pytest.approx(0.02 * scale, abs=0.1)
         assert right and float(right.group(1)) == pytest.approx(0.03 * scale, abs=0.1)
+
+
+class TestFirstRuleInStep:
+    @staticmethod
+    def _first_row(rule_y):
+        import re
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        boxed = TestUnruledSetSide._boxed
+        # a heading, 0.06 of the page above the entries, a rule between
+        grid = [[boxed("index to advertisers", 0.10, 0.40, 0.20), boxed("", 0.78, 0.80, 0.20)]]
+        grid += [[boxed(f"NAME {k}", 0.10, 0.30, 0.26 + 0.02 * k), boxed(str(k), 0.78, 0.80, 0.26 + 0.02 * k)]
+                 for k in range(6)]
+        if rule_y:
+            for cell in grid[0]:
+                cell.border_bottom = True
+        table = TableBlock(
+            grid=grid, row_count=len(grid), column_count=2,
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=0.10, y0=0.20, x1=0.80, y1=0.37), page_or_screen_index=0,
+            ),
+        )
+        table.metadata = {"rule_y": rule_y, "rule_weight_pt": [1.3]} if rule_y else {}
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        tex = build_latex(doc)
+        row = tex[tex.index("index to advertisers"):]
+        row = row[:row.index("NAME 0")]
+        extra = re.search(r"\\tabularnewline\[(-?[\d.]+)pt\]", row)
+        rule = re.search(r"\\hrule height ([\d.]+)pt", row)
+        air = re.search(r"\\vskip (-?[\d.]+)pt", row)
+        return sum(float(m.group(1)) for m in (extra, rule, air) if m), bool(rule)
+
+    def test_the_rule_and_its_air_come_out_of_the_step(self):
+        import pytest
+        with_rule, drawn = self._first_row([0.245])
+        without, _ = self._first_row(None)
+        assert drawn and with_rule == pytest.approx(without, abs=0.05)

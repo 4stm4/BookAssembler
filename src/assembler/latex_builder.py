@@ -2758,6 +2758,13 @@ def _render_table(table: TableBlock) -> str:
                 else -(_row_h_pt - _row_line_count(i) * _row_line_step(i))
             )
             _row_extra_pt = max(_floor, _target - _ARRAYRULE_PT / 2.0 - _y_pt - _row_h_pt)
+        elif _measured is not None:
+            # The first rule has nothing to aim at yet. The step to the
+            # next row holds the rule and the air under it, so they come
+            # out of this row's extra: added on top, they put the index
+            # fixture's first entry 14pt low, under a rule 38pt below its
+            # heading where the source leaves 8pt.
+            _row_extra_pt = max(-(_row_h_pt - 0.5), _row_extra_pt - _ARRAYRULE_PT - _rule_air_pt)
         _y_pt += _row_h_pt + _row_extra_pt
         if rule:
             if _anchor is None and _measured is not None:
