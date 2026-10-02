@@ -794,6 +794,8 @@ _PLACE_MIN_PT = 0.2
 # of the type size above the baseline; array's strut stands this share of
 # a row's line above it.
 _ASCENT = 0.7
+# The weight a box table's rules are drawn at.
+_BOX_RULE_PT = 0.6
 # A dot leader's pitch, as \dotfill sets it.
 _DOT_PITCH_EM = 0.44
 _STRUT_HEIGHT = 0.7
@@ -900,6 +902,140 @@ def _grid_with_placeholder_marks(table: TableBlock) -> List[List[Any]]:
     return rows
 
 
+def _render_box_table(table: TableBlock) -> str:
+    """A table read off its drawn boxes (TableBlock.metadata["box_grid"]),
+    set on the grid it was drawn on.
+
+    Its geometry is known outright - every column and row edge is a drawn
+    line or fill edge - so nothing here is inferred from text: columns are
+    the grid's columns, rows are as tall as its rows (a zero-width strut
+    column sets each), and every cell is a \\multicolumn carrying its own
+    side rules and fill. A label is centred in its cell from a box of no
+    height, so it neither sets its row's height nor, in a cell over several
+    rows, stays in the first of them. Rules across are \\cline-d over the
+    columns whose cells draw them."""
+    md = table.metadata
+    xs = [md["table_rule_x0"]] + list(md["column_rule_x"]) + [md["table_rule_x1"]]
+    ys = list(md["rule_y"])
+    widths = [(b - a) * _A4_WIDTH_PT for a, b in zip(xs, xs[1:])]
+    heights = [(b - a) * _A4_HEIGHT_PT for a, b in zip(ys, ys[1:])]
+    nrows, ncols = len(heights), len(widths)
+    origin = {}
+    for row in table.grid:
+        for cell in row:
+            origin[(cell.metadata["grid_row"], cell.metadata["grid_col"])] = cell
+
+    sizes = sorted(_size_of(c.visual_layout.style) for c in origin.values() if _cell_text(c).strip())
+    usual_size = sizes[len(sizes) // 2] if sizes else 0.0
+
+    def covering(r: int, c: int):
+        """The cell over grid position (r, c), and where it starts."""
+        if (r, c) in origin:
+            return origin[(r, c)], r, c
+        start = table.span_map.get((r, c))
+        return (origin.get(start), start[0], start[1]) if start else (None, r, c)
+
+    def fill_of(cell) -> str:
+        rgb = getattr(getattr(getattr(cell, "visual_layout", None), "style", None), "background_color_rgb", None)
+        return f"\\cellcolor[RGB]{{{rgb[0]},{rgb[1]},{rgb[2]}}}" if rgb else ""
+
+    def label(cell, r: int) -> str:
+        raw = _cell_text(cell).strip()
+        if not raw:
+            return ""
+        size = _snap_size(_size_of(cell.visual_layout.style), usual_size)
+        font = "\\latinsans " if _is_latin_only(raw) else ""
+        lines = "\\\\".join(_esc(line) for line in raw.split("\n"))
+        width = sum(widths[cell.metadata["grid_col"]:cell.metadata["grid_col"] + cell.col_span])
+        # Set in the cell's last row and raised to its middle: the rows
+        # after the one it is set in paint their fills over it, and from
+        # the first row "BTS6120" hung down under two rows of yellow.
+        last = cell.metadata["grid_row"] + cell.row_span - 1
+        rise = (sum(heights[cell.metadata["grid_row"]:last + 1]) - heights[last]) / 2.0
+        sized = f"\\fontsize{{{size:.2f}}}{{{size * 1.2:.2f}}}\\selectfont " if size > 0 else ""
+        return (
+            f"\\raisebox{{{rise:.2f}pt}}[0pt][0pt]{{\\parbox[c]{{{width:.2f}pt}}"
+            f"{{\\centering {font}{sized}{lines}}}}}"
+        )
+
+    def ruled_between(r: int, c: int) -> bool:
+        """Whether a drawn rule runs over column c at the top of row r."""
+        above = covering(r - 1, c) if r > 0 else (None, 0, 0)
+        below = covering(r, c) if r < nrows else (None, 0, 0)
+        if above[0] is not None and above[0] is below[0]:
+            return False                    # inside a cell spanning both rows
+        return bool(
+            (above[0] is not None and above[0].border_bottom)
+            or (below[0] is not None and below[0].border_top)
+        )
+
+    # A rule across is a row of its own between two rows, \\vrule pieces
+    # over the columns that draw it: a \\cline sits in no space of its own,
+    # and colortbl paints the next row's fill over it - the fixture lost its
+    # top rule under "USER"'s green that way.
+    rule_w = _BOX_RULE_PT
+    starts = [sum(widths[:c]) for c in range(ncols + 1)]
+
+    def seam_fill(r: int, c: int) -> Optional[str]:
+        """The colour a rule row shows over column c where it draws no
+        rule: the fill of a cell spanning across it, or of the cells on
+        both sides of it where they share one. Paper there cut a white seam
+        through every cell running over that row boundary."""
+        above = covering(r - 1, c)[0] if r > 0 else None
+        below = covering(r, c)[0] if r < nrows else None
+        rgb_of = lambda cell: getattr(getattr(getattr(cell, "visual_layout", None), "style", None),
+                                     "background_color_rgb", None)
+        a, b = rgb_of(above), rgb_of(below)
+        return f"{a[0]},{a[1]},{a[2]}" if a and a == b else None
+
+    def rules_across(r: int) -> str:
+        if not any(ruled_between(r, c) for c in range(ncols)):
+            return ""
+        pieces, c = [], 0
+        while c < ncols:
+            ruled, colour = ruled_between(r, c), seam_fill(r, c)
+            start = c
+            while c + 1 < ncols and ruled_between(r, c + 1) == ruled and seam_fill(r, c + 1) == colour:
+                c += 1
+            width = starts[c + 1] - starts[start]
+            if ruled:
+                pieces.append(f"\\vrule width {width:.2f}pt height {rule_w:.2f}pt depth 0pt")
+            elif colour:
+                pieces.append(f"{{\\color[RGB]{{{colour}}}\\vrule width {width:.2f}pt height {rule_w:.2f}pt depth 0pt}}")
+            else:
+                pieces.append(f"\\hskip{width:.2f}pt")
+            c += 1
+        return f"\\noalign{{\\hbox to 0pt{{{''.join(pieces)}\\hss}}}}"
+
+    lines = [
+        f"{{\\setlength{{\\tabcolsep}}{{0pt}}\\setlength{{\\arrayrulewidth}}{{{rule_w:.2f}pt}}"
+        "\\renewcommand{\\arraystretch}{0}%",
+        "\\begin{tabular}{@{}m{0pt}@{}" + "".join(f"m{{{w:.2f}pt}}" for w in widths) + "}",
+        rules_across(0),
+    ]
+    for r in range(nrows):
+        # the rule under the row takes its share of the row's height
+        cells = [f"\\rule{{0pt}}{{{heights[r] - (rule_w if rules_across(r + 1) else 0.0):.2f}pt}}"]
+        c = 0
+        while c < ncols:
+            cell, r0, c0 = covering(r, c)
+            span = cell.col_span if cell is not None else 1
+            if cell is not None and c0 != c:
+                c += 1
+                continue
+            left = "|" if cell is not None and cell.border_left else ""
+            right = "|" if cell is not None and cell.border_right else ""
+            # its side rules inside its width, so every row's columns align
+            width = sum(widths[c:c + span]) - rule_w * (len(left) + len(right))
+            last_row = r0 + cell.row_span - 1 if cell is not None else r
+            body = (fill_of(cell) + (label(cell, r) if r == last_row else "")) if cell is not None else ""
+            cells.append(f"\\multicolumn{{{span}}}{{{left}m{{{width:.2f}pt}}{right}}}{{{body}}}")
+            c += span
+        lines.append(" & ".join(cells) + " \\tabularnewline" + rules_across(r + 1))
+    lines.append("\\end{tabular}}")
+    return "\\begin{center}\n" + "\n".join(lines) + "\n\\end{center}\n"
+
+
 def _render_table(table: TableBlock) -> str:
     """Render a table atomically (RFC 0007 §5.2).
 
@@ -907,6 +1043,8 @@ def _render_table(table: TableBlock) -> str:
     otherwise fall back to the spatial grid from TableDetector.
     """
     md = getattr(table, "metadata", None) or {}
+    if md.get("box_grid"):
+        return _render_box_table(table)
     recognized = md.get("latex")
     if recognized:
         safe = _sanitize_latex_fragment(recognized)

@@ -1852,3 +1852,25 @@ class TestBoxGrid:
         for k in range(10):
             page.insert_text((80, 100 + 14 * k), "An ordinary line of prose, long enough to matter.", fontsize=10)
         assert _box_grid(np, pymupdf, page) is None
+
+
+class TestBoxTableRender:
+    def test_a_box_table_is_set_on_its_grid(self):
+        import re
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.boxes import _box_grid, _table_from_box_grid
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        doc, page = TestBoxGrid._page()
+        table = _table_from_box_grid(_box_grid(np, pymupdf, page), 0, 595, 842)
+        tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
+        body = tex[tex.index("\\begin{tabular}"):tex.index("\\end{tabular}")]
+        rows = body.split("\\tabularnewline")
+        # fills and side rules per cell, rules across as rows of their own
+        assert "\\multicolumn{3}{|m{" in rows[0] and "\\cellcolor[RGB]" in rows[0] and "USER" in rows[0]
+        assert "\\cline" not in body and "\\noalign{\\hbox to 0pt{" in body
+        # a label over two rows is set in the last of them, raised to their middle
+        assert "BTS6120" not in rows[0]
+        raise_pt = float(re.search(r"\\raisebox\{([\d.]+)pt\}\[0pt\]\[0pt\]\{\\parbox\[c\][^&]*?BTS6120", rows[1]).group(1))
+        assert raise_pt > 5
