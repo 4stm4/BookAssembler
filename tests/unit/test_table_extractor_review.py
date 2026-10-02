@@ -1657,3 +1657,38 @@ class TestAirKeepsVerticals:
         row = tex[tex.index("index to advertisers"):tex.index("NAME 0")]
         assert "\\vskip" not in row
         assert re.search(r"\\hrule height [\d.]+pt\} &\s+\\tabularnewline\[-?[\d.]+pt\]", row)
+
+
+class TestPartialRuleInFrame:
+    def test_a_rule_stopping_short_of_the_frame_is_drawn_short(self):
+        import re
+        import pytest
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        boxed = TestUnruledSetSide._boxed
+        grid = [[boxed("index to advertisers", 0.10, 0.40, 0.20), boxed("", 0.78, 0.80, 0.20)]]
+        grid += [[boxed(f"NAME {k}", 0.10, 0.30, 0.26 + 0.015 * k), boxed(str(k), 0.78, 0.80, 0.26 + 0.015 * k)]
+                 for k in range(6)]
+        for row in grid:
+            for cell in row:
+                cell.border_left = cell.border_right = True
+        for cell in grid[0]:
+            cell.border_bottom = True
+        table = TableBlock(
+            grid=grid, row_count=len(grid), column_count=2,
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=0.10, y0=0.20, x1=0.80, y1=0.36), page_or_screen_index=0,
+            ),
+        )
+        # a frame 0.08..0.83, the rule under the heading 0.10..0.80 only
+        table.metadata = {"rule_y": [0.245], "rule_weight_pt": [1.3], "table_rule_x0": 0.08,
+                          "table_rule_x1": 0.83, "rule_x_extent": [[0.10, 0.80]]}
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        tex = build_latex(doc)
+        m = re.search(r"\\hskip ([\d.]+)pt\\vrule width ([\d.]+)pt", tex)
+        scale = 21 * 28.3465
+        # within the frame rule's own width at its start, and 1% along it:
+        # the builder turns cm into pt at 28.3465 where TeX takes 28.4528,
+        # a known 0.4% of its own
+        assert m and float(m.group(1)) == pytest.approx(0.02 * scale, abs=1.3)
+        assert float(m.group(2)) == pytest.approx(0.70 * scale, rel=0.01)

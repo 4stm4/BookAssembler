@@ -1631,10 +1631,31 @@ def _render_table(table: TableBlock) -> str:
             # from its names and 21pt from its page numbers.
             _scale = _A4_FULL_WIDTH_CM * _PT_PER_CM
             _fx0, _fx1 = _table_md.get("table_rule_x0"), _table_md.get("table_rule_x1")
+            _pad_l = _pad_r = None
             if _fx0 is not None and seps[0] == "|" and col_min_x0 and _text_start(0) is not None:
-                seps[0] = f"|@{{\\hspace{{{max(0.0, (_text_start(0) - _fx0) * _scale):.2f}pt}}}}"
+                _pad_l = max(0.0, (_text_start(0) - _fx0) * _scale)
+                seps[0] = f"|@{{\\hspace{{{_pad_l:.2f}pt}}}}"
             if _fx1 is not None and seps[ncols] == "|" and col_max_x1 and col_max_x1[-1] is not None:
-                seps[ncols] = f"@{{\\hspace{{{max(0.0, (_fx1 - col_max_x1[-1]) * _scale):.2f}pt}}}}|"
+                _pad_r = max(0.0, (_fx1 - col_max_x1[-1]) * _scale)
+                seps[ncols] = f"@{{\\hspace{{{_pad_r:.2f}pt}}}}|"
+            # The columns' bounds on the source page and in the tabular, so
+            # a rule the source stops short of the frame is drawn so - the
+            # index fixture's rule under its heading ends 20pt inside it.
+            # Each column meets the next halfway across the gap between
+            # them, a \tabcolsep either side.
+            if _pad_l is not None and _pad_r is not None and col_width_cm is not None and all(
+                _text_start(i) is not None for i in range(ncols)
+            ):
+                _sep_frac = _tabcolsep_pt / _scale
+                _source_bounds = [_fx0] + [_text_start(i) - _sep_frac for i in range(1, ncols)] + [_fx1]
+                _x = _rule_w_pt + _pad_l
+                _emitted_bounds_pt = [_rule_w_pt / 2.0]
+                for i in range(ncols):
+                    _x += round(col_width_cm[i], 2) * _PT_PER_CM
+                    if i < ncols - 1:
+                        _emitted_bounds_pt.append(_x + _tabcolsep_pt)
+                        _x += 2 * _tabcolsep_pt
+                _emitted_bounds_pt.append(_x + _pad_r + _rule_w_pt / 2.0)
         col_spec = seps[0] + "".join(
             part + seps[i + 1] for i, part in enumerate(col_spec_parts)
         )
