@@ -265,6 +265,26 @@ def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]
     return [row for i, row in enumerate(grid) if i not in orphan_indices]
 
 
+def _on_its_own_line(cell: "TableCell", row: List["TableCell"], below: List["TableCell"]) -> bool:
+    """Whether a cell sits on its own row's line, not over the rows under it.
+
+    A label spanning rows is set between them - its box reaches into the
+    next row, or its centre stands below its row-mates'. One printed level
+    with its row-mates and short of the next row is that row's alone: the
+    index fixture's "8,9" is APPLIED DIGITAL DATA SYSTEMS's page number,
+    and was spanned over BOWERS ENGINEERING CO, whose own number OCR lost.
+    A cell with no row-mates to compare with is not judged."""
+    box = _bbox(cell)
+    mates = [b for b in (_bbox(c) for c in row if c is not cell) if b is not None]
+    under = [b for b in (_bbox(c) for c in below) if b is not None]
+    if box is None or not mates or not under:
+        return False
+    height = box.y1 - box.y0
+    centre = (box.y0 + box.y1) / 2
+    mates_centre = sorted((b.y0 + b.y1) / 2 for b in mates)[len(mates) // 2]
+    return abs(centre - mates_centre) < height / 4 and box.y1 <= min(b.y0 for b in under) + height / 4
+
+
 def _infer_rowspans(grid: List[List["TableCell"]]) -> None:
     """Give a column's first cell a row_span over the rows right under it
     that have nothing in that column.
@@ -289,6 +309,8 @@ def _infer_rowspans(grid: List[List["TableCell"]]) -> None:
     for col in range(len(bins)):
         first = next((r for r, cols in enumerate(by_column) if col in cols), None)
         if first is None or first + 1 >= len(grid) or col in by_column[first + 1]:
+            continue
+        if _on_its_own_line(by_column[first][col], grid[first], grid[first + 1]):
             continue
         missing = 0
         for cols in by_column[first + 1:]:

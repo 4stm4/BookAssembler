@@ -228,6 +228,8 @@ class TestInferRowspans:
     def test_row_missing_a_middle_column_spans_that_column(self):
         from src.analyzers.table.analyzer import _infer_rowspans
         a, b, c = _cell("a", x0=0.1), _cell("b", x0=0.2), _cell("c", x0=0.3)
+        # b is set between the two rows: its box reaches into the second
+        b.visual_layout.bounding_box = NormalizedRect(x0=0.2, y0=0.505, x1=0.25, y1=0.525)
         grid = [
             [a, b, c],
             [_cell("d", x0=0.1, y0=0.52), _cell("f", x0=0.3, y0=0.52)],  # no x0=0.2
@@ -235,6 +237,13 @@ class TestInferRowspans:
         _infer_rowspans(grid)
         assert b.row_span == 2
         assert c.row_span == 1
+
+    def test_a_value_on_its_own_line_does_not_span_a_row_missing_one(self):
+        from src.analyzers.table.analyzer import _infer_rowspans
+        name, number = _cell("APPLIED DIGITAL", x0=0.1), _cell("8,9", x0=0.3)
+        grid = [[name, number], [_cell("BOWERS CO", x0=0.1, y0=0.52)]]   # its number lost
+        _infer_rowspans(grid)
+        assert number.row_span == 1
 
 
 def _frag(text, x0, y0):
