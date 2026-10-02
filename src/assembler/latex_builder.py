@@ -610,7 +610,22 @@ def _positioned_lines(cell: Any, raw: str) -> str:
             else:
                 out += f"\\makebox[{(nxt[0] - x) * _A4_WIDTH_PT:.2f}pt][l]{{{marked}}}"
         lines.append(out)
-    return "\\newline ".join(lines)
+    # Each line on to the next as much further than the cell's usual step
+    # as the print steps between their feet, where the analyzer measured
+    # them: a nested table's header sits further under its title than its
+    # rows under each other, and one pitch for every line set the pin
+    # description fixture's status rows 6pt high. Only the differences:
+    # they add up to nothing, so the cell stays as tall as its pitch makes
+    # it - taken whole, the steps moved the rules under it a point.
+    feet = md.get("line_base") or []
+    if len(feet) != len(lines) or len(lines) < 3:
+        return "\\newline ".join(lines)
+    usual = (feet[-1] - feet[0]) / (len(feet) - 1)
+    out = lines[0]
+    for n in range(1, len(lines)):
+        off = (feet[n] - feet[n - 1] - usual) * _A4_HEIGHT_PT
+        out += (f"\\vadjust{{\\vskip{off:.2f}pt}}" if abs(off) > 0.05 else "") + "\\newline " + lines[n]
+    return out
 
 
 def _cell_x0(cell: Any) -> Optional[float]:

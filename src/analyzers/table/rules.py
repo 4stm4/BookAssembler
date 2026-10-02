@@ -1515,6 +1515,30 @@ def _runs(line: List[Any]) -> List[List[Any]]:
     return runs
 
 
+_TALL_WORD = 1.5             # a word box this much over the usual height spans lines
+_DESCENDERS = set("gjpqyQ,;()[]{}|/")
+
+
+def _line_feet(lines: List[List[Any]]) -> List[float]:
+    """Each printed line's foot (pt): the median bottom of its words, a
+    word boxed taller than _TALL_WORD of the usual height left out - OCR
+    reads a nested table's column of figures as one word down several
+    rows ("<xx«KO-==4+0-+40", 90pt tall on the pin description fixture),
+    and its foot is no line's."""
+    heights = sorted(w[3] - w[1] for line in lines for w in line)
+    usual = heights[len(heights) // 2] if heights else 0.0
+    feet = []
+    for line in lines:
+        fair = [w for w in line if w[3] - w[1] <= _TALL_WORD * usual] or line
+        # A word reaching below its baseline - "Memory", "(or" - is boxed
+        # to its descender's foot; in a short line one of those moved the
+        # line's foot a couple of points, and every line after it with it.
+        level = [w for w in fair if not any(ch in _DESCENDERS for ch in w[4])] or fair
+        bottoms = sorted(w[3] for w in level)
+        feet.append(bottoms[len(bottoms) // 2])
+    return feet
+
+
 def _regrid_ruled_bands(page, table) -> None:
     """Rebuild the rows of a ruled grid from its rules and the page's words.
 
@@ -1617,6 +1641,9 @@ def _regrid_ruled_bands(page, table) -> None:
             ]
             # and which of its words were printed bold, word by word
             part.metadata["line_bold"] = [_smoothed([is_bold[id(w)] for w in line]) for line in ws_lines]
+            # and where each line stands: its words' feet, those OCR boxed
+            # over several lines left out (_line_feet)
+            part.metadata["line_base"] = [f / ph for f in _line_feet(ws_lines)]
             row.append(part)
         new_grid.append(row)
     if not changed:

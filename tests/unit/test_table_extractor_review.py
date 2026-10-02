@@ -1893,3 +1893,30 @@ class TestBoxTableRender:
         assert "BTS6120" not in rows[0]
         raise_pt = float(re.search(r"\\raisebox\{([\d.]+)pt\}\[0pt\]\[0pt\]\{\\parbox\[c\][^&]*?BTS6120", rows[1]).group(1))
         assert raise_pt > 5
+
+
+class TestLineFeet:
+    def test_a_word_boxed_down_several_lines_or_below_its_baseline_is_no_foot(self):
+        from src.analyzers.table.rules import _line_feet
+        lines = [
+            [(0, 90, 30, 100, "Status")],
+            [(0, 110, 20, 120, "0"), (30, 105, 60, 180, "<xx«KO-==4"), (70, 110, 120, 120, "Memory"),
+             (125, 110, 150, 120, "write")],
+            [(0, 121, 20, 131, "1"), (70, 121, 120, 133, "Memory"), (125, 121, 150, 131, "read")],
+        ]
+        assert _line_feet(lines) == [100, 120, 131]
+
+    def test_lines_step_as_printed_and_the_cell_keeps_its_height(self):
+        import re
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("TITLE\nhead\nrow one\nrow two", x0=0.20, y0=0.32),
+                 _cell("V", x0=0.33, y0=0.32)]]
+        cell = rows[1][1]
+        box = cell.visual_layout.bounding_box
+        cell.visual_layout.bounding_box = NormalizedRect(x0=box.x0, y0=box.y0, x1=box.x1, y1=box.y0 + 0.045)
+        cell.metadata["line_segments"] = [[[box.x0, t]] for t in ("TITLE", "head", "row one", "row two")]
+        # the head stands further under the title than the rows under it
+        cell.metadata["line_base"] = [0.330, 0.348, 0.360, 0.372]
+        tex = _ruled_tex(rows)
+        offs = [float(v) for v in re.findall(r"\\vadjust\{\\vskip(-?[\d.]+)pt\}", tex)]
+        assert len(offs) == 3 and offs[0] > 0 and offs[1] < 0 and abs(sum(offs)) < 0.05
