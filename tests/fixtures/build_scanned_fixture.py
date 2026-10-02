@@ -60,7 +60,10 @@ FIXTURES = [
     ("dc_characteristics_table.png", "dc_characteristics_table.pdf", 500, 3, 0),
     ("pin_description_table.png", "pin_description_table.pdf", 500, 3, 250),
     ("index_to_advertisers.webp", "index_to_advertisers.pdf", 500, 3, 0),
-    ("software_architecture.png", "software_architecture.pdf", 500, 3, 250),
+    # A diagram's labels stand apart, in boxes: read as sparse text (psm 11)
+    # its OCR finds "OS/8", "Debugger", "Bootstrap", "LEDs" and "PPI" that
+    # page layout analysis (psm 3) lost or broke up ("Deb ebuager").
+    ("software_architecture.png", "software_architecture.pdf", 500, 11, 250),
 ]
 
 
