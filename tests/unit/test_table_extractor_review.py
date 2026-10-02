@@ -1326,7 +1326,7 @@ class TestUnruledWidths:
         boxed = TestUnruledSetSide._boxed
         # names from 0.10 whose leaders run to 0.76, page numbers 0.74..0.80
         grid = [[boxed(f"NAME {k}", 0.10, 0.76 if k % 2 else 0.30, 0.30 + 0.02 * k),
-                 boxed(str(k), 0.74 if k == 0 else 0.78, 0.80, 0.30 + 0.02 * k)] for k in range(6)]
+                 boxed(str(k), 0.74 if k == 2 else 0.78, 0.80, 0.30 + 0.02 * k)] for k in range(6)]
         table = TableBlock(
             grid=grid, row_count=len(grid), column_count=2,
             visual_layout=VisualLayout(
@@ -1341,13 +1341,15 @@ class TestUnruledWidths:
 
 
 class TestBareFrame:
-    def _spec(self):
+    def _spec(self, heading_x0=None):
         import re
         from src.assembler.latex_builder import build_latex
         from src.krm.models import KnowledgeDocument
         boxed = TestUnruledSetSide._boxed
         grid = [[boxed(f"NAME {k}", 0.10, 0.30, 0.30 + 0.02 * k), boxed(str(k), 0.78, 0.80, 0.30 + 0.02 * k)]
                 for k in range(6)]
+        if heading_x0 is not None:
+            grid.insert(0, [boxed("index to advertisers", heading_x0, 0.40, 0.28), boxed("", 0.78, 0.80, 0.28)])
         for row in grid:
             for cell in row:
                 cell.border_left = cell.border_right = True    # the frame's two sides bound every band
@@ -1374,6 +1376,14 @@ class TestBareFrame:
         right = re.search(r"@\{\\hspace\{([\d.]+)pt\}\}\|$", spec)
         assert left and float(left.group(1)) == pytest.approx(0.02 * scale, abs=0.1)
         assert right and float(right.group(1)) == pytest.approx(0.03 * scale, abs=0.1)
+
+    def test_a_heading_set_out_past_the_names_does_not_move_the_frame(self):
+        import re
+        import pytest
+        # the heading starts 0.008 left of the names it heads
+        spec = self._spec(heading_x0=0.092)
+        left = re.match(r"\|@\{\\hspace\{([\d.]+)pt\}\}", spec)
+        assert left and float(left.group(1)) == pytest.approx(0.02 * 21 * 28.3465, abs=0.1)
 
 
 class TestFirstRuleInStep:

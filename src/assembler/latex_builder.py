@@ -1480,26 +1480,13 @@ def _render_table(table: TableBlock) -> str:
                     ):
                         header_is_centered[hcol] = True
 
-    # Fallback when the source printed no rules to read (a borderless
-    # table) or the count doesn't line up with this table's own column
-    # count: each column reaches from where its text starts to where the
-    # next column's does, less the \tabcolsep either side of the gap, and
-    # the last one over its own text; each at least a defensive
-    # content-length floor wide. Not each column's own text extent: a
-    # leader runs a column's text up to the next one's, and the index
-    # fixture's two columns, measured so, came to 15cm where the source
-    # printed 12cm, its page numbers pushed far out past the source's.
-    if col_width_cm is None and col_min_x0 is not None and col_max_x1 is not None:
-        _gap = 2 * _tabcolsep_pt / (_A4_FULL_WIDTH_CM * _PT_PER_CM)
-        fractions = [
-            (col_max_x1[i] - col_min_x0[i]) if i == ncols - 1
-            else (col_min_x0[i + 1] - col_min_x0[i] - _gap)
-            if all(v is not None for v in (col_min_x0[i], col_max_x1[i], col_min_x0[min(i + 1, ncols - 1)]))
-            else None
-            for i in range(ncols)
-        ]
-        if all(f is not None and f > 0 for f in fractions):
-            col_width_cm = [f * _A4_FULL_WIDTH_CM for f in fractions]
+    def _text_start(i: int) -> Optional[float]:
+        """Where column i's text starts on the source page: its values'
+        usual left edge if it is set left, its widest value's if right."""
+        left_set = col_is_right is not None and not col_is_right[i]
+        if left_set and i < len(col_edge_x0) and col_edge_x0[i] is not None:
+            return col_edge_x0[i]
+        return col_min_x0[i]
 
     # Which side each column's values are set against, where no rules gave
     # it above: the side where their edges agree. Without it nothing in a
@@ -1514,6 +1501,31 @@ def _render_table(table: TableBlock) -> str:
             if len(_col_x0s[i]) >= 4 and len(_col_x1s[i]) >= 4 else False
             for i in range(ncols)
         ]
+
+    # Fallback when the source printed no rules to read (a borderless
+    # table) or the count doesn't line up with this table's own column
+    # count: each column reaches from where its text starts to where the
+    # next column's does, less the \tabcolsep either side of the gap, and
+    # the last one over its own text; each at least a defensive
+    # content-length floor wide. Not each column's own text extent: a
+    # leader runs a column's text up to the next one's, and the index
+    # fixture's two columns, measured so, came to 15cm where the source
+    # printed 12cm, its page numbers pushed far out past the source's.
+    # A left-set column's text starts at its values' usual edge - a cell
+    # printed out past it is placed there on its own - and a right-set
+    # one's where its widest value does.
+    if col_width_cm is None and col_min_x0 is not None and col_max_x1 is not None:
+        _gap = 2 * _tabcolsep_pt / (_A4_FULL_WIDTH_CM * _PT_PER_CM)
+        _starts = [_text_start(i) for i in range(ncols)]
+        fractions = [
+            (col_max_x1[i] - _starts[i]) if i == ncols - 1
+            else (_starts[i + 1] - _starts[i] - _gap)
+            if all(v is not None for v in (_starts[i], col_max_x1[i], _starts[min(i + 1, ncols - 1)]))
+            else None
+            for i in range(ncols)
+        ]
+        if all(f is not None and f > 0 for f in fractions):
+            col_width_cm = [f * _A4_FULL_WIDTH_CM for f in fractions]
 
     # Narrow columns hold short numeric-ish values (MIN/TYP/MAX/UNITS) that
     # the source right-aligns, not the wide CHARACTERISTICS/CONDITIONS text
@@ -1614,8 +1626,8 @@ def _render_table(table: TableBlock) -> str:
             # from its names and 21pt from its page numbers.
             _scale = _A4_FULL_WIDTH_CM * _PT_PER_CM
             _fx0, _fx1 = _table_md.get("table_rule_x0"), _table_md.get("table_rule_x1")
-            if _fx0 is not None and seps[0] == "|" and col_min_x0 and col_min_x0[0] is not None:
-                seps[0] = f"|@{{\\hspace{{{max(0.0, (col_min_x0[0] - _fx0) * _scale):.2f}pt}}}}"
+            if _fx0 is not None and seps[0] == "|" and col_min_x0 and _text_start(0) is not None:
+                seps[0] = f"|@{{\\hspace{{{max(0.0, (_text_start(0) - _fx0) * _scale):.2f}pt}}}}"
             if _fx1 is not None and seps[ncols] == "|" and col_max_x1 and col_max_x1[-1] is not None:
                 seps[ncols] = f"@{{\\hspace{{{max(0.0, (_fx1 - col_max_x1[-1]) * _scale):.2f}pt}}}}|"
         col_spec = seps[0] + "".join(
