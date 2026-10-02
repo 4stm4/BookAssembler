@@ -1724,3 +1724,18 @@ class TestNumberBoxedOverDots:
         assert _cell_text_of(kept) == "21"
         assert abs(kept.visual_layout.bounding_box.x0 * 595 - 325) < 1.0
         assert abs(kept.visual_layout.bounding_box.x1 * 595 - 335) < 1.0
+
+
+class TestSetRight:
+    def test_odd_widths_tell_the_side_where_the_usual_ones_agree_both_ways(self):
+        from src.assembler.latex_builder import _set_right
+        # two-figure numbers, their right edges a point noisier than their
+        # left; "8,9" and "Cover 4" end where the column does
+        spans = [(436.0, 442.0), (436.0, 444.0), (436.0, 441.0), (436.0, 443.5), (436.0, 442.5),
+                 (430.5, 442.0), (417.0, 442.5)]
+        assert _set_right(spans, [a for a, _ in spans], [b for _, b in spans])
+
+    def test_left_set_codes_stay_left(self):
+        from src.assembler.latex_builder import _set_right
+        spans = [(100.0, 140.0), (100.0, 141.0), (100.0, 139.0), (100.0, 120.0), (100.5, 160.0)]
+        assert not _set_right(spans, [a for a, _ in spans], [b for _, b in spans])

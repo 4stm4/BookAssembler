@@ -630,6 +630,29 @@ def _cell_x1(cell: Any) -> Optional[float]:
 _COLUMN_MIN_SUPPORT = 0.15
 
 
+def _set_right(spans: List[Tuple[float, float]], x0s: List[float], x1s: List[float]) -> bool:
+    """Whether a column's values are set flush right.
+
+    Told by its values of other than the usual width: set right, theirs end
+    where the column's others do and start where they may; set left, the
+    other way about. Values all of one width - the index fixture's page
+    numbers are nearly all two figures - agree at both edges and say
+    nothing, and comparing all the edges' spreads let a point of OCR noise
+    on their right edges turn the column left. Where fewer than two values
+    stand out, the spreads decide."""
+    if len(spans) >= 4:
+        widths = sorted(x1 - x0 for x0, x1 in spans)
+        usual = widths[len(widths) // 2]
+        odd = [(x0, x1) for x0, x1 in spans if abs((x1 - x0) - usual) > 0.25 * usual]
+        if len(odd) >= 2:
+            mx0 = sorted(x0 for x0, _ in spans)[len(spans) // 2]
+            mx1 = sorted(x1 for _, x1 in spans)[len(spans) // 2]
+            off0 = sorted(abs(x0 - mx0) for x0, _ in odd)[len(odd) // 2]
+            off1 = sorted(abs(x1 - mx1) for _, x1 in odd)[len(odd) // 2]
+            return off1 < off0
+    return _edge_spread(x1s) < _edge_spread(x0s)
+
+
 def _edge_spread(xs: List[float]) -> float:
     """How far a column's edges disagree: their interquartile range."""
     q1, _, q3 = statistics.quantiles(xs, n=4)
@@ -975,6 +998,7 @@ def _render_table(table: TableBlock) -> str:
         col_count = [0] * ncols
         _col_x0s: List[List[float]] = [[] for _ in range(ncols)]
         _col_x1s: List[List[float]] = [[] for _ in range(ncols)]
+        _col_spans: List[List[Tuple[float, float]]] = [[] for _ in range(ncols)]
         for row_idx, row in enumerate(grid):
             cells = [""] * ncols
             texts = [""] * ncols
@@ -1007,6 +1031,8 @@ def _render_table(table: TableBlock) -> str:
                     col_x1_sum[col] += x1
                     if _measured:
                         _col_x1s[col].append(x1)
+                        if x0 is not None:
+                            _col_spans[col].append((x0, x1))
                 raw = _cell_text(cell)
                 # texts[] keeps the RAW string: column widths are measured
                 # from it below, and font commands are not content.
@@ -1511,7 +1537,7 @@ def _render_table(table: TableBlock) -> str:
     # page numbers left.
     if col_is_right is None and col_x0_sum is not None:
         col_is_right = [
-            _edge_spread(_col_x1s[i]) < _edge_spread(_col_x0s[i])
+            _set_right(_col_spans[i], _col_x0s[i], _col_x1s[i])
             if len(_col_x0s[i]) >= 4 and len(_col_x1s[i]) >= 4 else False
             for i in range(ncols)
         ]
