@@ -1431,3 +1431,31 @@ class TestLeadingKern:
         tex = build_latex(doc)
         assert "\\leavevmode\\kern-" in tex
         assert "\\kern-" not in tex.replace("\\leavevmode\\kern-", "")
+
+
+class TestRowRise:
+    @staticmethod
+    def _heading_extra(size_pt):
+        import re
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        boxed = TestUnruledSetSide._boxed
+        heading = _styled(boxed("advertisers", 0.10, 0.40, 0.20), size_pt)
+        heading.visual_layout.bounding_box = NormalizedRect(x0=0.10, y0=0.20, x1=0.40, y1=0.20 + size_pt / 842)
+        grid = [[heading, boxed("", 0.78, 0.80, 0.20)]]
+        grid += [[boxed(f"NAME {k}", 0.10, 0.30, 0.26 + 0.015 * k), boxed(str(k), 0.78, 0.80, 0.26 + 0.015 * k)]
+                 for k in range(6)]
+        table = TableBlock(
+            grid=grid, row_count=len(grid), column_count=2,
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=0.10, y0=0.20, x1=0.80, y1=0.36), page_or_screen_index=0,
+            ),
+        )
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        tex = build_latex(doc)
+        row = tex[tex.index("advertisers"):tex.index("NAME 0")]
+        return float(re.search(r"\\tabularnewline\[(-?[\d.]+)pt\]", row).group(1))
+
+    def test_a_row_in_larger_type_takes_its_own_height_out_of_its_step(self):
+        # 20pt capitals stand some 5pt above an 8pt table's strut
+        assert self._heading_extra(8.0) - self._heading_extra(20.0) > 4.0

@@ -755,6 +755,11 @@ _PLACE_EXPLICIT_PT = 0.1
 _PLACE_INDENT_PT = 3.0
 # The smallest printed indent of a run of words inside a cell worth setting.
 _PLACE_MIN_PT = 0.2
+# Capitals and ascenders of the faces tables are set in reach this share
+# of the type size above the baseline; array's strut stands this share of
+# a row's line above it.
+_ASCENT = 0.7
+_STRUT_HEIGHT = 0.7
 
 # How far below its row's first line a one-line cell must have been
 # printed before it is lowered to where it was printed, in the table's
@@ -2413,6 +2418,22 @@ def _render_table(table: TableBlock) -> str:
         dynamic_arraystretch = max(0.5, min(2.0, _baseline_gap_pt / _unstretched_line_pt))
     _base_line_pt = _unstretched_line_pt * dynamic_arraystretch
 
+    # How far a row's first line stands above the row's strut. The strut
+    # is the table's, set for its usual size; a cell in larger type is as
+    # tall as its own capitals and ascenders, and the row with it. The
+    # index fixture's 20.5pt heading rows each stood 5pt above theirs,
+    # which pushed its entries 10pt down from the heading.
+    _FONTSIZE_RE = re.compile(r"\\fontsize\{([\d.]+)\}")
+
+    def _row_rise_pt(row_idx: int) -> float:
+        if row_idx >= len(rendered_rows):
+            return 0.0
+        sizes = [
+            float(m) for styled in rendered_rows[row_idx][0]
+            if isinstance(styled, str) for m in _FONTSIZE_RE.findall(styled)
+        ]
+        return max(0.0, _ASCENT * max(sizes) - _STRUT_HEIGHT * _base_line_pt) if sizes else 0.0
+
     # Each row gets exactly what the source leaves beyond the tightest
     # row: step_i = base + (gap_i - tightest) = gap_i. Nothing is
     # budgeted and nothing is scaled, so the extras cannot be paid twice
@@ -2492,6 +2513,7 @@ def _render_table(table: TableBlock) -> str:
         surplus = (
             (gap * _A4_FULL_HEIGHT_CM * _PT_PER_CM) - _baseline_gap_pt
             - max(0, _row_line_count(i) - 1) * _row_line_step(i)
+            - _row_rise_pt(i)
             if gap and _baseline_gap_pt > 0 else 0.0
         )
         content = (
@@ -2747,7 +2769,7 @@ def _render_table(table: TableBlock) -> str:
         ):
             _rule_air_pt = min(_top_air_pt, max(0.0, _row_extra_pt))
             _row_extra_pt -= _rule_air_pt
-        _row_h_pt = _base_line_pt + max(0, _row_line_count(i) - 1) * _row_line_step(i)
+        _row_h_pt = _row_rise_pt(i) + _base_line_pt + max(0, _row_line_count(i) - 1) * _row_line_step(i)
         _y_pt += _pre_air_pt
         _measured = _rule_below_pt(i) if rule else None
         _ARRAYRULE_PT = _weight_of(_measured) if (rule and _rules_pt) else _rule_w_pt
