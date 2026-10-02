@@ -1871,6 +1871,53 @@ def _mark_italic(np, pymupdf, page, table) -> int:
 _INFLATED_SLACK_PT = 1.5   # more box above a line than usual, past noise
 
 
+_DISPLAY_SHARE = 1.5        # a cell this much over the table's usual size is display type
+_CAP_SHARE = 0.72           # capitals and ascenders over the type size
+_DESCENT_SHARE = 0.21       # descenders under the baseline over the type size
+
+
+def _size_display_type(np, pymupdf, page, table) -> int:
+    """Size each cell of display type by its ink, not its box.
+
+    A scan's text layer sizes a word by its box, and a box stops where the
+    ink does: over "index to", which reaches no lower than its baseline,
+    the index fixture's text layer gave 20.5pt type whose capitals stand
+    19.8pt tall - 27pt type - and the heading came out a quarter small,
+    the rule under it 6pt low and every row under that with it. Body cells
+    are set at the table's usual size whatever their boxes say, so only a
+    cell over _DISPLAY_SHARE of that is resized: its ink height over the
+    share of the size its letters reach (_CAP_SHARE, plus _DESCENT_SHARE
+    where it has a descender). Returns how many cells were resized."""
+    from dataclasses import replace
+    sizes = sorted(
+        c.visual_layout.style.font_size_pt for r in table.grid for c in r
+        if c.visual_layout is not None and c.visual_layout.style is not None
+    )
+    if not sizes:
+        return 0
+    usual = sizes[len(sizes) // 2]
+    pw, ph = page.rect.width, page.rect.height
+    resized = 0
+    for row in table.grid:
+        for cell in row:
+            vl = cell.visual_layout
+            text = _cell_text_of(cell)
+            if vl is None or vl.bounding_box is None or vl.style is None or "\n" in text:
+                continue
+            if vl.style.font_size_pt < _DISPLAY_SHARE * usual or not any(ch.isupper() or ch in "bdfhklt" for ch in text):
+                continue
+            b = vl.bounding_box
+            clip = pymupdf.Rect(b.x0 * pw, b.y0 * ph, b.x1 * pw, b.y1 * ph) & page.rect
+            mask = _ink_mask(np, page.get_pixmap(matrix=pymupdf.Matrix(_RULE_ZOOM, _RULE_ZOOM), clip=clip)) \
+                if not clip.is_empty else None
+            if mask is None:
+                continue
+            share = _CAP_SHARE + (_DESCENT_SHARE if any(ch in "gjpqy" for ch in text) else 0.0)
+            vl.style = replace(vl.style, font_size_pt=mask.shape[0] / _RULE_ZOOM / share)
+            resized += 1
+    return resized
+
+
 _TYPEFACE_MIN_LETTERS = 6
 # Base-14 faces a cell's text is set in to be compared with its print:
 # (regular, bold, italic, bold italic).

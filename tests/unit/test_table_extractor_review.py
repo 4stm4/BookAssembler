@@ -1563,3 +1563,30 @@ class TestTypeface:
         import re
         body = build_latex(doc).split("\\begin{document}")[1]
         assert re.search(r"\\latinsans [^&]*CLARY CORP", body) and "\\latinfont" not in body
+
+
+class TestDisplayTypeSize:
+    def test_a_heading_is_sized_by_its_capitals(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _size_display_type
+        from src.krm.models import StyleDescriptor
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((100, 200), "index to", fontsize=28, fontname="hebo")
+        cells = []
+        for text, y, size in (("index to", 200, 28), ("NAME A", 240, 8), ("NAME B", 252, 8), ("NAME C", 264, 8)):
+            if y != 200:
+                page.insert_text((100, y), text, fontsize=size, fontname="helv")
+            words = [w for w in page.get_text("words") if y - size < w[3] <= y + size / 2]
+            # a scan's text layer boxes the ink: from the capitals' top to the baseline
+            box = NormalizedRect(x0=min(w[0] for w in words) / 595, y0=(y - 0.72 * size) / 842,
+                                 x1=max(w[2] for w in words) / 595, y1=y / 842)
+            cells.append([TableCell(
+                content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text=text)])])],
+                visual_layout=VisualLayout(bounding_box=box, page_or_screen_index=0,
+                                           style=StyleDescriptor(font_size_pt=0.72 * size if y == 200 else size)))])
+        table = TableBlock(grid=cells, row_count=4, column_count=1, visual_layout=cells[0][0].visual_layout)
+        assert _size_display_type(np, pymupdf, page, table) == 1
+        assert abs(cells[0][0].visual_layout.style.font_size_pt - 28) < 1.5
+        assert cells[1][0].visual_layout.style.font_size_pt == 8
