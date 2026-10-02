@@ -794,6 +794,8 @@ _PLACE_MIN_PT = 0.2
 # of the type size above the baseline; array's strut stands this share of
 # a row's line above it.
 _ASCENT = 0.7
+# A dot leader's pitch, as \dotfill sets it.
+_DOT_PITCH_EM = 0.44
 _STRUT_HEIGHT = 0.7
 
 # How far below its row's first line a one-line cell must have been
@@ -1771,6 +1773,38 @@ def _render_table(table: TableBlock) -> str:
             hold = f"\\rule{{{gap:.2f}pt}}{{0pt}}"
             return text + hold if col_is_right[col] else hold + text
         return text + f"\\kern{gap:.2f}pt " if col_is_right[col] else f"\\leavevmode\\kern{gap:.2f}pt " + text
+
+    # One grid of dots for a leader that runs across a closed-up boundary
+    # (_leader_joins). \dotfill centres its dots in each cell's own space,
+    # so the two halves of one leader met out of step - 2pt of nothing at
+    # the boundary on the index fixture. Aligned leaders set each dot a
+    # whole pitch from its cell's left edge, and the second cell's dots are
+    # set off by what the first column's width leaves over a whole number
+    # of pitches, so they go on where the first cell's left off.
+    _dot_pitch_pt = _DOT_PITCH_EM * (median_pt or 8.0)
+
+    def _dots_at(phase_pt: float, overhang_pt: float = 0.0) -> str:
+        """Aligned leader dots, phase_pt into each pitch; overhang_pt runs
+        the leader on past its cell, so the dot whose pitch straddles a
+        boundary is set (a leader sets only whole pitches)."""
+        return (
+            f"\\leaders\\hbox to {_dot_pitch_pt:.3f}pt{{\\kern{phase_pt:.3f}pt\\makebox[0pt]{{.}}\\hss}}"
+            f"\\hfill\\kern{-overhang_pt:.3f}pt "
+        )
+
+    def _joined_leaders(text: str, col: int) -> str:
+        if col_width_cm is None or "\\dotfill" not in text:
+            return text
+        half = _dot_pitch_pt / 2.0
+        if col + 1 in _leader_joins:
+            # Its dots on the next cell's grid coincide with the next
+            # cell's own, so running on a pitch past the boundary only
+            # sets the one the boundary cut.
+            return text.replace("\\dotfill", _dots_at(half, _dot_pitch_pt))
+        if col in _leader_joins and col - 1 < len(col_width_cm):
+            left_over = (round(col_width_cm[col - 1], 2) * _PT_PER_CM) % _dot_pitch_pt
+            return text.replace("\\dotfill ", _dots_at((half - left_over) % _dot_pitch_pt), 1)
+        return text
 
     def _fit_to_column(text: str, col: int) -> str:
         """A one-line cell of a narrow column, boxed to the column's width
@@ -2849,6 +2883,8 @@ def _render_table(table: TableBlock) -> str:
                     i == 0 and col < len(header_is_centered) and header_is_centered[col]
                 ):
                     c = _fit_to_column(c, col)
+                if isinstance(c, str):
+                    c = _joined_leaders(c, col)
                 rendered.append(_render_cell(c, col, row_idx=i))
         extra = ""
         _row_extra_pt = raw_extra_pt[i] * _extra_scale if i < len(raw_extra_pt) else 0.0

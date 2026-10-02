@@ -1744,6 +1744,7 @@ class TestSetRight:
 class TestLeaderToNumber:
     def test_a_leader_runs_on_to_the_page_number_in_a_framed_table(self):
         import re
+        import pytest
         from src.assembler.latex_builder import build_latex
         from src.krm.models import KnowledgeDocument
         boxed = TestUnruledSetSide._boxed
@@ -1765,4 +1766,13 @@ class TestLeaderToNumber:
         tex = build_latex(doc)
         spec = re.search(r"\\begin\{tabular\}\{(.*)\}", tex).group(1)
         assert "cm}@{}>" in spec                      # closed up where the leader crosses
-        assert re.search(r"NAME 3\\dotfill\}? &[^&]*\\dotfill 13", tex)
+        leader = r"\\leaders\\hbox to ([\d.]+)pt\{\\kern([\d.]+)pt\\makebox\[0pt\]\{\.\}\\hss\}\\hfill\\kern(-?[\d.]+)pt"
+        m = re.search(r"NAME 3" + leader + r"\s*\}? &[^&]*?" + leader + r"\s*13", tex)
+        assert m, "the leader runs from the name on to the number"
+        pitch, first, overhang, _, second, _ = (float(g) for g in m.groups())
+        width = float(re.search(r"p\{([\d.]+)cm\}", spec).group(1)) * 72.27 / 2.54
+        # one grid across the boundary: the number cell's dots go on where
+        # the name cell's left off
+        off = (width + second - first) % pitch
+        assert min(off, pitch - off) < 0.05          # the printed pitch rounded, over 100 pitches
+        assert overhang == pytest.approx(-pitch)
