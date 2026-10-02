@@ -18,6 +18,7 @@ from src.krm.models import (
 
 from src.analyzers.caption.signals import _CAPTION_RE
 from src.analyzers.source_io import resolve_source_path
+from src.analyzers.table.boxes import _box_grid, _table_from_box_grid
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
 from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _build_span_map, _cell_x0, _column_bins, _column_of, _find_placeholder_marks, _frame_rules, _cluster_columns, _count_columns, _drop_leaders, _find_table_runs, _fold_label_rows, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _mark_fill, _deflate_boxes, _mark_italic, _mark_typeface, _size_display_type, _mark_text_colour, _page_idx, _regrid_ruled_bands, _rows_from_block, _rows_from_group, _snap_row_to_columns, _split_cells_at_rules, _table_from_lines
 
@@ -285,6 +286,11 @@ def _on_its_own_line(cell: "TableCell", row: List["TableCell"], below: List["Tab
     return abs(centre - mates_centre) < height / 4 and box.y1 <= min(b.y0 for b in under) + height / 4
 
 
+def _is_box_table(node: Any) -> bool:
+    """Whether a table was read off its drawn boxes (boxes._box_grid)."""
+    return isinstance(node, TableBlock) and bool((node.metadata or {}).get("box_grid"))
+
+
 def _infer_rowspans(grid: List[List["TableCell"]]) -> None:
     """Give a column's first cell a row_span over the rows right under it
     that have nothing in that column.
@@ -347,12 +353,78 @@ class TableDetectorAnalyzer(BaseAnalyzer):
         context: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._table_count = 0
+        self._detect_box_tables(doc)
         for container in doc.root_containers:
             self._process_container(container)
         if self._table_count:
             log.info("TableDetectorAnalyzer: %d table(s) detected", self._table_count)
         self._absorb_framed_rows(doc)
         self._mark_borders(doc)
+
+    def _detect_box_tables(self, doc: KnowledgeDocument) -> None:
+        """Find the tables drawn as boxes (boxes._box_grid), before the
+        text-layer detection, which cannot: a block diagram's labels line
+        up with nothing. The blocks inside a box grid are tombstoned into
+        it (RFC 0001 SS2.4: nothing deleted) and the table takes the first
+        one's place. The passes after this one read a table's structure
+        off its text and rules; a box table's is its boxes, and they leave
+        it as it is (_is_box_table)."""
+        path = resolve_source_path(doc)
+        if not path:
+            return
+        try:
+            import numpy as np
+            import pymupdf
+        except ImportError:
+            return
+        try:
+            source = pymupdf.open(path)
+        except Exception:
+            return
+        try:
+            def walk(container: ContainerUnit) -> None:
+                for child in list(container.children):
+                    if isinstance(child, ContainerUnit):
+                        walk(child)
+                pages = sorted({
+                    _page_idx(c) or 0 for c in container.children
+                    if isinstance(c, (ParagraphBlock, UnknownBlock)) and not c.is_tombstoned and _bbox(c) is not None
+                })
+                for page_index in pages:
+                    if page_index < source.page_count:
+                        self._box_table_on(container, page_index, np, pymupdf, source[page_index])
+            for root in doc.root_containers:
+                walk(root)
+        finally:
+            source.close()
+
+    def _box_table_on(self, container: ContainerUnit, page_index: int, np, pymupdf, page) -> None:
+        grid = _box_grid(np, pymupdf, page)
+        if grid is None:
+            return
+        pw, ph = page.rect.width, page.rect.height
+        x0, y0, x1, y1 = grid.xs[0] / pw, grid.ys[0] / ph, grid.xs[-1] / pw, grid.ys[-1] / ph
+        inside = [
+            idx for idx, c in enumerate(container.children)
+            if isinstance(c, (ParagraphBlock, UnknownBlock)) and not c.is_tombstoned
+            and (_page_idx(c) or 0) == page_index and _bbox(c) is not None
+            and x0 <= (_bbox(c).x0 + _bbox(c).x1) / 2 <= x1 and y0 <= (_bbox(c).y0 + _bbox(c).y1) / 2 <= y1
+        ]
+        if not inside:
+            return
+        blocks = [container.children[i] for i in inside]
+        table = _table_from_box_grid(grid, page_index, pw, ph)
+        table.id = derive_composite_id("table", *[b.id for b in blocks])
+        table.parent_container_id = container.id
+        table.provenance_info = blocks[0].provenance_info
+        conf = sum(b.extraction_confidence for b in blocks) / len(blocks)
+        table.extraction_confidence = table.confidence_score = conf
+        for b in blocks:
+            b.is_tombstoned = True
+            b.metadata = b.metadata or {}
+            b.metadata["tombstone_reason"] = "merged_into_table"
+        container.children.insert(inside[0], table)
+        self._table_count += 1
 
     def _absorb_framed_rows(self, doc: KnowledgeDocument) -> None:
         """Take into a table the rows its own frame rules enclose.
@@ -387,7 +459,7 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                     if isinstance(child, ContainerUnit):
                         walk(child)
                 for child in list(container.children):
-                    if isinstance(child, TableBlock) and not child.is_tombstoned:
+                    if isinstance(child, TableBlock) and not child.is_tombstoned and not _is_box_table(child):
                         page_index = _page_idx(child) or 0
                         if child.visual_layout and page_index < source.page_count:
                             self._absorb_into(container, child, np, pymupdf, source[page_index])
@@ -528,7 +600,7 @@ class TableDetectorAnalyzer(BaseAnalyzer):
             for child in container.children:
                 if isinstance(child, ContainerUnit):
                     collect(child)
-                elif isinstance(child, TableBlock) and not child.is_tombstoned:
+                elif isinstance(child, TableBlock) and not child.is_tombstoned and not _is_box_table(child):
                     tables.append(child)
 
         for root in doc.root_containers:
@@ -788,7 +860,7 @@ class TableDetectorAnalyzer(BaseAnalyzer):
         children = container.children
         i = 0
         while i < len(children):
-            if not isinstance(children[i], TableBlock):
+            if not isinstance(children[i], TableBlock) or _is_box_table(children[i]):
                 i += 1
                 continue
             base = children[i]
@@ -813,6 +885,8 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                 # between them were merged into one whose box mixed the two
                 # pages' coordinates.
                 if _page_idx(nxt) != _page_idx(base):
+                    break
+                if _is_box_table(nxt):
                     break
                 if isinstance(nxt, TableBlock):
                     merged_grid.extend(pending_rows)

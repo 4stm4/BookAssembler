@@ -29,7 +29,7 @@ _CLUSTER_PT = 2.5            # one grid line's spread
 _COVERED = 0.6               # share of a side a boundary must cover
 _SAME_FILL = 90              # summed RGB difference within one fill
 _PAPER_LEVEL = 235           # every channel over this: no fill
-_MIN_CELLS = 4               # labelled boxes it takes to be a table
+_MIN_CELLS = 4               # labelled boxes of colour it takes to be a table
 
 Rgb = Tuple[int, int, int]
 
@@ -186,7 +186,80 @@ def _box_grid(np, pymupdf, page) -> Optional[BoxGrid]:
     for cell in cells:
         x0, y0, x1, y1 = cell.rect
         cell.words = [w for w in words if x0 <= (w[0] + w[2]) / 2 <= x1 and y0 <= (w[1] + w[3]) / 2 <= y1]
-    boxed = [c for c in cells if c.words and (c.fill is not None or all(c.ruled))]
-    if len(boxed) < _MIN_CELLS:
+    # Boxes of colour, not a ruled grid on paper: a ruled table's rows and
+    # columns are its text's, and the text-layer detection reads them -
+    # taken as boxes, the decimal/binary and pin description fixtures lost
+    # their rows' own structure (6.4% -> 15.6%, 17.5% -> 23.8%).
+    filled = [c for c in cells if c.words and c.fill is not None]
+    if len(filled) < _MIN_CELLS:
         return None
     return BoxGrid([x / z for x in xs], [y / z for y in ys], cells)
+
+
+def _cell_lines(words: List[Any]) -> str:
+    """A cell's words as its printed lines, top to bottom, each left to right."""
+    lines: List[List[Any]] = []
+    for w in sorted(words, key=lambda w: (w[1] + w[3]) / 2):
+        centre = (w[1] + w[3]) / 2
+        if lines and abs(centre - sum((v[1] + v[3]) / 2 for v in lines[-1]) / len(lines[-1])) < 0.5 * (w[3] - w[1]):
+            lines[-1].append(w)
+        else:
+            lines.append([w])
+    return "\n".join(" ".join(v[4] for v in sorted(line, key=lambda v: v[0])) for line in lines)
+
+
+def _table_from_box_grid(grid: BoxGrid, page_idx: int, pw: float, ph: float) -> "TableBlock":
+    """A TableBlock of a box grid: a row per grid row holding the cells
+    that start in it, each spanning what it covers, with its fill, its
+    drawn sides and its place in the grid (metadata grid_row / grid_col),
+    which says more than its box: a spanning cell's box is centred over
+    columns it does not start in."""
+    from src.krm.models import (
+        NormalizedRect, ParagraphBlock, StyledTextSpan, StyleDescriptor, TableBlock, TableCell,
+        TextLineInline, VisualLayout,
+    )
+    rows: List[List[TableCell]] = [[] for _ in range(len(grid.ys) - 1)]
+    span_map = {}
+    for box in sorted(grid.cells, key=lambda b: (b.row, b.col)):
+        x0, y0, x1, y1 = box.rect
+        heights = sorted(w[3] - w[1] for w in box.words)
+        style = StyleDescriptor(
+            font_size_pt=heights[len(heights) // 2] if heights else 0.0,
+            background_color_rgb=box.fill,
+        )
+        cell = TableCell(
+            row_span=box.row_span,
+            col_span=box.col_span,
+            content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text=_cell_lines(box.words))])])],
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=x0 / pw, y0=y0 / ph, x1=x1 / pw, y1=y1 / ph),
+                page_or_screen_index=page_idx, style=style,
+            ),
+            border_top=box.ruled[0], border_right=box.ruled[1],
+            border_bottom=box.ruled[2], border_left=box.ruled[3],
+        )
+        cell.metadata["grid_row"], cell.metadata["grid_col"] = box.row, box.col
+        rows[box.row].append(cell)
+        for r in range(box.row, box.row + box.row_span):
+            for c in range(box.col, box.col + box.col_span):
+                if (r, c) != (box.row, box.col):
+                    span_map[(r, c)] = (box.row, box.col)
+    xs, ys = grid.xs, grid.ys
+    table = TableBlock(
+        grid=rows,
+        row_count=len(rows),
+        column_count=len(xs) - 1,
+        visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=xs[0] / pw, y0=ys[0] / ph, x1=xs[-1] / pw, y1=ys[-1] / ph),
+            page_or_screen_index=page_idx,
+        ),
+        span_map=span_map,
+    )
+    table.metadata.update({
+        "box_grid": True,
+        "column_rule_x": [x / pw for x in xs[1:-1]],
+        "rule_y": [y / ph for y in ys],
+        "table_rule_x0": xs[0] / pw, "table_rule_x1": xs[-1] / pw,
+        "table_rule_y0": ys[0] / ph, "table_rule_y1": ys[-1] / ph,
+    })
+    return table

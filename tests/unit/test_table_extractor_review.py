@@ -1816,6 +1816,33 @@ class TestBoxGrid:
         assert bts.fill is not None and bts.fill[2] < 120
         assert all(by_text[t].ruled == (True, True, True, True) for t in ("Startup", "RAM Disk", "ATA Disk"))
 
+    def test_a_ruled_grid_on_paper_is_left_to_the_text_detector(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.boxes import _box_grid
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        for r in range(4):
+            for c in range(3):
+                page.draw_rect(pymupdf.Rect(100 + 100 * c, 100 + 30 * r, 200 + 100 * c, 130 + 30 * r),
+                               color=(0, 0, 0), width=0.7)
+                page.insert_text((110 + 100 * c, 120 + 30 * r), f"v{r}{c}", fontsize=10)
+        assert _box_grid(np, pymupdf, page) is None
+
+    def test_a_box_grid_becomes_a_table_with_its_spans(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.boxes import _box_grid, _table_from_box_grid
+        from src.analyzers.table.rules import _cell_text_of
+        doc, page = self._page()
+        table = _table_from_box_grid(_box_grid(np, pymupdf, page), 0, 595, 842)
+        assert table.metadata["box_grid"] and table.column_count == 4 and table.row_count == 2
+        cells = {_cell_text_of(c): c for row in table.grid for c in row}
+        user = cells["USER"]
+        assert (user.metadata["grid_row"], user.metadata["grid_col"], user.col_span) == (0, 1, 3)
+        assert table.span_map[(0, 3)] == (0, 1) and table.span_map[(1, 0)] == (0, 0)
+        assert user.visual_layout.style.background_color_rgb is not None and user.border_top
+
     def test_a_page_of_text_has_no_box_grid(self):
         import numpy as np
         import pymupdf
