@@ -86,6 +86,9 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 % instead (see _is_latin_only below), leaving DejaVu Serif as the
 % fallback for anything that needs it.
 \newfontfamily\latinfont{TeX Gyre Termes}
+% Its grotesque counterpart, a Helvetica clone, for a table the analyzer
+% found printed in a sans-serif face (TableBlock.metadata["typeface"]).
+\newfontfamily\latinsans{TeX Gyre Heros}
 \sloppy
 \begin{document}
 """
@@ -476,7 +479,7 @@ def _is_latin_only(text: str) -> bool:
 
 def _styled_cell_text(
     cell: Any, text: str, median_pt: float = 0.0, raw: str = "", line_box: float = 0.0,
-    leading_pt: float = 0.0,
+    leading_pt: float = 0.0, latin_font: str = "\\latinfont",
 ) -> str:
     """Wrap a cell's escaped text in the typography the source printed it in.
 
@@ -494,7 +497,7 @@ def _styled_cell_text(
     vl = getattr(cell, "visual_layout", None)
     style = getattr(vl, "style", None) if vl else None
 
-    font_prefix = "\\latinfont " if _is_latin_only(raw or text) else ""
+    font_prefix = f"{latin_font} " if _is_latin_only(raw or text) else ""
 
     if style is None:
         return f"{font_prefix}{text}" if font_prefix else text
@@ -875,6 +878,7 @@ def _render_table(table: TableBlock) -> str:
         safe = _sanitize_latex_fragment(recognized)
         return "\\begin{center}\n" + safe + "\n\\end{center}\n"
     grid = _grid_with_placeholder_marks(table)
+    _latin_font = "\\latinsans" if md.get("typeface") == "sans" else "\\latinfont"
     if not grid:
         return ""
 
@@ -1029,7 +1033,7 @@ def _render_table(table: TableBlock) -> str:
                 if (cell.metadata or {}).get("leader_after"):
                     body += "\\dotfill"
                 text = _styled_cell_text(cell, body, median_pt, raw=raw, line_box=line_box,
-                                         leading_pt=_leading)
+                                         leading_pt=_leading, latin_font=_latin_font)
                 if (getattr(cell, "row_span", 1) or 1) == 1:
                     text = _lowered_to_print(text, cell, _row_top_line, line_box)
                 texts[col] = raw
@@ -1139,7 +1143,8 @@ def _render_table(table: TableBlock) -> str:
         for row_idx, row in enumerate(grid):
             styled = [
                 _styled_cell_text(
-                    cell, _esc(_cell_text(cell)).replace("\n", " "), median_pt, raw=_cell_text(cell)
+                    cell, _esc(_cell_text(cell)).replace("\n", " "), median_pt, raw=_cell_text(cell),
+                    latin_font=_latin_font,
                 )
                 for cell in row
             ]

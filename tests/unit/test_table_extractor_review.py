@@ -1518,3 +1518,48 @@ class TestDeflateBoxes:
         before = table.grid[3][1].visual_layout.bounding_box
         _deflate_boxes(np, pymupdf, page, table)
         assert table.grid[3][1].visual_layout.bounding_box == before
+
+
+class TestTypeface:
+    @staticmethod
+    def _face(fontname):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _mark_typeface
+        from src.krm.models import StyleDescriptor
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        rows = []
+        for k, name in enumerate(("APPLIED DIGITAL DATA", "BOWERS ENGINEERING", "COMPUTER OPTICS")):
+            y = 300 + 20 * k
+            page.insert_text((100, y), name, fontsize=10, fontname=fontname)
+            words = [w for w in page.get_text("words") if y - 12 < w[3] <= y + 4]
+            box = NormalizedRect(x0=min(w[0] for w in words) / 595, y0=min(w[1] for w in words) / 842,
+                                 x1=max(w[2] for w in words) / 595, y1=max(w[3] for w in words) / 842)
+            rows.append([TableCell(
+                content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text=name)])])],
+                visual_layout=VisualLayout(bounding_box=box, page_or_screen_index=0,
+                                           style=StyleDescriptor(font_size_pt=10)))])
+        table = TableBlock(grid=rows, row_count=3, column_count=1, visual_layout=rows[0][0].visual_layout)
+        face = _mark_typeface(np, pymupdf, page, table)
+        return face, table.metadata.get("typeface")
+
+    def test_a_grotesque_is_found_sans(self):
+        assert self._face("helv") == ("sans", "sans")
+
+    def test_a_roman_is_left_serif(self):
+        assert self._face("tiro") == ("serif", None)
+
+    def test_a_sans_table_is_set_in_the_sans_family(self):
+        rows = [[_cell("NAME", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("CLARY CORP", x0=0.10, y0=0.32), _cell("x", x0=0.20, y0=0.32), _cell("37", x0=0.33, y0=0.32)]]
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        grid = [[_styled(c) for c in row] for row in rows]
+        table = TableBlock(grid=grid, row_count=2, column_count=3, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.40, y1=0.34), page_or_screen_index=0))
+        table.metadata = {"typeface": "sans"}
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        import re
+        body = build_latex(doc).split("\\begin{document}")[1]
+        assert re.search(r"\\latinsans [^&]*CLARY CORP", body) and "\\latinfont" not in body

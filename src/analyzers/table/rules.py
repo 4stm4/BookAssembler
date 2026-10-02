@@ -1871,6 +1871,86 @@ def _mark_italic(np, pymupdf, page, table) -> int:
 _INFLATED_SLACK_PT = 1.5   # more box above a line than usual, past noise
 
 
+_TYPEFACE_MIN_LETTERS = 6
+# Base-14 faces a cell's text is set in to be compared with its print:
+# (regular, bold, italic, bold italic).
+_FACES = {"sans": ("helv", "hebo", "heit", "hebi"), "serif": ("tiro", "tibo", "tiit", "tibi")}
+
+
+def _ink_mask(np, pix):
+    """A pixmap's ink, cut to the ink's own bounding box (None if none)."""
+    grey = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].mean(axis=2)
+    ink = grey < _RULE_INK_LEVEL
+    rows, cols = np.flatnonzero(ink.any(axis=1)), np.flatnonzero(ink.any(axis=0))
+    if not len(rows) or not len(cols):
+        return None
+    return ink[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
+
+
+def _thickened(np, mask):
+    """A mask grown by a pixel each way, so strokes a pixel apart still meet."""
+    out = mask.copy()
+    out[1:] |= mask[:-1]
+    out[:-1] |= mask[1:]
+    out[:, 1:] |= out[:, :-1].copy()
+    out[:, :-1] |= out[:, 1:].copy()
+    return out
+
+
+def _likeness(np, pymupdf, print_mask, text: str, fontname: str) -> float:
+    """How well text set in fontname covers the print: the overlap of
+    their ink, each cut to its own extent and scaled onto the print's."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=40 * len(text) + 40, height=80)
+    page.insert_text((10, 50), text, fontsize=30, fontname=fontname)
+    mask = _ink_mask(np, page.get_pixmap())
+    doc.close()
+    if mask is None:
+        return 0.0
+    h, w = print_mask.shape
+    scaled = mask[(np.arange(h) * mask.shape[0] // h)][:, (np.arange(w) * mask.shape[1] // w)]
+    a, b = _thickened(np, print_mask), _thickened(np, scaled)
+    return float((a & b).sum()) / max(1, float((a | b).sum()))
+
+
+def _mark_typeface(np, pymupdf, page, table) -> Optional[str]:
+    """Record whether a table is printed in a sans-serif face
+    (metadata["typeface"] = "sans"). Neither OCR nor a scan's text layer
+    says; the print does. Each cell of one line and _TYPEFACE_MIN_LETTERS
+    letters or more is set in a sans and in a serif face, in its own
+    weight and slant, and whichever covers its print better gets its vote.
+    The index fixture is set in a grotesque, and was rebuilt in Times.
+    Returns the face that won, None where no cell could vote."""
+    pw, ph = page.rect.width, page.rect.height
+    votes = {"sans": 0, "serif": 0}
+    for row in table.grid:
+        for cell in row:
+            vl = cell.visual_layout
+            text = _cell_text_of(cell)
+            if vl is None or vl.bounding_box is None or "\n" in text:
+                continue
+            if sum(ch.isalpha() for ch in text) < _TYPEFACE_MIN_LETTERS:
+                continue
+            b = vl.bounding_box
+            clip = pymupdf.Rect(b.x0 * pw, b.y0 * ph, b.x1 * pw, b.y1 * ph) & page.rect
+            if clip.is_empty:
+                continue
+            mask = _ink_mask(np, page.get_pixmap(matrix=pymupdf.Matrix(_RULE_ZOOM, _RULE_ZOOM), clip=clip))
+            if mask is None:
+                continue
+            style = vl.style
+            variant = (2 if style is not None and style.is_italic else 0) + (
+                1 if style is not None and style.is_bold else 0)
+            score = {face: _likeness(np, pymupdf, mask, text, names[variant]) for face, names in _FACES.items()}
+            votes[max(score, key=score.get)] += 1
+    if not any(votes.values()):
+        return None
+    face = max(votes, key=votes.get)
+    if face == "sans":
+        table.metadata["typeface"] = "sans"
+    return face
+
+
 def _deflate_boxes(np, pymupdf, page, table) -> int:
     """Bring down the top of each one-line cell box that OCR inflated.
 
