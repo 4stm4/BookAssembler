@@ -1610,9 +1610,9 @@ def _render_table(table: TableBlock) -> str:
             _scale = _A4_FULL_WIDTH_CM * _PT_PER_CM
             _fx0, _fx1 = _table_md.get("table_rule_x0"), _table_md.get("table_rule_x1")
             if _fx0 is not None and seps[0] == "|" and col_min_x0 and col_min_x0[0] is not None:
-                seps[0] = f"|@{{\hspace{{{max(0.0, (col_min_x0[0] - _fx0) * _scale):.2f}pt}}}}"
+                seps[0] = f"|@{{\\hspace{{{max(0.0, (col_min_x0[0] - _fx0) * _scale):.2f}pt}}}}"
             if _fx1 is not None and seps[ncols] == "|" and col_max_x1 and col_max_x1[-1] is not None:
-                seps[ncols] = f"@{{\hspace{{{max(0.0, (_fx1 - col_max_x1[-1]) * _scale):.2f}pt}}}}|"
+                seps[ncols] = f"@{{\\hspace{{{max(0.0, (_fx1 - col_max_x1[-1]) * _scale):.2f}pt}}}}|"
         col_spec = seps[0] + "".join(
             part + seps[i + 1] for i, part in enumerate(col_spec_parts)
         )
