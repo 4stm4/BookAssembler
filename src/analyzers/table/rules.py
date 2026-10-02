@@ -4,6 +4,7 @@ from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN
 import logging
 import re
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from typing import Any, Dict, List, Optional, Tuple
 from src.krm.models import (
     ContainerUnit,
@@ -2097,6 +2098,36 @@ def _row_words(cells, words, pw: float, ph: float) -> List[Optional[List[Any]]]:
     return out
 
 
+def _print_right_of(np, pymupdf, page, rect, line_h: float):
+    """The print just right of a word box that holds only dots: the first
+    blob bigger than a dot within four line heights of its left edge, and
+    the blobs following it closer than half a line, as a page Rect (None
+    if there is none). On the index fixture OCR read DELTEC CORP's page
+    number off two leader dots left of it - "21", boxed over the dots,
+    its figures past the box's right edge - and set it in 3pt type there."""
+    clip = pymupdf.Rect(rect.x0, rect.y0, rect.x1 + 4 * line_h, rect.y1) & page.rect
+    if clip.is_empty:
+        return None
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(_LEADER_ZOOM, _LEADER_ZOOM), clip=clip)
+    arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+    ink = arr[:, :, :3].mean(axis=2) < _RULE_INK_LEVEL
+    limit = _LEADER_DOT_SHARE * line_h * _LEADER_ZOOM
+    spans = sorted(
+        (min(xs), max(xs) + 1)
+        for blob in _ink_blobs(np, ink)
+        for ys, xs in [([y for y, _ in blob], [x for _, x in blob])]
+        if max(ys) - min(ys) + 1 > limit or max(xs) - min(xs) + 1 > limit
+    )
+    if not spans:
+        return None
+    x0, x1 = spans[0]
+    for a, b in spans[1:]:
+        if a - x1 > 0.5 * line_h * _LEADER_ZOOM:
+            break
+        x1 = max(x1, b)
+    return pymupdf.Rect(clip.x0 + x0 / _LEADER_ZOOM, rect.y0, clip.x0 + x1 / _LEADER_ZOOM, rect.y1)
+
+
 def _drop_leaders(np, pymupdf, page, table) -> int:
     """Take the dot leaders out of a table's cells.
 
@@ -2133,8 +2164,13 @@ def _drop_leaders(np, pymupdf, page, table) -> int:
         last = max(
             ((w, n) for ws in found if ws for w, n in ws), key=lambda wn: wn[0][2], default=None
         )
+        moved = None
         if last is not None and any(ch.isdigit() for ch in last[0][4]):
             found = [[(w, None if w is last[0] else n) for w, n in ws] if ws else ws for ws in found]
+            # Its box holding nothing but dots, the figure was printed past
+            # it: the box is moved onto that print (_print_right_of).
+            if last[1] is not None:
+                moved = _print_right_of(np, pymupdf, page, pymupdf.Rect(last[0][:4]), last[0][3] - last[0][1])
         known = any((c.metadata or {}).get("leader_after") for c in cells)
         if not known and sum(n or 0 for ws in found if ws for _, n in ws) < _LEADER_MIN_DOTS:
             continue
@@ -2161,6 +2197,12 @@ def _drop_leaders(np, pymupdf, page, table) -> int:
             )
             keep.append(cell)
         row[:] = keep
+        if moved is not None:
+            holder = next((c for c, ws in zip(cells, found) if ws and any(w is last[0] for w, _ in ws)), None)
+            if holder is not None and holder in keep and _cell_text_of(holder).strip() == last[0][4]:
+                b = holder.visual_layout.bounding_box
+                holder.visual_layout.bounding_box = dataclass_replace(b, x0=moved.x0 / pw, x1=moved.x1 / pw)
+                changed += 1
     if changed:
         table.column_count = max((len(r) for r in table.grid), default=0)
         _clip_row_spans(table.grid)

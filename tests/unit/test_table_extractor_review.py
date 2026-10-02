@@ -1699,3 +1699,28 @@ class TestPartialRuleInFrame:
         # within the frame rule's own width at its start
         assert m and float(m.group(1)) == pytest.approx(0.02 * scale, abs=1.3)
         assert float(m.group(2)) == pytest.approx(0.70 * scale, abs=0.5)
+
+
+class TestNumberBoxedOverDots:
+    def test_a_figure_boxed_over_dots_is_moved_onto_its_print(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _cell_text_of, _drop_leaders
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((100, 300), "DELTEC CORP", fontsize=10)
+        page.insert_text((180, 300), ". . . . . . . . . . . . . . . . . . . .", fontsize=10)
+        # OCR's word for the page number, read off two dots short of it...
+        page.insert_text((290, 300), "21", fontsize=10, render_mode=3)
+        # ...and the number's print, which OCR boxed no word over
+        for x in (325, 331):
+            page.draw_rect(pymupdf.Rect(x, 293, x + 4, 300), color=None, fill=(0, 0, 0))
+        name, leader = TestDotLeaders._row(page, ["DELTEC CORP", ". . . . . . . . . . . . . . . . . . . ."])
+        number = TestDotLeaders._row(page, ["21"])[0]
+        table = TableBlock(grid=[[name, leader, number]], row_count=1, column_count=3,
+                           visual_layout=name.visual_layout)
+        _drop_leaders(np, pymupdf, page, table)
+        kept = table.grid[0][-1]
+        assert _cell_text_of(kept) == "21"
+        assert abs(kept.visual_layout.bounding_box.x0 * 595 - 325) < 1.0
+        assert abs(kept.visual_layout.bounding_box.x1 * 595 - 335) < 1.0
