@@ -1470,6 +1470,13 @@ class TestRowRise:
         # 20pt capitals stand some 5pt above an 8pt table's strut
         assert self._heading_extra(8.0) - self._heading_extra(20.0) > 4.0
 
+    def test_the_step_runs_capital_top_to_capital_top(self):
+        import pytest
+        # the entry under a 20pt heading starts where its own capitals do,
+        # under its strut's headroom: the heading's step gives up exactly
+        # how much taller its capitals are
+        assert self._heading_extra(8.0) - self._heading_extra(20.0) == pytest.approx(0.7 * (20.0 - 8.0), abs=0.15)
+
 
 class TestDeflateBoxes:
     @staticmethod

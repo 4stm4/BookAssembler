@@ -2442,14 +2442,31 @@ def _render_table(table: TableBlock) -> str:
     # which pushed its entries 10pt down from the heading.
     _FONTSIZE_RE = re.compile(r"\\fontsize\{([\d.]+)\}")
 
-    def _row_rise_pt(row_idx: int) -> float:
+    def _row_cap_pt(row_idx: int) -> Optional[float]:
+        """How tall the capitals of a row's largest type stand."""
         if row_idx >= len(rendered_rows):
-            return 0.0
+            return None
         sizes = [
             float(m) for styled in rendered_rows[row_idx][0]
             if isinstance(styled, str) for m in _FONTSIZE_RE.findall(styled)
         ]
-        return max(0.0, _ASCENT * max(sizes) - _STRUT_HEIGHT * _base_line_pt) if sizes else 0.0
+        return _ASCENT * max(sizes) if sizes else None
+
+    def _row_rise_pt(row_idx: int) -> float:
+        cap = _row_cap_pt(row_idx)
+        return max(0.0, cap - _STRUT_HEIGHT * _base_line_pt) if cap is not None else 0.0
+
+    def _cap_step_pt(row_idx: int) -> float:
+        """What a row's step to the next leaves out beyond the usual, set
+        capital top to capital top as the source's boxes measure it: the
+        next row's rise above its strut, less how much taller the next
+        row's capitals are than this row's. Under a heading that rises to
+        its own capitals an entry's capitals sit under the strut's
+        headroom, and the index fixture's first entry came out 3pt low."""
+        here, below = _row_cap_pt(row_idx), _row_cap_pt(row_idx + 1)
+        if here is None or below is None:
+            return 0.0
+        return _row_rise_pt(row_idx + 1) - (below - here)
 
     # Each row gets exactly what the source leaves beyond the tightest
     # row: step_i = base + (gap_i - tightest) = gap_i. Nothing is
@@ -2530,7 +2547,7 @@ def _render_table(table: TableBlock) -> str:
         surplus = (
             (gap * _A4_FULL_HEIGHT_CM * _PT_PER_CM) - _baseline_gap_pt
             - max(0, _row_line_count(i) - 1) * _row_line_step(i)
-            - _row_rise_pt(i)
+            - _cap_step_pt(i)
             if gap and _baseline_gap_pt > 0 else 0.0
         )
         content = (
