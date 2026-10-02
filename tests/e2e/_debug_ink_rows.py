@@ -2,7 +2,7 @@
 test_visual_overlay cuts them), both in the source crop's points - where
 each printed line of ink starts and ends, side by side.
 
-python3 tests/e2e/_debug_ink_rows.py <pdf> [max_bands]
+python3 tests/e2e/_debug_ink_rows.py <pdf> [max_bands] [x_from x_to, shares of the width]
 """
 import sys
 import tempfile
@@ -21,10 +21,14 @@ from tests.e2e.test_visual_overlay import (
 ZOOM = 4.0
 
 
+X_FROM = float(sys.argv[3]) if len(sys.argv) > 4 else 0.08
+X_TO = float(sys.argv[4]) if len(sys.argv) > 4 else 0.92
+
+
 def bands(img, height_pt):
     grey = np.asarray(img.convert("L"), dtype=np.uint8)
     w = grey.shape[1]
-    grey = grey[:, int(0.08 * w):int(0.92 * w)]     # inside the frame's verticals
+    grey = grey[:, int(X_FROM * w):int(X_TO * w)]     # inside the frame's verticals
     ink = (grey < 160).mean(axis=1)
     rows = ink > 0.002
     out, start = [], None
@@ -33,7 +37,10 @@ def bands(img, height_pt):
             start = y
         elif not v and start is not None:
             k = height_pt / grey.shape[0]
-            out.append((start * k, y * k, float(ink[start:y].max())))
+            band = (grey[start:y] < 160).any(axis=0)
+            xs = np.flatnonzero(band)
+            kx = height_pt / grey.shape[0]       # crops scaled to the source's points both ways
+            out.append((start * k, y * k, float(ink[start:y].max()), xs[0] * kx, xs[-1] * kx))
             start = None
     return out
 
@@ -50,6 +57,6 @@ with tempfile.TemporaryDirectory() as td:
 for i in range(min(n, max(len(s), len(o)))):
     a = s[i] if i < len(s) else None
     b = o[i] if i < len(o) else None
-    fa = f"{a[0]:6.1f}-{a[1]:6.1f} ({a[2]:.2f})" if a else " " * 22
-    fb = f"{b[0]:6.1f}-{b[1]:6.1f} ({b[2]:.2f})" if b else ""
+    fa = f"{a[0]:6.1f}-{a[1]:6.1f} x {a[3]:5.1f}-{a[4]:5.1f}" if a else " " * 30
+    fb = f"{b[0]:6.1f}-{b[1]:6.1f} x {b[3]:5.1f}-{b[4]:5.1f}" if b else ""
     print(f"{i:3d}  src {fa}   out {fb}")
