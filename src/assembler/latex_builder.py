@@ -527,6 +527,13 @@ def _styled_cell_text(
         prefix += "\\itshape "
 
     body = f"{prefix}{text}" if prefix else text
+    # Display type at its printed width: a heading's face is seldom ours,
+    # and the index fixture's condensed "advertisers" came out 29% wider
+    # in Heros. Its height stays; only its width is fitted to its box.
+    box = getattr(vl, "bounding_box", None) if vl else None
+    if (median_pt > 0 and size_pt > _DISPLAY_SHARE * median_pt and box is not None
+            and "\n" not in (raw or text) and "\\newline" not in text):
+        body = f"\\resizebox{{{(box.x1 - box.x0) * _A4_WIDTH_PT:.2f}pt}}{{\\height}}{{{body}}}"
 
     colour = getattr(style, "text_color_rgb", None)
     if colour and tuple(colour) != (0, 0, 0):
@@ -818,6 +825,8 @@ _PLACE_MIN_PT = 0.2
 _ASCENT = 0.7
 # The weight a box table's rules are drawn at.
 _BOX_RULE_PT = 0.6
+# A cell set this much over the table's usual size is display type.
+_DISPLAY_SHARE = 1.5
 # A dot leader's pitch, as \dotfill sets it.
 _DOT_PITCH_EM = 0.44
 _STRUT_HEIGHT = 0.7

@@ -1936,3 +1936,22 @@ class TestLineToPrintedWidth:
         width = float(re.search(r"\\makebox\[([\d.]+)pt\]\[s\]\{one two three\}", tex).group(1))
         assert abs(width - 0.06 * 21 * 72.27 / 2.54) < 0.05
         assert "[s]{four}" not in tex                  # one word has no spaces to spread
+
+
+class TestDisplayWidth:
+    def test_display_type_is_fitted_to_its_printed_width(self):
+        import re
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        boxed = TestUnruledSetSide._boxed
+        heading = _styled(boxed("advertisers", 0.10, 0.30, 0.20), 20.0)
+        heading.visual_layout.bounding_box = NormalizedRect(x0=0.10, y0=0.20, x1=0.30, y1=0.20 + 20 / 842)
+        grid = [[heading, boxed("", 0.78, 0.80, 0.20)]]
+        grid += [[boxed(f"NAME {k}", 0.10, 0.30, 0.26 + 0.015 * k), boxed(str(k), 0.78, 0.80, 0.26 + 0.015 * k)]
+                 for k in range(6)]
+        table = TableBlock(grid=grid, row_count=len(grid), column_count=2, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=0.10, y0=0.20, x1=0.80, y1=0.36), page_or_screen_index=0))
+        tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
+        width = float(re.search(r"\\resizebox\{([\d.]+)pt\}\{\\height\}\{[^&]*?advertisers", tex).group(1))
+        assert abs(width - 0.20 * 21 * 72.27 / 2.54) < 0.05
+        assert not re.search(r"\\resizebox\{[\d.]+pt\}\{\\height\}\{[^&]*?NAME", tex)
