@@ -1816,6 +1816,15 @@ class TestBoxGrid:
         assert bts.fill is not None and bts.fill[2] < 120
         assert all(by_text[t].ruled == (True, True, True, True) for t in ("Startup", "RAM Disk", "ATA Disk"))
 
+    def test_a_label_is_sized_by_its_ink(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.boxes import _box_grid
+        doc, page = self._page()
+        grid = _box_grid(np, pymupdf, page)
+        cell = next(c for c in grid.cells if c.words and c.words[0][4] == "Startup")
+        assert abs(cell.size - 10) < 1.5               # inserted at 10pt
+
     def test_a_ruled_grid_on_paper_is_left_to_the_text_detector(self):
         import numpy as np
         import pymupdf

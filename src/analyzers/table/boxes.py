@@ -46,6 +46,7 @@ class BoxCell:
     fill: Optional[Rgb]
     ruled: Tuple[bool, bool, bool, bool]
     words: List[Any] = field(default_factory=list)
+    size: float = 0.0          # type size read off its first line's ink (pt)
 
 
 @dataclass
@@ -97,6 +98,28 @@ def _coverage(segs: List[Tuple[float, int, int]], at: float, lo: float, hi: floa
             covered += b - max(a, reach)
             reach = b
     return covered / (hi - lo) if hi > lo else 0.0
+
+
+_CAP_SHARE = 0.72            # capitals and ascenders over the type size
+_DESCENT_SHARE = 0.21        # descenders under the baseline over it
+
+
+def _ink_size(np, dark, cell: "BoxCell", z: float, inset: float) -> float:
+    """A cell's type size from its first printed line: the height of the
+    first band of ink rows inside it, its rules left out, over the share of
+    the size its letters reach. OCR's word boxes are no measure here - on
+    the fixture "Deb" was boxed over two lines and set at 16pt beside its
+    neighbours' 10. 0 where there is no ink."""
+    x0, y0, x1, y1 = (int(v * z) for v in cell.rect)
+    pad = int(inset)
+    rows = dark[y0 + pad:y1 - pad, x0 + pad:x1 - pad].any(axis=1)
+    bands = _runs(np, rows, 2)
+    if not bands:
+        return 0.0
+    a, b = bands[0]
+    first_line = (sorted(cell.words, key=lambda w: w[1])[0][4] if cell.words else "")
+    share = _CAP_SHARE + (_DESCENT_SHARE if any(ch in "gjpqy" for ch in first_line) else 0.0)
+    return (b - a) / z / share
 
 
 def _box_grid(np, pymupdf, page) -> Optional[BoxGrid]:
@@ -186,6 +209,7 @@ def _box_grid(np, pymupdf, page) -> Optional[BoxGrid]:
     for cell in cells:
         x0, y0, x1, y1 = cell.rect
         cell.words = [w for w in words if x0 <= (w[0] + w[2]) / 2 <= x1 and y0 <= (w[1] + w[3]) / 2 <= y1]
+        cell.size = _ink_size(np, dark, cell, z, near)
     # Boxes of colour, not a ruled grid on paper: a ruled table's rows and
     # columns are its text's, and the text-layer detection reads them -
     # taken as boxes, the decimal/binary and pin description fixtures lost
@@ -222,11 +246,7 @@ def _table_from_box_grid(grid: BoxGrid, page_idx: int, pw: float, ph: float) -> 
     span_map = {}
     for box in sorted(grid.cells, key=lambda b: (b.row, b.col)):
         x0, y0, x1, y1 = box.rect
-        heights = sorted(w[3] - w[1] for w in box.words)
-        style = StyleDescriptor(
-            font_size_pt=heights[len(heights) // 2] if heights else 0.0,
-            background_color_rgb=box.fill,
-        )
+        style = StyleDescriptor(font_size_pt=box.size, background_color_rgb=box.fill)
         cell = TableCell(
             row_span=box.row_span,
             col_span=box.col_span,
