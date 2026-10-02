@@ -535,7 +535,7 @@ class TestNarrowCellsFitTheirColumn:
         spec = next(l for l in tex.splitlines() if "begin{tabular}" in l)
         # 0.055 * 21cm less one padding and half a rule, not its 1.05cm text
         assert spec.endswith("p{1.01cm}@{}}")
-        assert "[r]{\\latinfont \\fontsize{8.00}{9.60}\\selectfont mV/VOUT" in tex
+        assert "[r]{\\latinfont \\fontsize{8.03}{9.64}\\selectfont mV/VOUT" in tex
 
 
 class TestStackedLines:
@@ -578,7 +578,7 @@ class TestSizeNoise:
         _styled(rows[1][1], 3.12)
         tex = _ruled_tex(rows)
         assert "\\fontsize{3.12}" not in tex
-        assert "\\fontsize{8.00}{9.60}\\selectfont small" in tex
+        assert "\\fontsize{8.03}{9.64}\\selectfont small" in tex
 
 
 class TestTextUnderRules:
@@ -948,7 +948,7 @@ class TestStackedPitch:
         rows[1][1].visual_layout.bounding_box = NormalizedRect(x0=box.x0, y0=box.y0, x1=box.x1, y1=box.y0 + 0.03)
         tex = _ruled_tex(rows)
         # three lines in a 0.03 box over a 0.01 line: (0.02 x 845.04pt) / 2
-        assert "\\fontsize{8.00}{8.45}\\selectfont \\lineskiplimit" in tex
+        assert "\\fontsize{8.03}{8.45}\\selectfont \\lineskiplimit" in tex
 
     def test_lines_are_the_printed_ones_and_spans_are_reset(self):
         import pymupdf
@@ -1337,7 +1337,7 @@ class TestUnruledWidths:
         widths = [float(w) for w in re.findall(r"p\{([\d.]+)cm\}", build_latex(doc))]
         # 0.64 of the page less a \tabcolsep either side of the gap; the
         # numbers over their own 0.06
-        assert widths == [pytest.approx(0.64 * 21 - 8 / 28.3465, abs=0.01), pytest.approx(0.06 * 21, abs=0.01)]
+        assert widths == [pytest.approx(0.64 * 21 - 8 / (72.27 / 2.54), abs=0.01), pytest.approx(0.06 * 21, abs=0.01)]
 
 
 class TestBareFrame:
@@ -1371,7 +1371,7 @@ class TestBareFrame:
         import re
         import pytest
         spec = self._spec()
-        scale = 21 * 28.3465
+        scale = 21 * 72.27 / 2.54
         left = re.match(r"\|@\{\\hspace\{([\d.]+)pt\}\}", spec)
         right = re.search(r"@\{\\hspace\{([\d.]+)pt\}\}\|$", spec)
         assert left and float(left.group(1)) == pytest.approx(0.02 * scale, abs=0.1)
@@ -1383,7 +1383,7 @@ class TestBareFrame:
         # the heading starts 0.008 left of the names it heads
         spec = self._spec(heading_x0=0.092)
         left = re.match(r"\|@\{\\hspace\{([\d.]+)pt\}\}", spec)
-        assert left and float(left.group(1)) == pytest.approx(0.02 * 21 * 28.3465, abs=0.1)
+        assert left and float(left.group(1)) == pytest.approx(0.02 * 21 * 72.27 / 2.54, abs=0.1)
 
 
 class TestFirstRuleInStep:
@@ -1686,9 +1686,7 @@ class TestPartialRuleInFrame:
         doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
         tex = build_latex(doc)
         m = re.search(r"\\hskip ([\d.]+)pt\\vrule width ([\d.]+)pt", tex)
-        scale = 21 * 28.3465
-        # within the frame rule's own width at its start, and 1% along it:
-        # the builder turns cm into pt at 28.3465 where TeX takes 28.4528,
-        # a known 0.4% of its own
+        scale = 21 * 72.27 / 2.54
+        # within the frame rule's own width at its start
         assert m and float(m.group(1)) == pytest.approx(0.02 * scale, abs=1.3)
-        assert float(m.group(2)) == pytest.approx(0.70 * scale, rel=0.01)
+        assert float(m.group(2)) == pytest.approx(0.70 * scale, abs=0.5)

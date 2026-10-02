@@ -289,7 +289,7 @@ def render_node(
             style = getattr(vl, "style", None) if vl else None
             font_cmd = ""
             if style and style.font_size_pt:
-                size = style.font_size_pt
+                size = _size_of(style)
                 font_cmd = f"\\fontsize{{{size:.1f}}}{{{size * 1.2:.1f}}}\\selectfont "
             weight = "\\bfseries " if style and style.is_bold else ""
             body.append(
@@ -503,7 +503,7 @@ def _styled_cell_text(
         return f"{font_prefix}{text}" if font_prefix else text
 
     prefix = font_prefix
-    size_pt = _snap_size(getattr(style, "font_size_pt", 0.0) or 0.0, median_pt)
+    size_pt = _snap_size(_size_of(style), median_pt)
     # A cell whose line box is the table's usual one was printed at the
     # table's usual size, whatever its text layer says, and so was one
     # whose ink is taller than the line its reported size would give: the
@@ -512,7 +512,7 @@ def _styled_cell_text(
     h = _box_height(cell)
     if median_pt > 0 and line_box > 0 and h is not None and (
         abs(h - line_box) <= _SIZE_NOISE_TOLERANCE * line_box
-        or h * _A4_HEIGHT_PT > 1.2 * (getattr(style, "font_size_pt", 0.0) or 0.0)
+        or h * _A4_HEIGHT_PT > 1.2 * _size_of(style)
     ):
         size_pt = median_pt
     if size_pt > 0:
@@ -701,6 +701,15 @@ def _column_bins(grid: List[List[Any]]) -> Optional[List[float]]:
 _PT_PER_CM = 72.27 / 2.54
 
 _A4_HEIGHT_PT = 29.7 * _PT_PER_CM
+# A source's type sizes are PDF points (bp) and go out as TeX points too.
+_TEX_PT_PER_BP = 72.27 / 72.0
+
+
+def _size_of(style: Any) -> float:
+    """A style's type size in TeX points (0 where it has none). Taken as
+    is, a 9pt span went out 0.37% small, and a line of it that much
+    short."""
+    return (getattr(style, "font_size_pt", 0.0) or 0.0) * _TEX_PT_PER_BP
 _A4_WIDTH_PT = 21.0 * _PT_PER_CM
 # How far short of the table's edge a measured rule may stop and still be
 # drawn across all of it: scan edges are ragged by a point or so.
@@ -886,7 +895,7 @@ def _render_table(table: TableBlock) -> str:
     # each cell is set at its own measured size, snapped onto this median
     # when the difference is only measurement noise (_snap_size).
     _sizes = sorted(
-        cell.visual_layout.style.font_size_pt
+        _size_of(cell.visual_layout.style)
         for row in grid for cell in row
         if cell.visual_layout
         and cell.visual_layout.style
