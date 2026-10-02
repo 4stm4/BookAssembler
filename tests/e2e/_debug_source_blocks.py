@@ -1,15 +1,17 @@
 """Debug-only: the blocks PdfSourceAdapter hands the table detector, with
 each block's lines and their boxes, before any analyzer runs.
 
-Run with python3 (argument A or B), not pytest.
+Run with python3 (argument A, B or a fixture path), not pytest.
 """
 import sys
 sys.path.insert(0, "/app")
 from src.adapters.pdf_adapter import PdfSourceAdapter
+from pathlib import Path
 from tests.e2e.test_assembled_table_pdf import FIXTURE_A, FIXTURE_B
 
 PW, PH = 595.276, 841.89
-fx = FIXTURE_A if (sys.argv[1:] or ["A"])[0] == "A" else FIXTURE_B
+arg = (sys.argv[1:] or ["A"])[0]
+fx = {"A": FIXTURE_A, "B": FIXTURE_B}.get(arg) or Path(arg)
 doc = PdfSourceAdapter().parse(open(fx, "rb"), f"file://{fx}")
 for n, child in enumerate(doc.root_containers[0].children):
     bb = child.visual_layout.bounding_box if child.visual_layout else None

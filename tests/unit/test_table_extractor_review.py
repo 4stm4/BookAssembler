@@ -1780,3 +1780,48 @@ class TestLeaderToNumber:
         off = (width + second - first) % pitch
         assert min(off, pitch - off) < 0.05          # the printed pitch rounded, over 100 pitches
         assert overhang == pytest.approx(-pitch)
+
+
+class TestBoxGrid:
+    @staticmethod
+    def _page():
+        import pymupdf
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        green, yellow, blue = (0, 1, 0.2), (1, 1, 0.25), (0, 1, 1)
+        # a ruled box across the top, three ruled boxes under it, and a
+        # yellow box down the left bounded by its colour alone
+        page.draw_rect(pymupdf.Rect(150, 100, 450, 140), color=(0, 0, 0), fill=green, width=0.7)
+        for k, label in enumerate(("Startup", "RAM Disk", "ATA Disk")):
+            page.draw_rect(pymupdf.Rect(150 + 100 * k, 140, 250 + 100 * k, 180), color=(0, 0, 0), fill=blue, width=0.7)
+            page.insert_text((165 + 100 * k, 164), label, fontsize=10)
+        page.draw_rect(pymupdf.Rect(80, 100, 150, 180), color=None, fill=yellow)
+        page.insert_text((270, 124), "USER", fontsize=12)
+        page.insert_text((88, 144), "BTS6120", fontsize=10)
+        return doc, page
+
+    def test_boxes_make_a_grid_with_spans(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.boxes import _box_grid
+        doc, page = self._page()
+        grid = _box_grid(np, pymupdf, page)
+        assert grid is not None
+        assert len(grid.xs) == 5 and len(grid.ys) == 3
+        by_text = {" ".join(w[4] for w in c.words): c for c in grid.cells if c.words}
+        user, bts = by_text["USER"], by_text["BTS6120"]
+        assert (user.row_span, user.col_span) == (1, 3) and all(user.ruled)
+        # its right side is its ruled neighbours' left; the rest is colour
+        assert (bts.row_span, bts.col_span) == (2, 1) and bts.ruled == (False, True, False, False)
+        assert bts.fill is not None and bts.fill[2] < 120
+        assert all(by_text[t].ruled == (True, True, True, True) for t in ("Startup", "RAM Disk", "ATA Disk"))
+
+    def test_a_page_of_text_has_no_box_grid(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.boxes import _box_grid
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        for k in range(10):
+            page.insert_text((80, 100 + 14 * k), "An ordinary line of prose, long enough to matter.", fontsize=10)
+        assert _box_grid(np, pymupdf, page) is None
