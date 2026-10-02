@@ -1635,8 +1635,9 @@ def _regrid_ruled_bands(page, table) -> None:
             # Where each run of words on a line was printed - a nested
             # table's columns, an indented sub-item - so the builder can set
             # it there: runs split where the gap is wider than a line is tall.
+            # [start, text, end], page fractions.
             part.metadata["line_segments"] = [
-                [[seg[0][0] / pw, " ".join(w[4] for w in seg)] for seg in _runs(line)]
+                [[seg[0][0] / pw, " ".join(w[4] for w in seg), max(w[2] for w in seg) / pw] for seg in _runs(line)]
                 for line in ws_lines
             ]
             # and which of its words were printed bold, word by word

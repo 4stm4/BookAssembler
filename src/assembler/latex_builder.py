@@ -601,14 +601,21 @@ def _positioned_lines(cell: Any, raw: str) -> str:
         if indent > _PLACE_MIN_PT:
             out += f"\\rule{{{indent:.2f}pt}}{{0pt}}"
         used = 0
-        for (x, text), nxt in zip(runs, runs[1:] + [None]):
+        for run, nxt in zip(runs, runs[1:] + [None]):
+            x, text = run[0], run[1]
             words = text.split()
             marked = _bold_marked(words, line_flags[used:used + len(words)])
             used += len(words)
-            if nxt is None:
-                out += marked
-            else:
+            if nxt is not None:
                 out += f"\\makebox[{(nxt[0] - x) * _A4_WIDTH_PT:.2f}pt][l]{{{marked}}}"
+            elif len(run) > 2 and len(words) > 2:
+                # A line of words ends where it was printed: its spaces
+                # spread to its printed width. Our face's glyphs run
+                # narrower than the print's, and set at their own widths
+                # the pin description fixture's lines fell 8-10pt short.
+                out += f"\\makebox[{(run[2] - x) * _A4_WIDTH_PT:.2f}pt][s]{{{marked}}}"
+            else:
+                out += marked
         lines.append(out)
     # Each line on to the next as much further than the cell's usual step
     # as the print steps between their feet, where the analyzer measured

@@ -1920,3 +1920,19 @@ class TestLineFeet:
         tex = _ruled_tex(rows)
         offs = [float(v) for v in re.findall(r"\\vadjust\{\\vskip(-?[\d.]+)pt\}", tex)]
         assert len(offs) == 3 and offs[0] > 0 and offs[1] < 0 and abs(sum(offs)) < 0.05
+
+
+class TestLineToPrintedWidth:
+    def test_a_line_of_words_is_spread_to_where_it_ended(self):
+        import re
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("one two three\nfour", x0=0.20, y0=0.32),
+                 _cell("V", x0=0.33, y0=0.32)]]
+        cell = rows[1][1]
+        box = cell.visual_layout.bounding_box
+        cell.visual_layout.bounding_box = NormalizedRect(x0=box.x0, y0=box.y0, x1=box.x1, y1=box.y0 + 0.025)
+        cell.metadata["line_segments"] = [[[box.x0, "one two three", box.x0 + 0.06]], [[box.x0, "four", box.x0 + 0.02]]]
+        tex = _ruled_tex(rows)
+        width = float(re.search(r"\\makebox\[([\d.]+)pt\]\[s\]\{one two three\}", tex).group(1))
+        assert abs(width - 0.06 * 21 * 72.27 / 2.54) < 0.05
+        assert "[s]{four}" not in tex                  # one word has no spaces to spread
