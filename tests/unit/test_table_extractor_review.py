@@ -1766,10 +1766,14 @@ class TestLeaderToNumber:
         tex = build_latex(doc)
         spec = re.search(r"\\begin\{tabular\}\{(.*)\}", tex).group(1)
         assert "cm}@{}>" in spec                      # closed up where the leader crosses
-        leader = r"\\leaders\\hbox to ([\d.]+)pt\{\\kern([\d.]+)pt\\makebox\[0pt\]\{\.\}\\hss\}\\hfill\\kern(-?[\d.]+)pt"
+        leader = (r"\\leaders\\hbox to ([\d.]+)pt\{\\kern([\d.]+)pt\\makebox\[0pt\]\{((?:\\[a-z]+series )?)\.\}"
+                  r"\\hss\}\\hfill\\kern(-?[\d.]+)pt")
         m = re.search(r"NAME 3" + leader + r"\s*\}? &[^&]*?" + leader + r"\s*13", tex)
         assert m, "the leader runs from the name on to the number"
-        pitch, first, overhang, _, second, _ = (float(g) for g in m.groups())
+        pitch, first, own, overhang, _, second, weight, _ = m.groups()
+        pitch, first, overhang, second = (float(v) for v in (pitch, first, overhang, second))
+        # one weight: the regular name's
+        assert own == "" and weight == "\\mdseries "
         width = float(re.search(r"p\{([\d.]+)cm\}", spec).group(1)) * 72.27 / 2.54
         # one grid across the boundary: the number cell's dots go on where
         # the name cell's left off

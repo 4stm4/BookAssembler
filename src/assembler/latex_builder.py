@@ -1783,16 +1783,17 @@ def _render_table(table: TableBlock) -> str:
     # of pitches, so they go on where the first cell's left off.
     _dot_pitch_pt = _DOT_PITCH_EM * (median_pt or 8.0)
 
-    def _dots_at(phase_pt: float, overhang_pt: float = 0.0) -> str:
+    def _dots_at(phase_pt: float, overhang_pt: float = 0.0, weight: str = "") -> str:
         """Aligned leader dots, phase_pt into each pitch; overhang_pt runs
         the leader on past its cell, so the dot whose pitch straddles a
-        boundary is set (a leader sets only whole pitches)."""
+        boundary is set (a leader sets only whole pitches). weight sets
+        the dots' own weight where the cell's is not the leader's."""
         return (
-            f"\\leaders\\hbox to {_dot_pitch_pt:.3f}pt{{\\kern{phase_pt:.3f}pt\\makebox[0pt]{{.}}\\hss}}"
+            f"\\leaders\\hbox to {_dot_pitch_pt:.3f}pt{{\\kern{phase_pt:.3f}pt\\makebox[0pt]{{{weight}.}}\\hss}}"
             f"\\hfill\\kern{-overhang_pt:.3f}pt "
         )
 
-    def _joined_leaders(text: str, col: int) -> str:
+    def _joined_leaders(text: str, col: int, lead_bold: bool = False) -> str:
         if col_width_cm is None or "\\dotfill" not in text:
             return text
         half = _dot_pitch_pt / 2.0
@@ -1803,7 +1804,12 @@ def _render_table(table: TableBlock) -> str:
             return text.replace("\\dotfill", _dots_at(half, _dot_pitch_pt))
         if col in _leader_joins and col - 1 < len(col_width_cm):
             left_over = (round(col_width_cm[col - 1], 2) * _PT_PER_CM) % _dot_pitch_pt
-            return text.replace("\\dotfill ", _dots_at((half - left_over) % _dot_pitch_pt), 1)
+            # One leader, one weight: the cell it leads from sets it. The
+            # index fixture's leaders came out bold up to each name's
+            # column and light from there to its page number wherever
+            # that was set regular - its print is one weight throughout.
+            weight = "\\bfseries " if lead_bold else "\\mdseries "
+            return text.replace("\\dotfill ", _dots_at((half - left_over) % _dot_pitch_pt, weight=weight), 1)
         return text
 
     def _fit_to_column(text: str, col: int) -> str:
@@ -2884,7 +2890,8 @@ def _render_table(table: TableBlock) -> str:
                 ):
                     c = _fit_to_column(c, col)
                 if isinstance(c, str):
-                    c = _joined_leaders(c, col)
+                    _lead = cells[col - 1] if 0 < col <= len(cells) else ""
+                    c = _joined_leaders(c, col, lead_bold=isinstance(_lead, str) and "\\bfseries" in _lead)
                 rendered.append(_render_cell(c, col, row_idx=i))
         extra = ""
         _row_extra_pt = raw_extra_pt[i] * _extra_scale if i < len(raw_extra_pt) else 0.0
