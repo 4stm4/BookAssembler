@@ -1953,6 +1953,20 @@ def _render_table(table: TableBlock) -> str:
     # set off by what the first column's width leaves over a whole number
     # of pitches, so they go on where the first cell's left off.
     _dot_pitch_pt = _DOT_PITCH_EM * (median_pt or 8.0)
+    # The print's own grid, where the analyzer measured it: the index
+    # fixture's dots stand 6.2pt apart, not \dotfill's 3.6.
+    _dot_phase = None
+    if _table_md.get("leader_pitch"):
+        _dot_pitch_pt = _table_md["leader_pitch"] * _A4_WIDTH_PT
+        _dot_phase = _table_md.get("leader_phase")
+
+    def _phase_from(col: int, fallback: float) -> float:
+        """Where in each pitch column col's dots stand, from its text's
+        start: on the print's grid where it is known."""
+        start = _text_start(col) if col < ncols else None
+        if _dot_phase is None or start is None:
+            return fallback
+        return ((_dot_phase - start) * _A4_WIDTH_PT) % _dot_pitch_pt
 
     def _dots_at(phase_pt: float, overhang_pt: float = 0.0, weight: str = "") -> str:
         """Aligned leader dots, phase_pt into each pitch; overhang_pt runs
@@ -1972,7 +1986,7 @@ def _render_table(table: TableBlock) -> str:
             # Its dots on the next cell's grid coincide with the next
             # cell's own, so running on a pitch past the boundary only
             # sets the one the boundary cut.
-            return text.replace("\\dotfill", _dots_at(half, _dot_pitch_pt))
+            return text.replace("\\dotfill", _dots_at(_phase_from(col, half), _dot_pitch_pt))
         if col in _leader_joins and col - 1 < len(col_width_cm):
             left_over = (round(col_width_cm[col - 1], 2) * _PT_PER_CM) % _dot_pitch_pt
             # One leader, one weight: the cell it leads from sets it. The
@@ -1980,7 +1994,8 @@ def _render_table(table: TableBlock) -> str:
             # column and light from there to its page number wherever
             # that was set regular - its print is one weight throughout.
             weight = "\\bfseries " if lead_bold else "\\mdseries "
-            return text.replace("\\dotfill ", _dots_at((half - left_over) % _dot_pitch_pt, weight=weight), 1)
+            phase = _phase_from(col, (half - left_over) % _dot_pitch_pt)
+            return text.replace("\\dotfill ", _dots_at(phase, weight=weight), 1)
         return text
 
     def _fit_to_column(text: str, col: int) -> str:

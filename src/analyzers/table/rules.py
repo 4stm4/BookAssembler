@@ -2156,6 +2156,57 @@ def _print_right_of(np, pymupdf, page, rect, line_h: float):
     return pymupdf.Rect(clip.x0 + x0 / _LEADER_ZOOM, rect.y0, clip.x0 + x1 / _LEADER_ZOOM, rect.y1)
 
 
+def _measure_leader_grid(np, pymupdf, page, table) -> bool:
+    """Record the grid a table's dot leaders were printed on: their pitch
+    and the phase of their dots across the page (metadata leader_pitch,
+    leader_phase, page fractions). A leader's dots stand at whole pitches
+    from one origin down the page, and the builder sets ours on the same
+    grid; on its own, at its face's pitch from each cell's edge, every
+    dot of the index fixture's leaders fell between two of the print's.
+    Each leading cell's row is read from its end to the next cell, and its
+    blobs no bigger than a dot (_LEADER_DOT_SHARE of the line) are dots.
+    Returns whether a grid was found."""
+    pw, ph = page.rect.width, page.rect.height
+    right = table.visual_layout.bounding_box.x1 * pw
+    centres: List[List[float]] = []
+    for row in table.grid:
+        cells = sorted(row, key=_cell_x0)
+        for cell, nxt in zip(cells, cells[1:] + [None]):
+            if not (cell.metadata or {}).get("leader_after") or cell.visual_layout is None:
+                continue
+            b = cell.visual_layout.bounding_box
+            end = nxt.visual_layout.bounding_box.x0 * pw if nxt is not None and nxt.visual_layout else right
+            clip = pymupdf.Rect(b.x1 * pw, b.y0 * ph, end, b.y1 * ph) & page.rect
+            if clip.is_empty:
+                continue
+            line_h = (b.y1 - b.y0) * ph
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(_LEADER_ZOOM, _LEADER_ZOOM), clip=clip)
+            arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+            ink = arr[:, :, :3].mean(axis=2) < _RULE_INK_LEVEL
+            limit = _LEADER_DOT_SHARE * line_h * _LEADER_ZOOM
+            xs = sorted(
+                clip.x0 + (min(x for _, x in blob) + max(x for _, x in blob)) / 2 / _LEADER_ZOOM
+                for blob in _ink_blobs(np, ink)
+                if len(blob) >= 2
+                and max(y for y, _ in blob) - min(y for y, _ in blob) + 1 <= limit
+                and max(x for _, x in blob) - min(x for _, x in blob) + 1 <= limit
+            )
+            if len(xs) >= _LEADER_MIN_DOTS:
+                centres.append(xs)
+    steps = sorted(b - a for xs in centres for a, b in zip(xs, xs[1:]))
+    if len(steps) < 10:
+        return False
+    pitch = steps[len(steps) // 2]
+    # whole-pitch steps only: a missing dot doubles one, a speck halves it
+    fair = [d for d in steps if 0.75 * pitch <= d <= 1.25 * pitch]
+    pitch = sum(fair) / len(fair)
+    angles = [2 * np.pi * (x % pitch) / pitch for xs in centres for x in xs]
+    phase = (np.arctan2(np.mean(np.sin(angles)), np.mean(np.cos(angles))) % (2 * np.pi)) / (2 * np.pi) * pitch
+    table.metadata["leader_pitch"] = pitch / pw
+    table.metadata["leader_phase"] = float(phase) / pw
+    return True
+
+
 def _drop_leaders(np, pymupdf, page, table) -> int:
     """Take the dot leaders out of a table's cells.
 

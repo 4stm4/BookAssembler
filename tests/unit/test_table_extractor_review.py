@@ -1955,3 +1955,63 @@ class TestDisplayWidth:
         width = float(re.search(r"\\resizebox\{([\d.]+)pt\}\{\\height\}\{[^&]*?advertisers", tex).group(1))
         assert abs(width - 0.20 * 21 * 72.27 / 2.54) < 0.05
         assert not re.search(r"\\resizebox\{[\d.]+pt\}\{\\height\}\{[^&]*?NAME", tex)
+
+
+class TestLeaderGrid:
+    def test_the_print_s_dot_grid_is_measured(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _measure_leader_grid
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        rows = []
+        for k in range(4):
+            y = 300 + 14 * k
+            page.insert_text((100, y), f"NAME {k}", fontsize=10)
+            # dots every 6pt, centred on x = 2 + 6n
+            for n in range(25, 50):
+                page.draw_rect(pymupdf.Rect(6 * n + 1.4, y - 1.2, 6 * n + 2.6, y), color=None, fill=(0, 0, 0))
+            page.insert_text((310, y), str(10 + k), fontsize=10)
+            words = [w for w in page.get_text("words") if y - 10 < w[3] <= y + 4]
+            cells = []
+            for w in words:
+                cells.append(TableCell(
+                    content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text=w[4])])])],
+                    visual_layout=VisualLayout(bounding_box=NormalizedRect(
+                        x0=w[0] / 595, y0=w[1] / 842, x1=w[2] / 595, y1=w[3] / 842), page_or_screen_index=0)))
+            name = TableCell(content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text=f"NAME {k}")])])],
+                             visual_layout=VisualLayout(bounding_box=NormalizedRect(
+                                 x0=cells[0].visual_layout.bounding_box.x0, y0=cells[0].visual_layout.bounding_box.y0,
+                                 x1=cells[1].visual_layout.bounding_box.x1, y1=cells[1].visual_layout.bounding_box.y1),
+                                 page_or_screen_index=0))
+            name.metadata["leader_after"] = True
+            rows.append([name, cells[-1]])
+        table = TableBlock(grid=rows, row_count=4, column_count=2, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=0.15, y0=0.34, x1=0.56, y1=0.42), page_or_screen_index=0))
+        assert _measure_leader_grid(np, pymupdf, page, table)
+        assert abs(table.metadata["leader_pitch"] * 595 - 6.0) < 0.05
+        phase = table.metadata["leader_phase"] * 595
+        assert min(abs(phase - 2.0), abs(phase - 8.0)) < 0.3
+
+    def test_the_builder_sets_its_dots_on_that_grid(self):
+        import re
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        boxed = TestUnruledSetSide._boxed
+        grid = [[boxed(f"NAME {k}", 0.10, 0.30, 0.30 + 0.02 * k),
+                 boxed(str(10 + k) if k != 2 else "8, 9", 0.77 if k == 2 else 0.78, 0.80, 0.30 + 0.02 * k)]
+                for k in range(6)]
+        for row in grid:
+            row[0].metadata["leader_after"] = True
+            for cell in row:
+                cell.border_left = cell.border_right = True
+        table = TableBlock(grid=grid, row_count=6, column_count=2, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.80, y1=0.42), page_or_screen_index=0))
+        table.metadata = {"table_rule_x0": 0.08, "table_rule_x1": 0.83,
+                          "leader_pitch": 0.0104, "leader_phase": 0.0068}
+        tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
+        scale = 21 * 72.27 / 2.54
+        m = re.search(r"NAME 3\\leaders\\hbox to ([\d.]+)pt\{\\kern([\d.]+)pt", tex)
+        assert m and abs(float(m.group(1)) - 0.0104 * scale) < 0.01
+        # the names' column starts at 0.10: the first dot 0.0068 - 0.10 on, mod a pitch
+        assert abs(float(m.group(2)) - ((0.0068 - 0.10) * scale) % (0.0104 * scale)) < 0.02
