@@ -1663,8 +1663,15 @@ def _render_table(table: TableBlock) -> str:
             gap = (x0 - col_edge_x0[col]) * scale
         if abs(gap) <= min_gap:
             return text
-        hold = f"\\rule{{{gap:.2f}pt}}{{0pt}}" if gap > 0 else f"\\kern{gap:.2f}pt "
-        return text + hold if col_is_right[col] else hold + text
+        # A p{} cell opens in vertical mode, where a leading \kern is a
+        # vertical one: the cell's \vtop then took its height from the
+        # kern and hung its text a line low - the index fixture's
+        # "C. ITOH ELECTRONICS" 7.7pt under where its step put it.
+        # \leavevmode starts the line first.
+        if gap > 0:
+            hold = f"\\rule{{{gap:.2f}pt}}{{0pt}}"
+            return text + hold if col_is_right[col] else hold + text
+        return text + f"\\kern{gap:.2f}pt " if col_is_right[col] else f"\\leavevmode\\kern{gap:.2f}pt " + text
 
     def _fit_to_column(text: str, col: int) -> str:
         """A one-line cell of a narrow column, boxed to the column's width

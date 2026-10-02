@@ -1,6 +1,6 @@
 """Debug-only: where the rebuild set each word, relative to its table crop.
 
-Run with python3 (argument A or B), not pytest.
+Run with python3 (argument A, B or a fixture path), not pytest.
 """
 import sys
 import tempfile
@@ -12,7 +12,8 @@ from src.krm.models import ContainerUnit, KnowledgeDocument
 from tests.e2e.test_assembled_table_pdf import FIXTURE_A, FIXTURE_B, _extract_table
 from tests.e2e.test_visual_overlay import _output_table_rect, _table_texts
 
-fx = FIXTURE_A if (sys.argv[1:] or ["A"])[0] == "A" else FIXTURE_B
+arg = (sys.argv[1:] or ["A"])[0]
+fx = {"A": FIXTURE_A, "B": FIXTURE_B}.get(arg) or Path(arg)
 t = _extract_table(fx)
 tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[t])]))
 with tempfile.TemporaryDirectory() as td:
