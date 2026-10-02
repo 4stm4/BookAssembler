@@ -2699,10 +2699,22 @@ def _render_table(table: TableBlock) -> str:
             return 0.0
         return max(0.0, (top - rule_pt) - _natural_pad_pt)
 
+    _ruled_sides = "|" in col_spec
+
+    def _air_cmd(air_pt: float) -> str:
+        """Space under a rule. A \\noalign skip stops every vertical rule
+        for its height - the index fixture's frame had a 16pt gap down both
+        sides under its heading's rule - so where the table has verticals,
+        space is an empty row, which draws them: its own line high, its
+        \\tabularnewline making up the rest either way."""
+        if air_pt <= 0 or not _ruled_sides:
+            return f"\\noalign{{\\vskip {air_pt:.2f}pt}}"
+        return " & " * (ncols - 1) + f" \\tabularnewline[{air_pt - _base_line_pt:.2f}pt]"
+
     if _rules_pt and _top_rule_pt is not None:
         _top_air_pt = _air_under_rule_pt(_top_rule_pt, 0)
     if _has_top_rule and abs(_top_air_pt) > 0.1:
-        body_lines.append(f"\\noalign{{\\vskip {_top_air_pt:.2f}pt}}")
+        body_lines.append(_air_cmd(_top_air_pt))
 
     # Rule-driven row heights. For a ruled table the source's own rules are
     # the ground truth for where each row ends: a row's text steps are not
@@ -2851,7 +2863,7 @@ def _render_table(table: TableBlock) -> str:
         if rule and _rules_pt:
             rule += _sub_rules_from(_rule_below_pt(i))
         if abs(_rule_air_pt) > 0.01:
-            rule = rule + f"\\noalign{{\\vskip {_rule_air_pt:.2f}pt}}"
+            rule = rule + _air_cmd(_rule_air_pt)
         # \tabularnewline, not bare "\\ " - a row ending in a p{} column
         # (every column can be p{} now that narrow columns get a measured
         # width too) can make a plain "\\" behave like the paragraph-
