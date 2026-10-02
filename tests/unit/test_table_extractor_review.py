@@ -1459,3 +1459,52 @@ class TestRowRise:
     def test_a_row_in_larger_type_takes_its_own_height_out_of_its_step(self):
         # 20pt capitals stand some 5pt above an 8pt table's strut
         assert self._heading_extra(8.0) - self._heading_extra(20.0) > 4.0
+
+
+class TestDeflateBoxes:
+    @staticmethod
+    def _table(raise_pt, two_lines=False):
+        import pymupdf
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        rows = []
+        for k in range(6):
+            y = 300 + 12 * k
+            page.insert_text((100, y), f"NAME {k}", fontsize=8)
+            words = [w for w in page.get_text("words") if w[0] < 300 and y < w[3] <= y + 4]
+            box = NormalizedRect(x0=min(w[0] for w in words) / 595, y0=min(w[1] for w in words) / 842,
+                                 x1=max(w[2] for w in words) / 595, y1=max(w[3] for w in words) / 842)
+            rows.append([TableCell(
+                content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text=f"NAME {k}")])])],
+                visual_layout=VisualLayout(bounding_box=box, page_or_screen_index=0))])
+        if two_lines:
+            page.insert_text((300, 336), "FIRST LINE", fontsize=8)
+            page.insert_text((300, 348), "SECOND LINE", fontsize=8)
+            words = [w for w in page.get_text("words") if w[0] >= 300]
+            box = NormalizedRect(x0=300 / 595, y0=min(w[1] for w in words) / 842,
+                                 x1=max(w[2] for w in words) / 595, y1=max(w[3] for w in words) / 842)
+            rows[3].append(TableCell(
+                content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text="FIRST LINE SECOND LINE")])])],
+                visual_layout=VisualLayout(bounding_box=box, page_or_screen_index=0)))
+        b = rows[3][0].visual_layout.bounding_box
+        # OCR's box over row 3 reaching up into row 2's text
+        rows[3][0].visual_layout.bounding_box = NormalizedRect(x0=b.x0, y0=b.y0 - raise_pt / 842, x1=b.x1, y1=b.y1)
+        table = TableBlock(grid=rows, row_count=6, column_count=2, visual_layout=rows[0][0].visual_layout)
+        return doc, page, table, b.y0
+
+    def test_a_box_reaching_into_the_line_above_comes_down(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _deflate_boxes
+        doc, page, table, y0 = self._table(raise_pt=6.0)
+        assert _deflate_boxes(np, pymupdf, page, table) == 1
+        assert abs(table.grid[3][0].visual_layout.bounding_box.y0 - y0) * 842 < 1.0
+
+    def test_a_cell_of_two_lines_keeps_its_box(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _deflate_boxes
+        doc, page, table, _ = self._table(raise_pt=0.0, two_lines=True)
+        before = table.grid[3][1].visual_layout.bounding_box
+        _deflate_boxes(np, pymupdf, page, table)
+        assert table.grid[3][1].visual_layout.bounding_box == before

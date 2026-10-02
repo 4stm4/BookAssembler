@@ -1868,6 +1868,70 @@ def _mark_italic(np, pymupdf, page, table) -> int:
     return italic
 
 
+_INFLATED_SLACK_PT = 1.5   # more box above a line than usual, past noise
+
+
+def _deflate_boxes(np, pymupdf, page, table) -> int:
+    """Bring down the top of each one-line cell box that OCR inflated.
+
+    A box's foot sits on its print - on the index fixture every cell's
+    bottom is within 0.3pt of its ink - but its top can take in whatever
+    noise, or the line above, stood over it: six rows there are boxed 11pt
+    tall over 6pt capitals, three of them reaching into the name above.
+    Their steps and their type size, both read off those boxes, came out
+    4pt and up to 4pt too large. A cell's own line is the lowest run of
+    ink rows in its box; where the box stands above that line by more than
+    the table's usual margin (_INFLATED_SLACK_PT past it), its top is set
+    that usual margin above the line. Cells of several lines are left as
+    they are - a cell is one line where nothing over its own line is
+    another: only specks under half its height, and at most one run
+    cut off by the box's top, the foot of the line above. So are cells
+    with no letter or figure, whose boxes are this module's own (a
+    placeholder mark). Returns how many boxes were brought down."""
+    from dataclasses import replace
+    pw, ph = page.rect.width, page.rect.height
+    lines = []
+    for row in table.grid:
+        for cell in row:
+            vl = cell.visual_layout
+            text = _cell_text_of(cell)
+            if vl is None or vl.bounding_box is None or "\n" in text or not any(ch.isalnum() for ch in text):
+                continue
+            b = vl.bounding_box
+            clip = pymupdf.Rect(b.x0 * pw, b.y0 * ph, b.x1 * pw, b.y1 * ph) & page.rect
+            if clip.is_empty:
+                continue
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(_RULE_ZOOM, _RULE_ZOOM), clip=clip, colorspace=pymupdf.csGRAY)
+            ink = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width) < _RULE_INK_LEVEL
+            runs = _runs_of(np, ink.any(axis=1))
+            if not runs:
+                continue
+            own = runs[-1][1] - runs[-1][0]
+            over = [r for r in runs[:-1] if r[1] - r[0] >= own / 2]
+            if len(over) > 1 or (over and over[0][0] > 0):
+                continue
+            lines.append((cell, clip, runs[-1][0] / _RULE_ZOOM))
+    if not lines:
+        return 0
+    margins = sorted(top for _, _, top in lines)
+    usual = margins[len(margins) // 2]
+    deflated = 0
+    for cell, clip, top in lines:
+        if top <= usual + _INFLATED_SLACK_PT:
+            continue
+        vl = cell.visual_layout
+        vl.bounding_box = replace(vl.bounding_box, y0=(clip.y0 + top - usual) / ph)
+        deflated += 1
+    return deflated
+
+
+def _runs_of(np, flags) -> List[Tuple[int, int]]:
+    """The [start, end) runs of True in a 1-D boolean array."""
+    padded = np.concatenate(([False], flags, [False])).astype(np.int8)
+    edges = np.flatnonzero(np.diff(padded))
+    return list(zip(edges[::2].tolist(), edges[1::2].tolist()))
+
+
 def _row_words(cells, words, pw: float, ph: float) -> List[Optional[List[Any]]]:
     """The page words each of a row's cells (sorted by x) holds.
 
