@@ -1597,3 +1597,34 @@ class TestDisplayTypeSize:
         assert _size_display_type(np, pymupdf, page, table) == 1
         assert abs(cells[0][0].visual_layout.style.font_size_pt - 28) < 1.5
         assert cells[1][0].visual_layout.style.font_size_pt == 8
+
+
+class TestAirUnderRuleWithoutCap:
+    @staticmethod
+    def _air(band):
+        import re
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        boxed = TestUnruledSetSide._boxed
+        grid = [[boxed("index to advertisers", 0.10, 0.40, 0.20), boxed("", 0.78, 0.80, 0.20)]]
+        grid += [[boxed(f"NAME {k}", 0.10, 0.30, 0.26 + 0.015 * k), boxed(str(k), 0.78, 0.80, 0.26 + 0.015 * k)]
+                 for k in range(6)]
+        for cell in grid[0]:
+            cell.border_bottom = True
+        table = TableBlock(
+            grid=grid, row_count=len(grid), column_count=2,
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=0.10, y0=0.20, x1=0.80, y1=0.36), page_or_screen_index=0,
+            ),
+        )
+        table.metadata = {"rule_y": [0.245], "rule_weight_pt": [1.3], "text_band_pt": [band]}
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        tex = build_latex(doc)
+        row = tex[tex.index("index to advertisers"):tex.index("NAME 0")]
+        return float(re.search(r"\\vskip (-?[\d.]+)pt", row).group(1))
+
+    def test_one_band_over_the_whole_body_sits_as_a_line_of_our_capitals(self):
+        import pytest
+        # the body's only band runs 90pt: no line of the source's to take a
+        # capital height from, so the text is set as one of ours would be
+        assert self._air([22.0, 112.0]) == pytest.approx(self._air([22.0, 22.0 + 0.68 * 8.0]), abs=0.05)

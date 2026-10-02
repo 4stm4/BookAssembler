@@ -2667,7 +2667,11 @@ def _render_table(table: TableBlock) -> str:
     _heights = sorted(
         b[1] - b[0] for b in _text_band.values() if b[1] - b[0] <= 1.5 * _line_box_pt
     )
-    _source_cap_pt = _heights[len(_heights) // 2] if _heights else 0.0
+    # With no one-line band to measure - the index fixture has one band,
+    # its whole body under the rule beneath its heading - our own cap
+    # height stands in. Zero there set the first entry half a capital
+    # (2.8pt) too close under that rule.
+    _source_cap_pt = _heights[len(_heights) // 2] if _heights else 0.68 * (median_pt or 8.0)
     # Our glyphs' centre under a row's top: the baseline sits on the
     # strut, 0.7 of the row down, and caps and figures reach 0.68 of the
     # size above it.
