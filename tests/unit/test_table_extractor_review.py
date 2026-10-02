@@ -1739,3 +1739,30 @@ class TestSetRight:
         from src.assembler.latex_builder import _set_right
         spans = [(100.0, 140.0), (100.0, 141.0), (100.0, 139.0), (100.0, 120.0), (100.5, 160.0)]
         assert not _set_right(spans, [a for a, _ in spans], [b for _, b in spans])
+
+
+class TestLeaderToNumber:
+    def test_a_leader_runs_on_to_the_page_number_in_a_framed_table(self):
+        import re
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        boxed = TestUnruledSetSide._boxed
+        grid = [[boxed(f"NAME {k}", 0.10, 0.30, 0.30 + 0.02 * k),
+                 boxed(str(10 + k) if k != 2 else "8, 9", 0.77 if k == 2 else 0.78, 0.80, 0.30 + 0.02 * k)]
+                for k in range(6)]
+        for row in grid:
+            row[0].metadata["leader_after"] = True
+            for cell in row:
+                cell.border_left = cell.border_right = True
+        table = TableBlock(
+            grid=grid, row_count=len(grid), column_count=2,
+            visual_layout=VisualLayout(
+                bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.80, y1=0.42), page_or_screen_index=0,
+            ),
+        )
+        table.metadata = {"table_rule_x0": 0.08, "table_rule_x1": 0.83}
+        doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
+        tex = build_latex(doc)
+        spec = re.search(r"\\begin\{tabular\}\{(.*)\}", tex).group(1)
+        assert "cm}@{}>" in spec                      # closed up where the leader crosses
+        assert re.search(r"NAME 3\\dotfill\}? &[^&]*\\dotfill 13", tex)

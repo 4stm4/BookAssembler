@@ -950,6 +950,18 @@ def _render_table(table: TableBlock) -> str:
             return sum(1 for r in _grid_rules if (x0 + x1) / 2.0 > r)
         return min(range(len(bins)), key=lambda i: abs(bins[i] - x0))
 
+    # Boundaries a dot leader runs across: in a framed table with no rule
+    # inside, between a column whose cells lead on and the next. They are
+    # closed up (@{}), the next column's cell taking the leader on from its
+    # left edge to its value - the index fixture's leaders reach each page
+    # number as printed, where they stopped at the names' column with a
+    # \tabcolsep of nothing either side and the number set off past it.
+    _leader_joins = {
+        _column_index(c) + 1 for row in grid for c in row if (c.metadata or {}).get("leader_after")
+    } if (bins and ("table_rule_x0" in md or "table_rule_x1" in md)
+          and not md.get("column_rule_x")) else set()
+    _leader_joins = {b for b in _leader_joins if 0 < b < len(bins or [])}
+
     span_map = getattr(table, "span_map", {})
     # Where each lone placeholder mark sits in the source, by (row, col) -
     # see _place_at_printed_x below. Filled only where cells are binned by x.
@@ -1067,6 +1079,12 @@ def _render_table(table: TableBlock) -> str:
                 # the end of its column.
                 if (cell.metadata or {}).get("leader_after"):
                     body += "\\dotfill"
+                # ...and on through the next column to its value, across a
+                # boundary closed up for it (_leader_joins).
+                if col in _leader_joins and any(
+                    (c.metadata or {}).get("leader_after") and _column_index(c) == col - 1 for c in row
+                ):
+                    body = "\\dotfill " + body
                 text = _styled_cell_text(cell, body, median_pt, raw=raw, line_box=line_box,
                                          leading_pt=_leading, latin_font=_latin_font)
                 if (getattr(cell, "row_span", 1) or 1) == 1:
@@ -1559,7 +1577,7 @@ def _render_table(table: TableBlock) -> str:
         _starts = [_text_start(i) for i in range(ncols)]
         fractions = [
             (col_max_x1[i] - _starts[i]) if i == ncols - 1
-            else (_starts[i + 1] - _starts[i] - _gap)
+            else (_starts[i + 1] - _starts[i] - (0.0 if i + 1 in _leader_joins else _gap))
             if all(v is not None for v in (_starts[i], col_max_x1[i], _starts[min(i + 1, ncols - 1)]))
             else None
             for i in range(ncols)
@@ -1660,7 +1678,7 @@ def _render_table(table: TableBlock) -> str:
             # that, they ruled the index fixture's names off from its page
             # numbers, where the source has only a frame.
             for boundary in range(1, ncols):
-                seps[boundary] = ""
+                seps[boundary] = "@{}" if boundary in _leader_joins else ""
             # And the frame stands where it was printed from the text, not
             # a \tabcolsep off it: the index fixture's frame is 22pt out
             # from its names and 21pt from its page numbers.
@@ -1682,14 +1700,17 @@ def _render_table(table: TableBlock) -> str:
                 _text_start(i) is not None for i in range(ncols)
             ):
                 _sep_frac = _tabcolsep_pt / _scale
-                _source_bounds = [_fx0] + [_text_start(i) - _sep_frac for i in range(1, ncols)] + [_fx1]
+                _source_bounds = [_fx0] + [
+                    _text_start(i) - (0.0 if i in _leader_joins else _sep_frac) for i in range(1, ncols)
+                ] + [_fx1]
                 _x = _rule_w_pt + _pad_l
                 _emitted_bounds_pt = [_rule_w_pt / 2.0]
                 for i in range(ncols):
                     _x += round(col_width_cm[i], 2) * _PT_PER_CM
                     if i < ncols - 1:
-                        _emitted_bounds_pt.append(_x + _tabcolsep_pt)
-                        _x += 2 * _tabcolsep_pt
+                        _join = i + 1 in _leader_joins
+                        _emitted_bounds_pt.append(_x + (0.0 if _join else _tabcolsep_pt))
+                        _x += 0.0 if _join else 2 * _tabcolsep_pt
                 _emitted_bounds_pt.append(_x + _pad_r + _rule_w_pt / 2.0)
         col_spec = seps[0] + "".join(
             part + seps[i + 1] for i, part in enumerate(col_spec_parts)
