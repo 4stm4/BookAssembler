@@ -1796,8 +1796,8 @@ class TestBoxGrid:
             page.draw_rect(pymupdf.Rect(150 + 100 * k, 140, 250 + 100 * k, 180), color=(0, 0, 0), fill=blue, width=0.7)
             page.insert_text((165 + 100 * k, 164), label, fontsize=10)
         page.draw_rect(pymupdf.Rect(80, 100, 150, 180), color=None, fill=yellow)
-        page.insert_text((270, 124), "USER", fontsize=12)
-        page.insert_text((88, 144), "BTS6120", fontsize=10)
+        page.insert_text((262, 124), "USER LAYER", fontsize=12, fontname="heit")
+        page.insert_text((88, 144), "BTS6120", fontsize=10, fontname="hebo")
         return doc, page
 
     def test_boxes_make_a_grid_with_spans(self):
@@ -1809,12 +1809,22 @@ class TestBoxGrid:
         assert grid is not None
         assert len(grid.xs) == 5 and len(grid.ys) == 3
         by_text = {" ".join(w[4] for w in c.words): c for c in grid.cells if c.words}
-        user, bts = by_text["USER"], by_text["BTS6120"]
+        user, bts = by_text["USER LAYER"], by_text["BTS6120"]
         assert (user.row_span, user.col_span) == (1, 3) and all(user.ruled)
         # its right side is its ruled neighbours' left; the rest is colour
         assert (bts.row_span, bts.col_span) == (2, 1) and bts.ruled == (False, True, False, False)
         assert bts.fill is not None and bts.fill[2] < 120
         assert all(by_text[t].ruled == (True, True, True, True) for t in ("Startup", "RAM Disk", "ATA Disk"))
+
+    def test_a_label_keeps_its_weight_and_slant(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.boxes import _box_grid
+        doc, page = self._page()
+        cells = {" ".join(w[4] for w in c.words): c for c in _box_grid(np, pymupdf, page).cells if c.words}
+        assert cells["BTS6120"].bold and not cells["BTS6120"].italic
+        assert cells["USER LAYER"].italic
+        assert not any(cells[t].bold or cells[t].italic for t in ("Startup", "RAM Disk", "ATA Disk"))
 
     def test_a_label_is_sized_by_its_ink(self):
         import numpy as np
@@ -1847,7 +1857,7 @@ class TestBoxGrid:
         table = _table_from_box_grid(_box_grid(np, pymupdf, page), 0, 595, 842)
         assert table.metadata["box_grid"] and table.column_count == 4 and table.row_count == 2
         cells = {_cell_text_of(c): c for row in table.grid for c in row}
-        user = cells["USER"]
+        user = cells["USER LAYER"]
         assert (user.metadata["grid_row"], user.metadata["grid_col"], user.col_span) == (0, 1, 3)
         assert table.span_map[(0, 3)] == (0, 1) and table.span_map[(1, 0)] == (0, 0)
         assert user.visual_layout.style.background_color_rgb is not None and user.border_top
@@ -1877,7 +1887,7 @@ class TestBoxTableRender:
         body = tex[tex.index("\\begin{tabular}"):tex.index("\\end{tabular}")]
         rows = body.split("\\tabularnewline")
         # fills and side rules per cell, rules across as rows of their own
-        assert "\\multicolumn{3}{|m{" in rows[0] and "\\cellcolor[RGB]" in rows[0] and "USER" in rows[0]
+        assert "\\multicolumn{3}{|m{" in rows[0] and "\\cellcolor[RGB]" in rows[0] and "USER LAYER" in rows[0]
         assert "\\cline" not in body and "\\noalign{\\hbox to 0pt{" in body
         # a label over two rows is set in the last of them, raised to their middle
         assert "BTS6120" not in rows[0]

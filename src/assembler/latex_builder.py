@@ -943,8 +943,10 @@ def _render_box_table(table: TableBlock) -> str:
         raw = _cell_text(cell).strip()
         if not raw:
             return ""
-        size = _snap_size(_size_of(cell.visual_layout.style), usual_size)
-        font = "\\latinsans " if _is_latin_only(raw) else ""
+        style = cell.visual_layout.style
+        size = _snap_size(_size_of(style), usual_size)
+        font = ("\\latinsans " if _is_latin_only(raw) else "") + (
+            "\\bfseries " if style.is_bold else "") + ("\\itshape " if style.is_italic else "")
         lines = "\\\\".join(_esc(line) for line in raw.split("\n"))
         width = sum(widths[cell.metadata["grid_col"]:cell.metadata["grid_col"] + cell.col_span])
         # Set in the cell's last row and raised to its middle: the rows

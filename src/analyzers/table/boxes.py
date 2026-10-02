@@ -20,6 +20,8 @@ being a rule.
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple
 
+from src.analyzers.table.rules import _ITALIC_SLANT, _slant
+
 _BOX_ZOOM = 3.0
 _DARK_LEVEL = 110            # every channel under this: drawn line or text
 _MIN_BOUNDARY_PT = 15.0      # glyph strokes and their edges run shorter
@@ -47,6 +49,9 @@ class BoxCell:
     ruled: Tuple[bool, bool, bool, bool]
     words: List[Any] = field(default_factory=list)
     size: float = 0.0          # type size read off its first line's ink (pt)
+    stroke: float = 0.0        # median stroke width of its ink (pt)
+    bold: bool = False
+    italic: bool = False
 
 
 @dataclass
@@ -102,6 +107,23 @@ def _coverage(segs: List[Tuple[float, int, int]], at: float, lo: float, hi: floa
 
 _CAP_SHARE = 0.72            # capitals and ascenders over the type size
 _DESCENT_SHARE = 0.21        # descenders under the baseline over it
+
+
+_BOLD_SHARE = 1.3            # a stroke this much over the table's usual is bold
+_STROKE_ZOOM = 6.0
+
+
+def _label_ink(dark, cell: "BoxCell", z: float, inset: float):
+    """The ink inside a cell, its rules left out."""
+    x0, y0, x1, y1 = (int(v * z) for v in cell.rect)
+    pad = int(inset)
+    return dark[y0 + pad:y1 - pad, x0 + pad:x1 - pad]
+
+
+def _stroke(np, ink) -> float:
+    """The median width of a mask's horizontal ink runs, in pixels."""
+    widths = [b - a for line in ink if line.any() for a, b in _runs(np, line, 1)]
+    return float(sorted(widths)[len(widths) // 2]) if widths else 0.0
 
 
 def _ink_size(np, dark, cell: "BoxCell", z: float, inset: float) -> float:
@@ -210,6 +232,28 @@ def _box_grid(np, pymupdf, page) -> Optional[BoxGrid]:
         x0, y0, x1, y1 = cell.rect
         cell.words = [w for w in words if x0 <= (w[0] + w[2]) / 2 <= x1 and y0 <= (w[1] + w[3]) / 2 <= y1]
         cell.size = _ink_size(np, dark, cell, z, near)
+        ink = _label_ink(dark, cell, z, near)
+        cell.italic = bool(cell.words) and ink.any() and _slant(np, ink) >= _ITALIC_SLANT
+        # Stroke widths at twice the zoom: at three a stroke is three
+        # pixels or four, and regular and bold differ by about one.
+        inset = _CLUSTER_PT
+        x0, y0, x1, y1 = cell.rect
+        clip = pymupdf.Rect(x0 + inset, y0 + inset, x1 - inset, y1 - inset)
+        if cell.words and not clip.is_empty:
+            fine = page.get_pixmap(matrix=pymupdf.Matrix(_STROKE_ZOOM, _STROKE_ZOOM), clip=clip)
+            px = np.frombuffer(fine.samples, dtype=np.uint8).reshape(fine.height, fine.width, fine.n)[:, :, :3]
+            cell.stroke = _stroke(np, px.max(axis=2) < _DARK_LEVEL) / _STROKE_ZOOM
+    # Bold against the table's own weight - what one diagram sets regular
+    # another's scan prints heavier - and per point of type: strokes grow
+    # with the size, and the fixture's 12pt "Applications" outweighed its
+    # 10pt labels without being any bolder.
+    def weight(c) -> float:
+        return c.stroke / c.size if c.size > 0 else 0.0
+
+    weights = sorted(weight(c) for c in cells if c.words and weight(c) > 0)
+    usual = weights[len(weights) // 2] if weights else 0.0
+    for cell in cells:
+        cell.bold = bool(cell.words) and usual > 0 and weight(cell) > _BOLD_SHARE * usual
     # Boxes of colour, not a ruled grid on paper: a ruled table's rows and
     # columns are its text's, and the text-layer detection reads them -
     # taken as boxes, the decimal/binary and pin description fixtures lost
@@ -246,7 +290,8 @@ def _table_from_box_grid(grid: BoxGrid, page_idx: int, pw: float, ph: float) -> 
     span_map = {}
     for box in sorted(grid.cells, key=lambda b: (b.row, b.col)):
         x0, y0, x1, y1 = box.rect
-        style = StyleDescriptor(font_size_pt=box.size, background_color_rgb=box.fill)
+        style = StyleDescriptor(font_size_pt=box.size, background_color_rgb=box.fill,
+                                is_bold=box.bold, is_italic=box.italic)
         cell = TableCell(
             row_span=box.row_span,
             col_span=box.col_span,
