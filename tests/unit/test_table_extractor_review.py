@@ -1603,9 +1603,14 @@ class TestDisplayTypeSize:
                 visual_layout=VisualLayout(bounding_box=box, page_or_screen_index=0,
                                            style=StyleDescriptor(font_size_pt=0.72 * size if y == 200 else size)))])
         table = TableBlock(grid=cells, row_count=4, column_count=1, visual_layout=cells[0][0].visual_layout)
+        # OCR's box for it standing 4pt over its ink
+        b = cells[0][0].visual_layout.bounding_box
+        cells[0][0].visual_layout.bounding_box = NormalizedRect(x0=b.x0, y0=b.y0 - 4 / 842, x1=b.x1, y1=b.y1)
         assert _size_display_type(np, pymupdf, page, table) == 1
         assert abs(cells[0][0].visual_layout.style.font_size_pt - 28) < 1.5
         assert cells[1][0].visual_layout.style.font_size_pt == 8
+        # its box now starts at its ink: "index to" reaches 0.72 of 28pt over its baseline at 200
+        assert abs(cells[0][0].visual_layout.bounding_box.y0 * 842 - (200 - 0.72 * 28)) < 1.0
 
 
 class TestAirUnderRuleWithoutCap:

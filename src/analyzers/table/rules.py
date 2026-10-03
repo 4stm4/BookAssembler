@@ -1946,6 +1946,10 @@ def _size_display_type(np, pymupdf, page, table) -> int:
                 continue
             share = _CAP_SHARE + (_DESCENT_SHARE if any(ch in "gjpqy" for ch in text) else 0.0)
             vl.style = replace(vl.style, font_size_pt=(rows[-1] + 1 - rows[0]) / _RULE_ZOOM / share)
+            # Its box from its ink's top, too: the type's top is where its
+            # rows step from, and OCR boxed the index fixture's two heading
+            # lines 2.7 and 1.8pt over their ink - set 2.2pt too far apart.
+            vl.bounding_box = replace(b, y0=(clip.y0 + rows[0] / _RULE_ZOOM) / ph)
             resized += 1
     return resized
 
