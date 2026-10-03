@@ -1938,9 +1938,23 @@ class TestLineToPrintedWidth:
         cell.visual_layout.bounding_box = NormalizedRect(x0=box.x0, y0=box.y0, x1=box.x1, y1=box.y0 + 0.025)
         cell.metadata["line_segments"] = [[[box.x0, "one two three", box.x0 + 0.06]], [[box.x0, "four", box.x0 + 0.02]]]
         tex = _ruled_tex(rows)
-        width = float(re.search(r"\\makebox\[([\d.]+)pt\]\[s\]\{one two three\}", tex).group(1))
+        width = float(re.search(r"\\resizebox\{([\d.]+)pt\}\{\\height\}\{one two three\}", tex).group(1))
         assert abs(width - 0.06 * 21 * 72.27 / 2.54) < 0.05
-        assert "[s]{four}" not in tex                  # one word has no spaces to spread
+
+    def test_runs_keep_their_printed_gap(self):
+        import re
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("and an INTA will be issued\nnext", x0=0.20, y0=0.32),
+                 _cell("V", x0=0.33, y0=0.32)]]
+        cell = rows[1][1]
+        box = cell.visual_layout.bounding_box
+        cell.visual_layout.bounding_box = NormalizedRect(x0=box.x0, y0=box.y0, x1=box.x1, y1=box.y0 + 0.025)
+        cell.metadata["line_segments"] = [
+            [[box.x0, "and an INTA", box.x0 + 0.04], [box.x0 + 0.05, "will be issued", box.x0 + 0.10]],
+            [[box.x0, "next", box.x0 + 0.02]]]
+        tex = _ruled_tex(rows)
+        gap = float(re.search(r"\{and an INTA\}\\hspace\*\{([\d.]+)pt\}", tex).group(1))
+        assert abs(gap - 0.01 * 21 * 72.27 / 2.54) < 0.05
 
 
 class TestDisplayWidth:

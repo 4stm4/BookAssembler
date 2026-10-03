@@ -628,14 +628,17 @@ def _positioned_lines(cell: Any, raw: str) -> str:
             words = text.split()
             marked = _bold_marked(words, line_flags[used:used + len(words)])
             used += len(words)
-            if nxt is not None:
+            if len(run) > 2:
+                # Each run across its printed width, then the printed gap
+                # to the next: set at our face's own widths the pin
+                # description fixture's lines fell 8-10pt short, and a run
+                # boxed to the next one's start, its type grown to the
+                # print's, closed the gap between them ("INTAwill").
+                out += f"\\resizebox{{{(run[2] - x) * _A4_WIDTH_PT:.2f}pt}}{{\\height}}{{{marked}}}"
+                if nxt is not None:
+                    out += f"\\hspace*{{{(nxt[0] - run[2]) * _A4_WIDTH_PT:.2f}pt}}"
+            elif nxt is not None:
                 out += f"\\makebox[{(nxt[0] - x) * _A4_WIDTH_PT:.2f}pt][l]{{{marked}}}"
-            elif len(run) > 2 and len(words) > 2:
-                # A line of words ends where it was printed: its spaces
-                # spread to its printed width. Our face's glyphs run
-                # narrower than the print's, and set at their own widths
-                # the pin description fixture's lines fell 8-10pt short.
-                out += f"\\makebox[{(run[2] - x) * _A4_WIDTH_PT:.2f}pt][s]{{{marked}}}"
             else:
                 out += marked
         lines.append(out)
@@ -1255,14 +1258,14 @@ def _render_table(table: TableBlock) -> str:
                 _leading = 0.0
                 if "\n" in raw and not _printed_on_one_line(cell, line_box):
                     stacked.add((row_idx, col))
-                    body = "\\lineskiplimit=-\\maxdimen " + (
-                        _positioned_lines(cell, raw) or "\\newline ".join(_line_texts(cell, raw))
-                    )
                     _n = raw.count("\n") + 1
                     _h = _box_height(cell)
                     if _h is not None and _n > 1:
                         _leading = max(0.0, (_h - line_box) * _A4_HEIGHT_PT / (_n - 1))
                         line_pitch[(row_idx, col)] = _leading
+                    body = "\\lineskiplimit=-\\maxdimen " + (
+                        _positioned_lines(cell, raw) or "\\newline ".join(_line_texts(cell, raw))
+                    )
                 else:
                     body = " ".join(_line_texts(cell, raw))
                 # A dot leader the source printed after this cell runs on to
