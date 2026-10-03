@@ -479,7 +479,7 @@ def _is_latin_only(text: str) -> bool:
 
 def _styled_cell_text(
     cell: Any, text: str, median_pt: float = 0.0, raw: str = "", line_box: float = 0.0,
-    leading_pt: float = 0.0, latin_font: str = "\\latinfont",
+    leading_pt: float = 0.0, latin_font: str = "\\latinfont", fit_width: bool = False,
 ) -> str:
     """Wrap a cell's escaped text in the typography the source printed it in.
 
@@ -531,9 +531,24 @@ def _styled_cell_text(
     # and the index fixture's condensed "advertisers" came out 29% wider
     # in Heros. Its height stays; only its width is fitted to its box.
     box = getattr(vl, "bounding_box", None) if vl else None
-    if (median_pt > 0 and size_pt > _DISPLAY_SHARE * median_pt and box is not None
-            and "\n" not in (raw or text) and "\\newline" not in text):
+    one_line = box is not None and "\n" not in (raw or text) and "\\newline" not in text and "\\makebox" not in text
+    if median_pt > 0 and size_pt > _DISPLAY_SHARE * median_pt and one_line:
         body = f"\\resizebox{{{(box.x1 - box.x0) * _A4_WIDTH_PT:.2f}pt}}{{\\height}}{{{body}}}"
+    lead, words = False, text
+    if one_line and fit_width and sum(ch.isalpha() for ch in (raw or text)) >= _FIT_MIN_LETTERS:
+        # A line of words at its printed width too, its leader left to run
+        # on after it: the index fixture's names, in Heros Bold, ran 5%
+        # past the print's.
+        lead = text.endswith("\\dotfill")
+        words = text[: -len("\\dotfill")] if lead else text
+    printed = (getattr(cell, "metadata", None) or {}).get("printed_width")
+    if (median_pt > 0 and not size_pt > _DISPLAY_SHARE * median_pt and one_line and fit_width and printed
+            and sum(ch.isalpha() for ch in (raw or text)) >= _FIT_MIN_LETTERS and "\\dotfill" not in words
+            and ".." not in (raw or text)):
+        # (not where OCR's leftover dots are among its words: their width
+        # is a leader's, and a name fitted to it ran out of its column)
+        body = prefix + f"\\leavevmode\\resizebox{{{printed * _A4_WIDTH_PT:.2f}pt}}{{\\height}}{{{words}}}" + (
+            "\\dotfill" if lead else "")
 
     colour = getattr(style, "text_color_rgb", None)
     if colour and tuple(colour) != (0, 0, 0):
@@ -825,6 +840,8 @@ _PLACE_MIN_PT = 0.2
 _ASCENT = 0.7
 # The weight a box table's rules are drawn at.
 _BOX_RULE_PT = 0.6
+# Letters a line needs before it is fitted to its printed width.
+_FIT_MIN_LETTERS = 4
 # A cell set this much over the table's usual size is display type.
 _DISPLAY_SHARE = 1.5
 # A dot leader's pitch, as \dotfill sets it.
@@ -1259,7 +1276,7 @@ def _render_table(table: TableBlock) -> str:
                 ):
                     body = "\\dotfill " + body
                 text = _styled_cell_text(cell, body, median_pt, raw=raw, line_box=line_box,
-                                         leading_pt=_leading, latin_font=_latin_font)
+                                         leading_pt=_leading, latin_font=_latin_font, fit_width=True)
                 if (getattr(cell, "row_span", 1) or 1) == 1:
                     text = _lowered_to_print(text, cell, _row_top_line, line_box)
                 texts[col] = raw

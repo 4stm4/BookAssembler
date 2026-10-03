@@ -1937,12 +1937,15 @@ def _size_display_type(np, pymupdf, page, table) -> int:
                 continue
             b = vl.bounding_box
             clip = pymupdf.Rect(b.x0 * pw, b.y0 * ph, b.x1 * pw, b.y1 * ph) & page.rect
-            mask = _ink_mask(np, page.get_pixmap(matrix=pymupdf.Matrix(_RULE_ZOOM, _RULE_ZOOM), clip=clip)) \
-                if not clip.is_empty else None
-            if mask is None:
+            if clip.is_empty:
+                continue
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(_RULE_ZOOM, _RULE_ZOOM), clip=clip)
+            grey = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].mean(axis=2)
+            rows = np.flatnonzero((grey < _RULE_INK_LEVEL).any(axis=1))
+            if not len(rows):
                 continue
             share = _CAP_SHARE + (_DESCENT_SHARE if any(ch in "gjpqy" for ch in text) else 0.0)
-            vl.style = replace(vl.style, font_size_pt=mask.shape[0] / _RULE_ZOOM / share)
+            vl.style = replace(vl.style, font_size_pt=(rows[-1] + 1 - rows[0]) / _RULE_ZOOM / share)
             resized += 1
     return resized
 
@@ -2086,6 +2089,27 @@ def _runs_of(np, flags) -> List[Tuple[int, int]]:
     padded = np.concatenate(([False], flags, [False])).astype(np.int8)
     edges = np.flatnonzero(np.diff(padded))
     return list(zip(edges[::2].tolist(), edges[1::2].tolist()))
+
+
+def _mark_printed_width(page, table) -> int:
+    """Record how wide each one-line cell's words were printed
+    (metadata["printed_width"], a page fraction): from its first word's
+    left edge to its last's right, its words found by their text
+    (_row_words). A cell's box is no measure of that - the decimal/binary
+    fixture boxes its headings wider than their words - and the builder
+    sets a line at this width. Returns how many cells were measured."""
+    pw, ph = page.rect.width, page.rect.height
+    words = page.get_text("words")
+    measured = 0
+    for row in table.grid:
+        cells = sorted(row, key=_cell_x0)
+        for cell, found in zip(cells, _row_words(cells, words, pw, ph)):
+            text = _cell_text_of(cell).strip()
+            if not found or "\n" in text or [w[4] for w in found] != text.split():
+                continue
+            cell.metadata["printed_width"] = (max(w[2] for w in found) - min(w[0] for w in found)) / pw
+            measured += 1
+    return measured
 
 
 def _row_words(cells, words, pw: float, ph: float) -> List[Optional[List[Any]]]:

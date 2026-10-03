@@ -2015,3 +2015,35 @@ class TestLeaderGrid:
         assert m and abs(float(m.group(1)) - 0.0104 * scale) < 0.01
         # the names' column starts at 0.10: the first dot 0.0068 - 0.10 on, mod a pitch
         assert abs(float(m.group(2)) - ((0.0068 - 0.10) * scale) % (0.0104 * scale)) < 0.02
+
+
+class TestPrintedWidth:
+    def test_a_line_s_words_are_measured_and_set_at_that_width(self):
+        import re
+        import pymupdf
+        from src.analyzers.table.rules import _mark_printed_width
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        grid = []
+        for k in range(6):
+            y = 300 + 14 * k
+            page.insert_text((100, y), f"NAME NUMBER {k}", fontsize=10)
+            words = [w for w in page.get_text("words") if y - 10 < w[3] <= y + 4]
+            # the cell's box wider than its words, as OCR's often are
+            cell = _styled(TableCell(
+                content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text=f"NAME NUMBER {k}")])])],
+                visual_layout=VisualLayout(bounding_box=NormalizedRect(
+                    x0=95 / 595, y0=words[0][1] / 842, x1=260 / 595, y1=words[0][3] / 842), page_or_screen_index=0)), 10.0)
+            cell.metadata["leader_after"] = True
+            grid.append([cell, TestUnruledSetSide._boxed(str(k), 0.78, 0.80, words[0][1] / 842)])
+        table = TableBlock(grid=grid, row_count=6, column_count=2, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=0.15, y0=0.34, x1=0.80, y1=0.46), page_or_screen_index=0))
+        assert _mark_printed_width(page, table) >= 6
+        width = grid[3][0].metadata["printed_width"] * 595
+        words = [w for w in page.get_text("words") if 340 < w[3] <= 348]
+        assert abs(width - (words[-1][2] - words[0][0])) < 0.01
+        tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
+        m = re.search(r"\\resizebox\{([\d.]+)pt\}\{\\height\}\{NAME NUMBER 3\}\\dotfill", tex)
+        assert m and abs(float(m.group(1)) - grid[3][0].metadata["printed_width"] * 21 * 72.27 / 2.54) < 0.05
