@@ -27,6 +27,7 @@ with tempfile.TemporaryDirectory() as td:
     b = _ink_mask(_render_crop(fitz, out, 1, _output_table_rect(fitz, out, 1, _table_texts(table))))
 total = a.size
 print(f"mismatch {(a ^ b).sum() / total:.2%}  source-only {(a & ~b).sum() / total:.2%}  rebuild-only {(b & ~a).sum() / total:.2%}")
+print(f"ink: source {a.sum() / total:.2%}  rebuild {b.sum() / total:.2%}  both {(a & b).sum() / total:.2%}")
 h, w = a.shape
 print("rows:")
 for k in range(bands):
@@ -37,3 +38,22 @@ print("cols:")
 for k in range(8):
     s = slice(k * w // 8, (k + 1) * w // 8)
     print(f"  {k:2d}  {((a[:, s] ^ b[:, s]).sum()) / total:6.2%}")
+print("shifted (dx, dy) -> mismatch:")
+import numpy as np
+best = []
+for dy in range(-3, 4):
+    for dx in range(-3, 4):
+        sb = np.roll(np.roll(b, dy, axis=0), dx, axis=1)
+        best.append(((a ^ sb).sum() / total, dx, dy))
+for m, dx, dy in sorted(best)[:5]:
+    print(f"  ({dx:+d}, {dy:+d}) {m:.2%}")
+print("best dx per column band:")
+h, w = a.shape
+for k in range(8):
+    s = slice(k * w // 8, (k + 1) * w // 8)
+    scores = []
+    for dx in range(-4, 5):
+        sb = np.roll(b, dx, axis=1)
+        scores.append(((a[:, s] ^ sb[:, s]).sum(), dx))
+    m, dx = min(scores)
+    print(f"  band {k}: dx {dx:+d}  ({m / total:.2%} vs {(a[:, s] ^ b[:, s]).sum() / total:.2%})")
