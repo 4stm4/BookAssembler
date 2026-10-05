@@ -41,6 +41,6 @@ pages, _, _ = _lines(blocks)
 for p, lines in sorted(pages.items()):
     print(f"-- page {p}")
     for l in lines:
-        print(f"  {l.x0:6.1f} {l.y0:6.1f} {l.x1:6.1f} {l.size:4.1f}  {l.text[:70]!r}")
+        print(f"  {l.x0 * 595:6.1f} {l.y0 * 842:6.1f} {l.x1 * 595:6.1f} {l.y1 * 842:6.1f} {l.size:4.1f}  {l.text[:70]!r}")
 toc = read_toc(pages)
 print("entries", len(toc.entries))

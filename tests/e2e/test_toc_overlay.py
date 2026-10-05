@@ -22,7 +22,7 @@ import pytest
 
 from src.assembler.latex_builder import build_latex, compile_xelatex
 from src.krm.models import ContainerUnit, KnowledgeDocument, TocEntryBlock
-from tests.e2e.test_visual_overlay import MAX_MISMATCH, _mask_mismatch, _render_crop
+from tests.e2e.test_visual_overlay import MAX_MISMATCH, _ink_of, _mask_mismatch, _render_crop
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "toc"
 TOC_A = FIXTURES / "toc_a.pdf"   # Intel "Contents": numbered entries, linked titles
@@ -103,7 +103,10 @@ def _build_toc_pdf(tocs: list, work_dir: str, name: str) -> str:
     )
     tex_path = os.path.join(work_dir, f"{name}.tex")
     with open(tex_path, "w") as fh:
-        fh.write(build_latex(doc))
+        # Page by page, as the product assembles a book (translator,
+        # API): a contents page is one of the pages rebuilt where they
+        # were printed (RFC 0021 §3), not a run of lines in the flow.
+        fh.write(build_latex(doc, page_aware=True))
     try:
         return compile_xelatex(f"{name}.tex", work_dir)
     except RuntimeError as exc:
@@ -115,17 +118,35 @@ def _build_toc_pdf(tocs: list, work_dir: str, name: str) -> str:
         raise
 
 
+_BASELINE_DENSITY = 0.3   # a row this dense against the line's densest is above its baseline
+
+
+def _baseline_of(fitz, page, rect) -> float:
+    """Where the ink at rect stands: the last row as dense as
+    _BASELINE_DENSITY of its densest - under it only descenders."""
+    import numpy as np
+    zoom = 4.0
+    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=rect)
+    rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].astype(int)
+    ground = np.median(rgb.reshape(-1, 3), axis=0)
+    density = ((np.abs(rgb - ground).sum(axis=2) > 120) & (rgb.sum(axis=2) < ground.sum())).sum(axis=1)
+    if not density.any():
+        return rect.y1
+    return rect.y0 + (int(np.flatnonzero(density >= _BASELINE_DENSITY * density.max())[-1]) + 1) / zoom
+
+
 def _contents_rect(fitz, pdf_path: Path, page_index: int, texts: list):
     """Locate one source page's contents on a page by their own text - the
     same way on the source page and on the assembled one.
 
-    Top to bottom they run from the first of the texts found to the last,
-    each looked for below the one before it: a title the list repeats
+    Top to bottom they run from the first of the texts found to the last's
+    baseline, each looked for below the one before it: a title the list repeats
     ("Section") is the next one down, and a rebuilt page that runs on into
     the next source page's entries is cut where this page's end. Across,
     they take in every word printed between - a page number set off across
     a leader, a title the analyzer did not read, a description the rebuild
-    dropped.
+    dropped. Each text found stands for its ink, as in test_visual_overlay
+    (_ink_of): a box is its source's guess.
     """
     doc = fitz.open(pdf_path)
     page = doc[page_index]
@@ -134,14 +155,17 @@ def _contents_rect(fitz, pdf_path: Path, page_index: int, texts: list):
         hits = sorted(page.search_for(t), key=lambda r: (r.y0, r.x0))
         hit = next((r for r in hits if r.y0 > below), None)
         if hit is not None:
-            found.append(hit)
+            found.append(_ink_of(fitz, page, hit))
             # The next text stands on a later row: below this one's middle.
             below = (hit.y0 + hit.y1) / 2
     if not found:
         doc.close()
         return None
-    top, bottom = min(r.y0 for r in found), max(r.y1 for r in found)
-    inside = found + [fitz.Rect(w[:4]) for w in page.get_text("words")
+    # Down to the last text's baseline, not its ink's foot: how far a
+    # descender reaches is its face's, and the rebuild's touches the line
+    # under it where the print's does not.
+    top, bottom = min(r.y0 for r in found), _baseline_of(fitz, page, found[-1])
+    inside = found + [_ink_of(fitz, page, fitz.Rect(w[:4])) for w in page.get_text("words")
                       if top <= (w[1] + w[3]) / 2 <= bottom]
     doc.close()
     return fitz.Rect(min(r.x0 for r in inside), top, max(r.x1 for r in inside), bottom)
@@ -149,22 +173,27 @@ def _contents_rect(fitz, pdf_path: Path, page_index: int, texts: list):
 
 def _crop_rects(fitz, source_pdf: Path, source_page: int, rebuilt_pdf: Path, texts: list):
     """Where to cut the source page's contents and the rebuilt ones: both by
-    _contents_rect from the same texts, on the source page and on the
+    _contents_rect, from the texts found on the source page AND on the
     rebuilt page holding most of them - the rebuild breaks its pages where
     its own type runs out, not where the source's did. Returns the rebuilt
     page's index with the two rects.
 
-    Unlike test_visual_overlay, the texts are not narrowed to those found
-    on both pages: a description the rebuild does not print would then be
-    cut from the source crop too, and cost nothing.
+    A text either page cannot find bounds neither crop: the source's text
+    layer can split a row the analyzer joined ("...Hardware" / "Alternati
+    ves."), and cut by it on the rebuild alone, one crop took in a line
+    the other did not. What either loses between the first and the last
+    text still counts - every word between them is in the crop.
     """
-    out_doc = fitz.open(rebuilt_pdf)
+    src_doc, out_doc = fitz.open(source_pdf), fitz.open(rebuilt_pdf)
+    on_source = [t for t in texts if src_doc[source_page].search_for(t)]
     out_page = max(range(len(out_doc)),
-                   key=lambda i: sum(bool(out_doc[i].search_for(t)) for t in texts))
+                   key=lambda i: sum(bool(out_doc[i].search_for(t)) for t in on_source))
+    shared = [t for t in on_source if out_doc[out_page].search_for(t)]
+    src_doc.close()
     out_doc.close()
     return (out_page,
-            _contents_rect(fitz, source_pdf, source_page, texts),
-            _contents_rect(fitz, rebuilt_pdf, out_page, texts))
+            _contents_rect(fitz, source_pdf, source_page, shared),
+            _contents_rect(fitz, rebuilt_pdf, out_page, shared))
 
 
 @pytest.mark.parametrize(

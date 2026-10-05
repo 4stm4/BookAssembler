@@ -117,6 +117,7 @@ _GLYPH_CONTRAST = 120    # summed RGB difference from the paper or fill a glyph 
 # all: a short word's own strokes fill most of its width ("PPI" at 0.6
 # lost the rows through its bowls and was read 0.5pt high).
 _TEXT_RULE_SPAN = 0.9
+_BOX_CORE = 0.2          # of a box's height in from each edge: surely its own line
 
 
 def _ink_of(fitz, page, rect):
@@ -128,12 +129,13 @@ def _ink_of(fitz, page, rect):
     the rebuilt table 2-3pt against its source however exactly it was
     set. A glyph is what stands out from what it is printed on (paper, or
     a box's fill), darker; its line is the run of such rows through the
-    box's middle, rules left out.
+    box's middle, rules left out, and across it reaches as far as its ink
+    runs on from the box.
     """
     import numpy as np
     zoom = 4.0
-    clip = fitz.Rect(rect.x0 - 2, rect.y0 - rect.height / 2,
-                     rect.x1 + 2, rect.y1 + rect.height / 2) & page.rect
+    clip = fitz.Rect(rect.x0 - rect.height / 2, rect.y0 - rect.height / 2,
+                     rect.x1 + rect.height / 2, rect.y1 + rect.height / 2) & page.rect
     if clip.is_empty:
         return rect
     pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
@@ -154,9 +156,34 @@ def _ink_of(fitz, page, rect):
         top -= 1
     while bottom < len(rows) - 1 and rows[bottom + 1]:
         bottom += 1
-    cols = np.flatnonzero(ink[top:bottom + 1].any(axis=0))
-    return fitz.Rect(clip.x0 + cols[0] / zoom, clip.y0 + top / zoom,
-                     clip.x0 + (cols[-1] + 1) / zoom, clip.y0 + (bottom + 1) / zoom)
+    # Lines set close touch, a descender on the ascender under it, and the
+    # run goes on into the next line. Where it runs out past the box, it is
+    # cut at its lightest row from the box's inner fifth on: where one line
+    # ends and the next begins.
+    density = ink.sum(axis=1)
+    box_lo, box_hi = int((rect.y0 - clip.y0) * zoom), int((rect.y1 - clip.y0) * zoom)
+    core_lo = int((rect.y0 + rect.height * _BOX_CORE - clip.y0) * zoom)
+    core_hi = int((rect.y1 - rect.height * _BOX_CORE - clip.y0) * zoom)
+    if bottom > box_hi:
+        bottom = core_hi + int(np.argmin(density[core_hi + 1:bottom + 1]))
+    if top < box_lo and core_lo > top:
+        top = top + int(np.argmin(density[top:core_lo])) + 1
+    # Across: the ink inside the box, run out to where it ends - a glyph
+    # boxed short ("CONTENTS" lost its S to its box) - up to the space
+    # before the next word.
+    inked = ink[top:bottom + 1].any(axis=0)
+    box_l = max(0, int((rect.x0 - clip.x0) * zoom))
+    box_r = min(len(inked), int((rect.x1 - clip.x0) * zoom))
+    cols = np.flatnonzero(inked[box_l:box_r])
+    if not len(cols):
+        return rect
+    left, right = box_l + int(cols[0]), box_l + int(cols[-1])
+    while left > 0 and inked[left - 1]:
+        left -= 1
+    while right < len(inked) - 1 and inked[right + 1]:
+        right += 1
+    return fitz.Rect(clip.x0 + left / zoom, clip.y0 + top / zoom,
+                     clip.x0 + (right + 1) / zoom, clip.y0 + (bottom + 1) / zoom)
 
 
 def _table_rect(fitz, pdf_path: Path, page_index: int, texts: list):
