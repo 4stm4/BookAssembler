@@ -159,11 +159,14 @@ def _foot(np, band) -> int:
     descenders. Neither the last row of some density nor the steepest fall:
     a typewriter's heavy "pp" fill the rows under "Appendix"'s baseline as
     densely, and their ends fall away as steeply."""
-    below = np.append(band[1:], 0)
     # down from its densest row, the first where the ink falls away sharply
+    # for good - nothing under it as dense again: figures narrow halfway
+    # down ("12, 13") and fill out again at their feet
     for r in range(int(np.argmax(band)), len(band)):
-        if band[r] >= _BASELINE_DENSITY * band.max() and below[r] < _BASELINE_FALL * band[r]:
+        rest = band[r + 1:].max() if r + 1 < len(band) else 0.0
+        if band[r] >= _BASELINE_DENSITY * band.max() and rest < _BASELINE_FALL * band[r]:
             return r
+    below = np.append(band[1:], 0)
     rows = np.flatnonzero(band >= _BASELINE_DENSITY * band.max())
     return int(rows[np.argmax(band[rows] - below[rows])])
 
