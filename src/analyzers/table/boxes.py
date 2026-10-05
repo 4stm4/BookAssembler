@@ -52,6 +52,7 @@ class BoxCell:
     stroke: float = 0.0        # median stroke width of its ink (pt)
     bold: bool = False
     italic: bool = False
+    baselines: List[float] = field(default_factory=list)  # each line's, pt under its top
 
 
 @dataclass
@@ -124,6 +125,26 @@ def _stroke(np, ink) -> float:
     """The median width of a mask's horizontal ink runs, in pixels."""
     widths = [b - a for line in ink if line.any() for a, b in _runs(np, line, 1)]
     return float(sorted(widths)[len(widths) // 2]) if widths else 0.0
+
+
+_BASELINE_DENSITY = 0.3      # a row this dense against its line's densest is above the baseline
+
+
+def _baselines(np, dark, cell: "BoxCell", z: float, inset: float) -> List[float]:
+    """Where each printed line of a cell stands: its baseline, in points
+    under the cell's top - the last row of the line's band of ink as dense
+    as _BASELINE_DENSITY of its densest; under it only descenders. Not
+    the cell's middle: the fixture prints "USER" 12pt under its box's top
+    and 5pt over its foot."""
+    x0, y0, x1, y1 = (int(v * z) for v in cell.rect)
+    pad = int(inset)
+    density = dark[y0 + pad:y1 - pad, x0 + pad:x1 - pad].mean(axis=1)
+    out = []
+    for a, b in _runs(np, density > 0, 2):
+        band = density[a:b]
+        base = a + int(np.flatnonzero(band >= _BASELINE_DENSITY * band.max())[-1]) + 1
+        out.append((y0 + pad + base) / z - cell.rect[1])
+    return out
 
 
 def _ink_size(np, dark, cell: "BoxCell", z: float, inset: float) -> float:
@@ -235,6 +256,7 @@ def _box_grid(np, pymupdf, page) -> Optional[BoxGrid]:
         x0, y0, x1, y1 = cell.rect
         cell.words = [w for w in words if x0 <= (w[0] + w[2]) / 2 <= x1 and y0 <= (w[1] + w[3]) / 2 <= y1]
         cell.size = _ink_size(np, dark, cell, z, near)
+        cell.baselines = _baselines(np, dark, cell, z, near) if cell.words else []
         ink = _label_ink(dark, cell, z, near)
         cell.italic = bool(cell.words) and ink.any() and _slant(np, ink) >= _ITALIC_SLANT
         # Stroke widths at twice the zoom: at three a stroke is three
@@ -307,6 +329,8 @@ def _table_from_box_grid(grid: BoxGrid, page_idx: int, pw: float, ph: float) -> 
             border_bottom=box.ruled[2], border_left=box.ruled[3],
         )
         cell.metadata["grid_row"], cell.metadata["grid_col"] = box.row, box.col
+        if box.baselines:
+            cell.metadata["baselines_pt"] = box.baselines
         rows[box.row].append(cell)
         for r in range(box.row, box.row + box.row_span):
             for c in range(box.col, box.col + box.col_span):

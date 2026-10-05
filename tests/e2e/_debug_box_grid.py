@@ -21,5 +21,5 @@ print("xs", [round(x, 1) for x in grid.xs])
 print("ys", [round(y, 1) for y in grid.ys])
 for c in grid.cells:
     sides = "".join(s for s, on in zip("TRBL", c.ruled) if on) or "-"
-    print(f"r{c.row} c{c.col} {c.row_span}x{c.col_span}  fill {c.fill}  ruled {sides:4}  "
+    print(f"r{c.row} c{c.col} {c.row_span}x{c.col_span}  size {c.size:5.2f} stroke {getattr(c, 'stroke', 0):4.2f} bold {getattr(c, 'bold', None)}  fill {c.fill}  ruled {sides:4}  "
           f"{' '.join(w[4] for w in c.words)[:40]!r}")

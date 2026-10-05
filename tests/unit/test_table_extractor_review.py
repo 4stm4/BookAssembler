@@ -1894,9 +1894,10 @@ class TestBoxTableRender:
         # fills and side rules per cell, rules across as rows of their own
         assert "\\multicolumn{3}{|m{" in rows[0] and "\\cellcolor[RGB]" in rows[0] and "USER LAYER" in rows[0]
         assert "\\cline" not in body and "\\noalign{\\hbox to 0pt{" in body
-        # a label over two rows is set in the last of them, raised to their middle
+        # a label over two rows is set in the last of them, raised to its
+        # printed baseline: from the last row's middle, into the row above
         assert "BTS6120" not in rows[0]
-        raise_pt = float(re.search(r"\\raisebox\{([\d.]+)pt\}\[0pt\]\[0pt\]\{\\parbox\[c\][^&]*?BTS6120", rows[1]).group(1))
+        raise_pt = float(re.search(r"\\raisebox\{([\d.]+)pt\}\[0pt\]\[0pt\]\{\\parbox\[t\][^&]*?BTS6120", rows[1]).group(1))
         assert raise_pt > 5
 
 

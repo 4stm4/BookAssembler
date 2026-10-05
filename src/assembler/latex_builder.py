@@ -1035,12 +1035,24 @@ def _render_box_table(table: TableBlock) -> str:
             "\\bfseries " if style.is_bold else "") + ("\\itshape " if style.is_italic else "")
         lines = "\\\\".join(_esc(line) for line in raw.split("\n"))
         width = sum(widths[cell.metadata["grid_col"]:cell.metadata["grid_col"] + cell.col_span])
-        # Set in the cell's last row and raised to its middle: the rows
-        # after the one it is set in paint their fills over it, and from
-        # the first row "BTS6120" hung down under two rows of yellow.
-        last = cell.metadata["grid_row"] + cell.row_span - 1
-        rise = (sum(heights[cell.metadata["grid_row"]:last + 1]) - heights[last]) / 2.0
-        sized = f"\\fontsize{{{size:.2f}}}{{{size * 1.2:.2f}}}\\selectfont " if size > 0 else ""
+        # Set in the cell's last row: the rows after the one it is set in
+        # paint their fills over it, and from the first row "BTS6120" hung
+        # down under two rows of yellow. A box of no height in an m{} cell
+        # stands on its row's middle; from there it is raised to its own
+        # middle, or - where its lines were measured - its first line's
+        # baseline is set where the print's stands (metadata baselines_pt,
+        # under the cell's top), its lines as far apart as printed.
+        first, last = cell.metadata["grid_row"], cell.metadata["grid_row"] + cell.row_span - 1
+        to_middle = sum(heights[first:last]) + heights[last] / 2.0
+        bases = cell.metadata.get("baselines_pt")
+        pitch = bases[1] - bases[0] if bases and len(bases) > 1 else size * 1.2
+        sized = f"\\fontsize{{{size:.2f}}}{{{pitch:.2f}}}\\selectfont " if size > 0 else ""
+        if bases and size > 0:
+            return (
+                f"\\raisebox{{{to_middle - bases[0]:.2f}pt}}[0pt][0pt]{{\\parbox[t]{{{width:.2f}pt}}"
+                f"{{\\centering {font}{sized}{lines}}}}}"
+            )
+        rise = to_middle - sum(heights[first:last + 1]) / 2.0
         return (
             f"\\raisebox{{{rise:.2f}pt}}[0pt][0pt]{{\\parbox[c]{{{width:.2f}pt}}"
             f"{{\\centering {font}{sized}{lines}}}}}"
