@@ -1814,6 +1814,19 @@ _LEADER_MIN_DOTS = 3
 _LEADER_ZOOM = 4.0
 
 
+def _printed_lines(words) -> int:
+    """How many lines a cell's words stand on: a word whose middle is
+    below every word of the line above starts the next."""
+    count, bottom = 0, float("-inf")
+    for w in sorted(words, key=lambda w: w[1]):
+        if (w[1] + w[3]) / 2 > bottom:
+            count += 1
+            bottom = w[3]
+        else:
+            bottom = max(bottom, w[3])
+    return max(count, 1)
+
+
 def _dots(np, pymupdf, page, rect, line_h: float) -> Optional[int]:
     """How many dots of ink a rect holds, or None when any blob in it is
     bigger than a dot - more than _LEADER_DOT_SHARE of the line high or
@@ -2386,8 +2399,11 @@ def _drop_leaders(np, pymupdf, page, table) -> int:
             if inside is None:
                 found.append(None)
                 continue
+            # One line's height: against a cell of two lines a letter is
+            # as small as a dot ("Input Clamp Voltage (All / Input Pins)"
+            # was taken for a leader and dropped).
             box = cell.visual_layout.bounding_box
-            line_h = (box.y1 - box.y0) * ph
+            line_h = (box.y1 - box.y0) * ph / _printed_lines(inside)
             found.append([(w, _dots(np, pymupdf, page, pymupdf.Rect(w[:4]), line_h)) for w in inside])
         # The row's last word is what the leader leads to - its page number
         # - and is kept whatever its box holds: OCR's boxes drift, and on

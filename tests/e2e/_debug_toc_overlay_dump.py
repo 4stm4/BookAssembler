@@ -16,7 +16,9 @@ sys.path.insert(0, "/app")
 from tests.e2e.test_toc_overlay import (
     TOC_A, TOC_B, TOC_C, _build_toc_pdf, _crop_rects, _extract_tocs, _page_texts,
 )
-from tests.e2e.test_visual_overlay import _MASK_SIZE, _ink_mask, _render_crop
+from tests.e2e.test_visual_overlay import (
+    _MASK_SIZE, _MATCH_REACH_PX, _ink_mask, _mask_mismatch, _near, _render_crop,
+)
 
 OUT_DIR = Path("/app/debug_output")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -37,12 +39,12 @@ def dump(fixture_path, source_page):
     img_source = _render_crop(fitz, fixture_path, source_page, src_rect)
     img_output = _render_crop(fitz, pdf_path, out_page, out_rect)
     ma, mb = _ink_mask(img_source), _ink_mask(img_output)
-    mismatch = float((ma ^ mb).sum()) / float(ma.size)
+    mismatch = _mask_mismatch(img_source, img_output)
 
     heat = np.full(ma.shape + (3,), 255, dtype=np.uint8)
-    heat[ma & mb] = (0, 0, 0)
-    heat[ma & ~mb] = (255, 0, 0)
-    heat[mb & ~ma] = (0, 0, 255)
+    heat[ma | mb] = (0, 0, 0)
+    heat[ma & ~_near(mb, _MATCH_REACH_PX)] = (255, 0, 0)
+    heat[mb & ~_near(ma, _MATCH_REACH_PX)] = (0, 0, 255)
     W, H = _MASK_SIZE
     combo = Image.new("RGB", (W * 3 + 40, H + 40), "white")
     combo.paste(img_source.resize(_MASK_SIZE), (10, 30))
