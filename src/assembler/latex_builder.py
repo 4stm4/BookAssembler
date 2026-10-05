@@ -598,7 +598,7 @@ def _line_texts(cell: Any, raw: str) -> List[str]:
     return [_bold_marked(line.split(), f) for line, f in zip(lines, flags)]
 
 
-def _positioned_lines(cell: Any, raw: str, drop_pt: float = 0.0) -> str:
+def _positioned_lines(cell: Any, raw: str, drop_pt: float = 0.0, origin_x: Optional[float] = None) -> str:
     """A stacked cell's lines with each run of words set where it was
     printed, or "" when the cell does not carry its runs.
 
@@ -616,6 +616,11 @@ def _positioned_lines(cell: Any, raw: str, drop_pt: float = 0.0) -> str:
         return ""
     flags = md.get("line_bold") or []
     words_of = md.get("line_words") or []
+    # Indents from where the column's text starts, not from the cell's own
+    # box: a scan set a little askew starts each row's text further over -
+    # the pin description fixture's lowest rows 1.7pt right of its top ones
+    # - and measured from its own box every cell lost that.
+    origin = origin_x if origin_x is not None else box.x0
     lines = []
     if len(words_of) == len(segments):
         # Every word where its ink was printed and as wide: a run's words,
@@ -623,7 +628,7 @@ def _positioned_lines(cell: Any, raw: str, drop_pt: float = 0.0) -> str:
         for n, line in enumerate(words_of):
             line_flags = flags[n] if n < len(flags) else []
             out = ""
-            indent = (line[0][0] - box.x0) * _A4_WIDTH_PT
+            indent = (line[0][0] - origin) * _A4_WIDTH_PT
             if indent > _PLACE_MIN_PT:
                 out += f"\\rule{{{indent:.2f}pt}}{{0pt}}"
             for k, (x0, word, x1) in enumerate(line):
@@ -637,7 +642,7 @@ def _positioned_lines(cell: Any, raw: str, drop_pt: float = 0.0) -> str:
     for n, runs in enumerate(segments if not lines else []):
         line_flags = flags[n] if n < len(flags) else []
         out = ""
-        indent = (runs[0][0] - box.x0) * _A4_WIDTH_PT
+        indent = (runs[0][0] - origin) * _A4_WIDTH_PT
         if indent > _PLACE_MIN_PT:
             out += f"\\rule{{{indent:.2f}pt}}{{0pt}}"
         used = 0
@@ -1296,7 +1301,11 @@ def _render_table(table: TableBlock) -> str:
                     # 6.9pt to the print's 7.6, every baseline 1pt high.
                     _ink = md.get("ink_size_pt", 0.0) * _TEX_PT_PER_BP
                     _grow = _ink - median_pt if median_pt > 0 and _leading > 0 else 0.0
-                    _positioned = _positioned_lines(cell, raw, drop_pt=_HEROS_CAP_EM * _grow if _grow > 0 else 0.0)
+                    _ink_x0 = md.get("column_ink_x0") or []
+                    _positioned = _positioned_lines(
+                        cell, raw, drop_pt=_HEROS_CAP_EM * _grow if _grow > 0 else 0.0,
+                        origin_x=_ink_x0[col] if col < len(_ink_x0) and _ink_x0[col] is not None else None,
+                    )
                     _glyphs = (
                         f"\\fontsize{{{_ink:.2f}}}{{{_leading:.2f}}}\\selectfont " if _positioned and _grow > 0 else ""
                     )

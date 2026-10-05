@@ -1541,6 +1541,7 @@ def _line_feet(lines: List[List[Any]]) -> List[float]:
 
 _WORD_GAP_SHARE = 0.22       # an ink gap this share of the line high parts words
 _WORD_ZOOM = 4.0
+_WORD_BAND = (0.3, 0.75)     # the share of a line's box its words are cut through
 
 
 def _ink_words(page, line: List[Any]) -> List[Tuple[float, float]]:
@@ -1562,7 +1563,12 @@ def _ink_words(page, line: List[Any]) -> List[Tuple[float, float]]:
     if clip.is_empty or len(line) < 2:
         return boxes
     pix = page.get_pixmap(matrix=pymupdf.Matrix(_WORD_ZOOM, _WORD_ZOOM), clip=clip, colorspace=pymupdf.csGRAY)
-    ink = (np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width) < _RULE_INK_LEVEL).any(axis=0)
+    grey = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width)
+    # Cut through the line's middle only: its box takes in the feet of the
+    # line above and the tops of the one below, which filled its spaces -
+    # "location. Data is set" came out one run.
+    rows = slice(int(pix.height * _WORD_BAND[0]), max(int(pix.height * _WORD_BAND[1]), int(pix.height * _WORD_BAND[0]) + 1))
+    ink = (grey[rows] < _RULE_INK_LEVEL).any(axis=0)
     cols = np.flatnonzero(ink)
     if not len(cols):
         return boxes

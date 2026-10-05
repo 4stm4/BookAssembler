@@ -2147,3 +2147,28 @@ class TestInkWords:
         scale = 21 * 72.27 / 2.54
         m = re.search(r"\\resizebox\{([\d.]+)pt\}\{\\height\}\{one\}\\hspace\*\{([\d.]+)pt\}\\resizebox\{([\d.]+)pt\}\{\\height\}\{two\}", tex)
         assert m and abs(float(m.group(1)) - 0.02 * scale) < 0.05 and abs(float(m.group(2)) - 0.01 * scale) < 0.05
+
+
+class TestSkewedRows:
+    def test_a_row_printed_further_over_keeps_its_offset(self):
+        import re
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("one two\nthree", x0=0.203, y0=0.32),
+                 _cell("V", x0=0.33, y0=0.32)]]
+        cell = rows[1][1]
+        box = cell.visual_layout.bounding_box
+        cell.visual_layout.bounding_box = NormalizedRect(x0=box.x0, y0=box.y0, x1=box.x1, y1=box.y0 + 0.025)
+        cell.metadata["line_segments"] = [[[box.x0, "one two", box.x0 + 0.05]], [[box.x0, "three", box.x0 + 0.03]]]
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        grid = [[c if c.visual_layout.style else _styled(c) for c in row] for row in rows]
+        table = TableBlock(grid=grid, row_count=2, column_count=3, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.40, y1=0.36), page_or_screen_index=0))
+        for row in grid:
+            for c in row:
+                c.border_left = c.border_right = True
+        # the column's text starts at 0.200; this row's, a scan askew, at 0.203
+        table.metadata = {"column_rule_x": [0.175, 0.275], "column_ink_x0": [0.10, 0.20, 0.30]}
+        tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
+        indent = float(re.search(r"\\lineskiplimit=-\\maxdimen \\rule\{([\d.]+)pt\}\{0pt\}", tex).group(1))
+        assert abs(indent - 0.003 * 21 * 72.27 / 2.54) < 0.05

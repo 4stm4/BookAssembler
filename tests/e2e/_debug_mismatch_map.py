@@ -72,3 +72,23 @@ for r in (1, 2):
     far_src = (a & ~grown(b, r)).sum() / total
     far_out = (b & ~grown(a, r)).sum() / total
     print(f"beyond {r}px of the other's ink: source-only {far_src:.2%}  rebuild-only {far_out:.2%}")
+print("best dx per row band (description column, x > 40%):")
+x0 = int(0.4 * w)
+for k in range(16):
+    s = slice(k * h // 16, (k + 1) * h // 16)
+    scores = []
+    for dx in range(-3, 4):
+        sb = np.roll(b, dx, axis=1)
+        scores.append(((a[s, x0:] ^ sb[s, x0:]).sum(), dx))
+    m, dx = min(scores)
+    print(f"  band {k:2d}: dx {dx:+d}  ({m / total:.2%} vs {(a[s, x0:] ^ b[s, x0:]).sum() / total:.2%})")
+print("best (dx, dy) per row band (description column):")
+for k in range(16):
+    s = slice(k * h // 16, (k + 1) * h // 16)
+    scores = []
+    for dy in range(-2, 3):
+        for dx in range(-2, 3):
+            sb = np.roll(np.roll(b, dy, axis=0), dx, axis=1)
+            scores.append(((a[s, x0:] ^ sb[s, x0:]).sum(), dx, dy))
+    m, dx, dy = min(scores)
+    print(f"  band {k:2d}: ({dx:+d}, {dy:+d})  ({m / total:.2%} vs {(a[s, x0:] ^ b[s, x0:]).sum() / total:.2%})")
