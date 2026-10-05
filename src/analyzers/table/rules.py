@@ -1567,6 +1567,8 @@ def _line_feet(lines: List[List[Any]]) -> List[float]:
 
 
 _WORD_GAP_SHARE = 0.22       # an ink gap this share of the line high parts words
+_WORD_REACH = 0.8            # of a line's height: how far its ink is looked for past its boxes
+_RULE_COLUMN_SHARE = 0.9     # a column inked over this share of a line's clip is a rule
 _WORD_ZOOM = 4.0
 _WORD_BAND = (0.3, 0.75)     # the share of a line's box its words are cut through
 
@@ -1585,8 +1587,12 @@ def _ink_words(page, line: List[Any]) -> List[Tuple[float, float]]:
     heights = sorted(w[3] - w[1] for w in line)
     usual = heights[len(heights) // 2]
     fair = [w for w in line if w[3] - w[1] <= _TALL_WORD * usual] or line
-    clip = pymupdf.Rect(min(w[0] for w in line) - 2, min(w[1] for w in fair),
-                        max(w[2] for w in line) + 2, max(w[3] for w in fair)) & page.rect
+    # wide enough for a letter OCR boxed short at either end ("SYSTEMS."
+    # lost its stop to its box); a leader's dots beyond come out runs of
+    # their own, in no word's box
+    reach = max(2.0, _WORD_REACH * usual)
+    clip = pymupdf.Rect(min(w[0] for w in line) - reach, min(w[1] for w in fair),
+                        max(w[2] for w in line) + reach, max(w[3] for w in fair)) & page.rect
     if clip.is_empty or len(line) < 2:
         return boxes
     pix = page.get_pixmap(matrix=pymupdf.Matrix(_WORD_ZOOM, _WORD_ZOOM), clip=clip, colorspace=pymupdf.csGRAY)
@@ -1596,6 +1602,8 @@ def _ink_words(page, line: List[Any]) -> List[Tuple[float, float]]:
     # "location. Data is set" came out one run.
     rows = slice(int(pix.height * _WORD_BAND[0]), max(int(pix.height * _WORD_BAND[1]), int(pix.height * _WORD_BAND[0]) + 1))
     ink = (grey[rows] < _RULE_INK_LEVEL).any(axis=0)
+    # a rule beside the words runs the clip's whole height: no letter
+    ink &= ~((grey < _RULE_INK_LEVEL).mean(axis=0) > _RULE_COLUMN_SHARE)
     cols = np.flatnonzero(ink)
     if not len(cols):
         return boxes
@@ -2215,7 +2223,7 @@ def _mark_printed_width(page, table) -> int:
     """Record how wide each one-line cell's words were printed
     (metadata["printed_width"], a page fraction): from its first word's
     left edge to its last's right, its words found by their text
-    (_row_words). A cell's box is no measure of that - the decimal/binary
+    (_row_words) and measured by their ink. A cell's box is no measure of that - the decimal/binary
     fixture boxes its headings wider than their words - and the builder
     sets a line at this width. Returns how many cells were measured."""
     pw, ph = page.rect.width, page.rect.height
@@ -2227,7 +2235,10 @@ def _mark_printed_width(page, table) -> int:
             text = _cell_text_of(cell).strip()
             if not found or "\n" in text or [w[4] for w in found] != text.split():
                 continue
-            cell.metadata["printed_width"] = (max(w[2] for w in found) - min(w[0] for w in found)) / pw
+            # by the words' ink (_ink_words), not their boxes: OCR boxed the
+            # index fixture's names a letter short of their print
+            inks = _ink_words(page, found)
+            cell.metadata["printed_width"] = (max(b for _, b in inks) - min(a for a, _ in inks)) / pw
             measured += 1
     return measured
 
@@ -2341,9 +2352,30 @@ def _measure_leader_grid(np, pymupdf, page, table) -> bool:
     if len(steps) < 10:
         return False
     pitch = steps[len(steps) // 2]
-    # whole-pitch steps only: a missing dot doubles one, a speck halves it
-    fair = [d for d in steps if 0.75 * pitch <= d <= 1.25 * pitch]
-    pitch = sum(fair) / len(fair)
+    # Then over each leader's length, its first dot to its last over the
+    # whole pitches between: dot to dot a step scatters with OCR's specks
+    # and the scan, and averaged so the index fixture's pitch came to 6.19pt
+    # where it prints 6.08 - half a pitch off by a leader's end.
+    # The leader proper is its longest chain of whole-pitch steps: a row's
+    # blobs start with a speck of its last letter and end in its page
+    # number's.
+    spans = []
+    for xs in centres:
+        best, start = (0, 0), 0
+        for k in range(1, len(xs) + 1):
+            if k == len(xs) or not 0.75 * pitch <= xs[k] - xs[k - 1] <= 1.25 * pitch:
+                if k - 1 - start > best[1] - best[0]:
+                    best = (start, k - 1)
+                start = k
+        a, b = best
+        if b - a >= _LEADER_MIN_DOTS:
+            spans.append((xs[b] - xs[a]) / (b - a))
+    if spans:
+        pitch = sorted(spans)[len(spans) // 2]
+    else:
+        # whole-pitch steps only: a missing dot doubles one, a speck halves it
+        fair = [d for d in steps if 0.75 * pitch <= d <= 1.25 * pitch]
+        pitch = sum(fair) / len(fair)
     angles = [2 * np.pi * (x % pitch) / pitch for xs in centres for x in xs]
     phase = (np.arctan2(np.mean(np.sin(angles)), np.mean(np.cos(angles))) % (2 * np.pi)) / (2 * np.pi) * pitch
     table.metadata["leader_pitch"] = pitch / pw
@@ -2457,6 +2489,108 @@ def _clip_row_spans(grid: List[List["TableCell"]]) -> None:
             ):
                 reach += 1
             cell.row_span = reach
+
+
+_SAME_BASELINE = 0.35        # of a line's height: two lines' baselines this close are one line's
+
+
+def _reseat_stacked_lines(np, pymupdf, page, table) -> int:
+    """Move a cell's last line down to the next row where it was printed
+    there: OCR can box a figure half a line high, between two rows, and
+    the line is stacked under the cell above - the index fixture's
+    "12, 13" under "Cover 2", where its ink stands on "HEWLETT-PACKARD"'s
+    baseline. Only into an empty cell of the same column, and judged by
+    the ink's baselines (printed.measure_line), not the boxes. Returns how
+    many lines moved."""
+    from src.analyzers.printed import measure_line
+    grid = table.grid
+    bins = _column_bins(grid)
+    if not bins:
+        return 0
+    pw, ph = page.rect.width, page.rect.height
+    words = page.get_text("words")
+
+    def rect_of(cell):
+        b = cell.visual_layout.bounding_box
+        return pymupdf.Rect(b.x0 * pw, b.y0 * ph, b.x1 * pw, b.y1 * ph)
+
+    def baseline(rect, text):
+        m = measure_line(np, pymupdf, page, rect, text)
+        return (m["baseline"], m["height"]) if m else (None, None)
+
+    moved = 0
+    for i in range(len(grid) - 1):
+        below = [c for c in grid[i + 1] if c.visual_layout and c.visual_layout.bounding_box]
+        if not below:
+            continue
+        for cell in list(grid[i]):
+            text = _cell_text_of(cell)
+            lines = [l for l in "\n".join(
+                s.text for b in cell.content for il in getattr(b, "inlines", []) for s in getattr(il, "spans", [])
+                if hasattr(s, "text")).split("\n") if l.strip()]
+            if len(lines) < 2 or cell.visual_layout is None or cell.visual_layout.bounding_box is None:
+                continue
+            col = _column_of(cell, bins)
+            if any(_column_of(c, bins) == col for c in below):
+                continue
+            box = rect_of(cell)
+            last = lines[-1].split()
+            own = [w for w in words if box.contains(pymupdf.Rect(w[:4]).tl + (0.5, 0.5)) and w[4] in last]
+            if not own:
+                continue
+            line_rect = pymupdf.Rect(min(w[0] for w in own), min(w[1] for w in own),
+                                     max(w[2] for w in own), max(w[3] for w in own))
+            mine, h = baseline(line_rect, lines[-1])
+            first = min(below, key=lambda c: _cell_x0(c))
+            theirs, _ = baseline(rect_of(first), _cell_text_of(first).split("\n")[0])
+            if mine is None or theirs is None or abs(mine - theirs) > _SAME_BASELINE * h:
+                continue
+            keep = "\n".join(lines[:-1])
+            kept_rect = pymupdf.Rect(box.x0, box.y0, box.x1, min(box.y1, line_rect.y0))
+            cell.content = [ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text=keep)])])]
+            cell.visual_layout = VisualLayout(
+                bounding_box=NormalizedRect(x0=kept_rect.x0 / pw, y0=kept_rect.y0 / ph,
+                                            x1=kept_rect.x1 / pw, y1=kept_rect.y1 / ph),
+                page_or_screen_index=cell.visual_layout.page_or_screen_index,
+                style=cell.visual_layout.style,
+            )
+            new = _make_cell(lines[-1], NormalizedRect(x0=line_rect.x0 / pw, y0=line_rect.y0 / ph,
+                                                       x1=line_rect.x1 / pw, y1=line_rect.y1 / ph),
+                             cell.visual_layout.style, cell.visual_layout.page_or_screen_index)
+            grid[i + 1].append(new)
+            grid[i + 1].sort(key=_cell_x0)
+            moved += 1
+    return moved
+
+
+_LEADER_ROWS_MIN = 3
+
+
+def _marks_on_leaders(table) -> int:
+    """A placeholder mark between a row's words and its figure, in a table
+    of leaders, is its row's leader - the dots OCR's boxes took in, all but
+    one (the index fixture's "DATA PRODUCTS DIV . . . 43"). That row is
+    given its leader (metadata["leader_after"] on the cell before the mark)
+    and the mark goes. A table that runs no leaders keeps its marks: there
+    a dot between figures stands for a missing value. Returns how many
+    marks were leaders."""
+    md = getattr(table, "metadata", None) or {}
+    marks = md.get("placeholder_marks") or []
+    leaders = sum(1 for row in table.grid if any((c.metadata or {}).get("leader_after") for c in row))
+    if not marks or leaders < _LEADER_ROWS_MIN:
+        return 0
+    kept = []
+    for m in marks:
+        x0, x1 = m["bbox"][0], m["bbox"][2]
+        cells = [c for c in table.grid[m["row"]] if c.visual_layout and c.visual_layout.bounding_box]
+        before = [c for c in cells if c.visual_layout.bounding_box.x1 <= x0]
+        after = [c for c in cells if c.visual_layout.bounding_box.x0 >= x1]
+        if before and after:
+            max(before, key=lambda c: c.visual_layout.bounding_box.x1).metadata["leader_after"] = True
+        else:
+            kept.append(m)
+    md["placeholder_marks"] = kept
+    return len(marks) - len(kept)
 
 
 def _find_placeholder_marks(np, pymupdf, page, table) -> int:

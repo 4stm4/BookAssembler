@@ -2063,7 +2063,10 @@ class TestPrintedWidth:
         assert _mark_printed_width(page, table) >= 6
         width = grid[3][0].metadata["printed_width"] * 595
         words = [w for w in page.get_text("words") if 340 < w[3] <= 348]
-        assert abs(width - (words[-1][2] - words[0][0])) < 0.01
+        # by the words' ink, inside their boxes' side bearings
+        from src.analyzers.table.rules import _ink_words
+        inks = _ink_words(page, words)
+        assert abs(width - (inks[-1][1] - inks[0][0])) < 0.01 and width < words[-1][2] - words[0][0]
         tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
         m = re.search(r"\\resizebox\{([\d.]+)pt\}\{\\height\}\{NAME NUMBER 3\}\\dotfill", tex)
         assert m and abs(float(m.group(1)) - grid[3][0].metadata["printed_width"] * 21 * 72.27 / 2.54) < 0.05
