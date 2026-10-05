@@ -33,6 +33,11 @@ def walk(n):
 for r in doc.root_containers:
     walk(r)
 print("blocks", dict(types))
+for r in doc.root_containers:
+    for c in getattr(r, "children", []):
+        if getattr(c, "is_tombstoned", False):
+            print("  tombstoned", type(c).__name__, (c.metadata or {}).get("tombstone_reason"),
+                  repr(" ".join(s.text for il in getattr(c, "inlines", []) for s in il.spans)[:60]))
 
 blocks = []
 for r in doc.root_containers:

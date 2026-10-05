@@ -118,6 +118,7 @@ _GLYPH_CONTRAST = 120    # summed RGB difference from the paper or fill a glyph 
 # lost the rows through its bowls and was read 0.5pt high).
 _TEXT_RULE_SPAN = 0.9
 _BOX_CORE = 0.2          # of a box's height in from each edge: surely its own line
+_LETTER_GAP = 0.12       # of a box's height: the widest gap between two letters of a word
 
 
 def _ink_of(fitz, page, rect):
@@ -178,9 +179,11 @@ def _ink_of(fitz, page, rect):
     if not len(cols):
         return rect
     left, right = box_l + int(cols[0]), box_l + int(cols[-1])
-    while left > 0 and inked[left - 1]:
+    # over the gaps between letters, never a word space
+    gap = max(1, int(rect.height * _LETTER_GAP * zoom))
+    while left > 0 and inked[max(0, left - gap):left].any():
         left -= 1
-    while right < len(inked) - 1 and inked[right + 1]:
+    while right < len(inked) - 1 and inked[right + 1:right + 1 + gap].any():
         right += 1
     return fitz.Rect(clip.x0 + left / zoom, clip.y0 + top / zoom,
                      clip.x0 + (right + 1) / zoom, clip.y0 + (bottom + 1) / zoom)

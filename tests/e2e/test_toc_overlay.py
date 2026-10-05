@@ -119,11 +119,13 @@ def _build_toc_pdf(tocs: list, work_dir: str, name: str) -> str:
 
 
 _BASELINE_DENSITY = 0.3   # a row this dense against the line's densest is above its baseline
+_BASELINE_FALL = 0.6      # the row under the baseline holds less than this of its ink
 
 
 def _baseline_of(fitz, page, rect) -> float:
-    """Where the ink at rect stands: the last row as dense as
-    _BASELINE_DENSITY of its densest - under it only descenders."""
+    """Where the ink at rect stands: down from its densest row, the first
+    its ink falls away under by _BASELINE_FALL - from the line's body to
+    its descenders."""
     import numpy as np
     zoom = 4.0
     pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=rect)
@@ -132,7 +134,11 @@ def _baseline_of(fitz, page, rect) -> float:
     density = ((np.abs(rgb - ground).sum(axis=2) > 120) & (rgb.sum(axis=2) < ground.sum())).sum(axis=1)
     if not density.any():
         return rect.y1
-    return rect.y0 + (int(np.flatnonzero(density >= _BASELINE_DENSITY * density.max())[-1]) + 1) / zoom
+    below = np.append(density[1:], 0)
+    for r in range(int(np.argmax(density)), len(density)):
+        if density[r] >= _BASELINE_DENSITY * density.max() and below[r] < _BASELINE_FALL * density[r]:
+            return rect.y0 + (r + 1) / zoom
+    return rect.y1
 
 
 def _contents_rect(fitz, pdf_path: Path, page_index: int, texts: list):

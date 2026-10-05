@@ -89,7 +89,9 @@ FIXTURES = [
     # One column of entries, their numbers set apart: psm 4 reads the numbers
     # 3-14 that page layout analysis (psm 3) lost.
     (["toc/Fixture_A.png"], "toc/toc_a.pdf", 500, 4, 0),
-    (["toc/Fixture_B.png"], "toc/toc_b.pdf", 500, 3, 0),
+    # Typewritten: page layout analysis (psm 3) lost every sub-number
+    # ("2.1"-"5.3"); read as one column of lines, scaled up, it reads them all.
+    (["toc/Fixture_B.png"], "toc/toc_b.pdf", 500, 4, 300),
     (["toc/Fixture_C1.png", "toc/Fixture_C2.png", "toc/Fixture_C3.png"], "toc/toc_c.pdf", 500, 3, 0),
 ]
 
