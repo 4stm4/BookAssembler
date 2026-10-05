@@ -17,7 +17,7 @@ from src.krm.models import (
     TextLineInline,
     VisualLayout,
 )
-from src.analyzers.printed import ink_mask as _ink_mask, likeness as _likeness
+from src.analyzers.printed import ITALIC_SLANT as _ITALIC_SLANT, ink_mask as _ink_mask, likeness as _likeness, slant as _slant
 
 _RULE_ZOOM = 3.0          # render scale for rule detection
 _RULE_PAD_PT = 20.0       # printed rules sit outside the cells' own text boxes
@@ -1923,22 +1923,7 @@ def _mark_text_colour(np, pymupdf, page, table) -> int:
     return coloured
 
 
-_ITALIC_SLANT = 0.12        # tan of the lean; an italic leans 0.2 or so
 _ITALIC_MIN_LETTERS = 6     # a few glyphs lean by their shapes alone ("A8-A15")
-
-
-def _slant(np, ink) -> float:
-    """How far a block of ink leans right, as the shear that stands its
-    strokes upright: the one that piles the ink into the fewest columns."""
-    ys, xs = np.nonzero(ink)
-    ys = ys - ys.mean()
-    best, best_score = 0.0, -1.0
-    for shear in np.linspace(-0.1, 0.4, 26):
-        cols = np.round(xs + shear * ys).astype(int)
-        score = float((np.bincount(cols - cols.min()) ** 2).sum())
-        if score > best_score:
-            best, best_score = float(shear), score
-    return best
 
 
 def _mark_italic(np, pymupdf, page, table) -> int:
