@@ -43,12 +43,17 @@ from src.analyzers.toc.signals import (
     HEADINGLESS_MIN_SHARE,
     LEVEL_X_TOL,
     MIN_ACCOUNTED_SHARE,
+    PAGELESS_HEADING_RATIO,
+    PAGELESS_INDENTED_SHARE,
+    PAGELESS_MAX_INDENTS,
+    PAGELESS_MIN_ENTRIES,
     MIN_COLUMN_REFS,
     MIN_ENTRIES_PER_PAGE,
     PAGE_ATTACH,
     RIGHT_EDGE_TOL,
     ROW_OVERLAP,
     TOC_HEADING_MAX_PAGE,
+    _NUMBERING_WORD_RE,
 )
 
 
@@ -184,7 +189,8 @@ def _nearest_left(ln: Line, lines: Sequence[Line]) -> Optional[Line]:
 
 def _page_candidates(lines: Sequence[Line]) -> List[Line]:
     """Lines that may carry a page reference: text ending in leader + page,
-    or a bare reference with a title or a leader run to its left. A number
+    or a bare reference with a title or a leader run to its left - not a
+    numbering word ("Section | 2" numbers a section). A number
     with nothing but another number before it is a section number of the
     next column (MetaPost: "…графика 33 | 9 Продвинутая…"); a title can be
     all digits as long as it runs out in a leader (TeX Live: "10.1.1 2003
@@ -195,6 +201,10 @@ def _page_candidates(lines: Sequence[Line]) -> List[Line]:
         t = ln.text.strip()
         if is_page_ref(t):
             left = _nearest_left(ln, lines)
+            # "Section | 2" is a section's number, not the page it is on
+            # (a typewritten contents list sets the two apart).
+            if left is not None and _NUMBERING_WORD_RE.match(left.text.strip()):
+                continue
             if left is not None and (
                 any(c.isalpha() for c in left.text) or ends_with_leader(left.text)
                 or is_leader_only(left.text)
@@ -259,13 +269,10 @@ def _drop_side_labels(col: List[Line], edge: float) -> List[Line]:
 
 # -- rows ----------------------------------------------------------------------
 
-def _rows(col: List[Line], edge: float) -> List[Row]:
-    cands = {l.idx for l in _page_candidates(col)}
-    standalone = [l for l in col if l.idx in cands and is_page_ref(l.text)
-                  and l.x1 >= edge - RIGHT_EDGE_TOL]
-    loose = {l.idx for l in standalone}
+def _group_rows(lines: Sequence[Line]) -> List[Row]:
+    """Lines into rows: a line sharing most of its height with a row is on it."""
     rows: List[Row] = []
-    for ln in sorted((l for l in col if l.idx not in loose), key=lambda l: (l.y0, l.x0)):
+    for ln in sorted(lines, key=lambda l: (l.y0, l.x0)):
         for r in reversed(rows[-3:]):
             ov = min(r.y1, ln.y1) - max(r.y0, ln.y0)
             if ov >= ROW_OVERLAP * min(r.h, ln.h):
@@ -274,6 +281,15 @@ def _rows(col: List[Line], edge: float) -> List[Row]:
                 break
         else:
             rows.append(Row(lines=[ln]))
+    return rows
+
+
+def _rows(col: List[Line], edge: float) -> List[Row]:
+    cands = {l.idx for l in _page_candidates(col)}
+    standalone = [l for l in col if l.idx in cands and is_page_ref(l.text)
+                  and l.x1 >= edge - RIGHT_EDGE_TOL]
+    loose = {l.idx for l in standalone}
+    rows = _group_rows([l for l in col if l.idx not in loose])
     # A bare page reference joins the nearest row to its left that has none
     # yet. OCR can set it half a line lower than its title (Zaks appendices).
     for p in sorted(standalone, key=lambda l: l.y0):
@@ -430,6 +446,61 @@ def read_page(lines: Sequence[Line], heading: Optional[Line] = None,
     return PageRead(entries, consumed, content, n_rows, stopped)
 
 
+def read_pageless(lines: Sequence[Line], heading: Optional[Line] = None,
+                  max_size: float = 0.0) -> PageRead:
+    """Entries of a contents page that points to no pages - a list of
+    links (Intel's "Contents": "1  Microprocessors"), a typewritten one
+    ("Section 2  Machine Utilisation"): every row under the heading is an
+    entry, until the list stops as read_page's does."""
+    if heading is not None:
+        lines = [l for l in lines if not _before(l, heading)]
+    consumed: Set[int] = {l.idx for l in lines if l.y0 < MARGIN_TOP or l.y0 > MARGIN_BOTTOM}
+    lines = [l for l in lines if l.idx not in consumed]
+    left = min((l.x0 for l in lines), default=0.0)
+    entries: List[Entry] = []
+    content: Set[int] = set()
+    n_rows, stopped = 0, False
+    sizes: List[float] = []
+    for row in _group_rows(lines):
+        row.text = strip_leaders(" ".join(l.text for l in row.lines))
+        if not row.text or is_folio(row.text):
+            consumed.update(l.idx for l in row.lines)
+            continue
+        n_rows += 1
+        # The text layer's sizes of a scan scatter: "RAMs" is 15.4pt
+        # beside "Introduction"'s 11.5 in one type. With no page to close
+        # an entry, only a row far over the list's usual is the book's text.
+        usual = median(sizes) if sizes else max_size
+        if is_stop_heading(row.text) or is_prose(row.text) or (
+            usual and row.size > PAGELESS_HEADING_RATIO * usual
+        ):
+            stopped = True
+            break
+        entries.append(Entry(rows=[row], column_left=left))
+        sizes.append(row.size)
+        ids = {l.idx for l in row.lines}
+        consumed |= ids
+        content |= ids
+    return PageRead(entries, consumed, content, n_rows, stopped)
+
+
+def _is_pageless_list(p: PageRead) -> bool:
+    """A page-less read is a contents list only when it reads as one: enough
+    rows, and their starts on a few indents - a diagram's labels, which a
+    "CONTENTS" register name can head (MCS-40), stand anywhere."""
+    if len(p.entries) < PAGELESS_MIN_ENTRIES:
+        return False
+    starts = sorted(e.rows[0].x0 for e in p.entries)
+    indents: List[List[float]] = []
+    for x in starts:
+        if indents and x - indents[-1][-1] <= LEVEL_X_TOL:
+            indents[-1].append(x)
+        else:
+            indents.append([x])
+    biggest = sorted((len(i) for i in indents), reverse=True)[:PAGELESS_MAX_INDENTS]
+    return sum(biggest) >= PAGELESS_INDENTED_SHARE * len(starts)
+
+
 def _is_toc_page(p: PageRead, min_entries: int, min_share: float) -> bool:
     """Enough entries, and they explain enough of the page."""
     return len(p.entries) >= min_entries and p.accounted >= min_share * max(p.rows, 1)
@@ -477,10 +548,24 @@ def _read_from(pages: Dict[int, List[Line]], start: int,
     used: List[int] = []
     page = start
     max_size = 0.0
+    pageless = False
     while page in pages:
-        read = read_page(pages[page], heading if page == start else None, max_size)
         first = page == start
-        if not first and not _is_toc_page(read, MIN_ENTRIES_PER_PAGE, MIN_ACCOUNTED_SHARE):
+        lead = heading if first else None
+        if pageless:
+            read = read_pageless(pages[page], lead, max_size)
+            if not _is_pageless_list(read):
+                break
+        else:
+            read = read_page(pages[page], lead, max_size)
+            # Under its heading, a list that points to no page at all is
+            # read row by row (read_pageless) - when it reads as a list.
+            if first and not read.entries and heading is not None:
+                read = read_pageless(pages[page], heading, max_size)
+                pageless = _is_pageless_list(read)
+                if not pageless:
+                    break
+        if not first and not pageless and not _is_toc_page(read, MIN_ENTRIES_PER_PAGE, MIN_ACCOUNTED_SHARE):
             break
         if first and not read.entries:
             break

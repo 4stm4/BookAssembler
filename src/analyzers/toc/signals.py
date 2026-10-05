@@ -72,9 +72,15 @@ _NUMBER_TOKEN_RE = re.compile(
 )
 
 # The same number leading a line's text ("26.1 Caveat with…", "27.10Migration").
+# Words a section number is printed after ("Section 2", "Глава 3").
+NUMBERING_WORDS = "Chapter|Appendix|Part|Section|Глава|Часть|Раздел|Приложение"
+_NUMBERING_WORD_RE = re.compile(rf"^(?:{NUMBERING_WORDS})$", re.IGNORECASE)
+
 _LEADING_NUMBER_RE = re.compile(
-    r"^(?P<num>(?:(?:Chapter|Appendix|Part|Section|Глава|Часть|Раздел|Приложение)\s+)?"
-    r"(?:\d{1,2}(?:\.\d{1,3})+|\d{1,2}\.?|[IVXL]{1,4}\.|[A-ZА-Я]\.))"
+    rf"^(?P<num>(?:(?:{NUMBERING_WORDS})\s+)?"
+    r"(?:\d{1,2}(?:\.\d{1,3})+|\d{1,2}\.?|[IVXL]{1,4}\.|[A-ZА-Я]\.)"
+    # an appendix lettered without a stop ("Appendix A  Equipment")
+    r"|(?:Appendix|Приложение)\s+[A-ZА-Я](?=\s))"
     r"(?:\s+|(?=[A-ZА-ЯЁ]))(?P<rest>\S.*)$"
 )
 
@@ -114,6 +120,13 @@ LEVEL_X_TOL = 0.012        # entry starts closer than this share an indentation 
 # 26 rows) — all of them contents.
 MIN_ENTRIES_PER_PAGE = 2
 MIN_ACCOUNTED_SHARE = 0.6
+# A contents list that points to no page, under its heading, must read as a
+# list: this many rows, and this share of them starting on its few indents.
+PAGELESS_MIN_ENTRIES = 5
+PAGELESS_MAX_INDENTS = 3
+PAGELESS_INDENTED_SHARE = 0.8
+# …and it ends where a row is this much larger than its rows' usual size.
+PAGELESS_HEADING_RATIO = 1.5
 # A contents page found without a heading must be unambiguous.
 HEADINGLESS_MIN_ENTRIES = 6
 HEADINGLESS_MIN_SHARE = 0.5
