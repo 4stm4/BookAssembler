@@ -14,16 +14,14 @@ import fitz
 
 from tests.e2e.test_assembled_table_pdf import _extract_table
 from tests.e2e.test_visual_overlay import (
-    _build_single_table_pdf, _output_table_rect, _source_table_rect, _table_texts,
+    _build_single_table_pdf, _crop_rects,
 )
 
 pdf = Path(sys.argv[1])
 table = _extract_table(pdf)
-texts = _table_texts(table)
 with tempfile.TemporaryDirectory() as td:
     out = _build_single_table_pdf(table, td, "drift")
-    src_rect = _source_table_rect(fitz, pdf, 0, table)
-    out_rect = _output_table_rect(fitz, Path(out), 1, texts)
+    src_rect, out_rect = _crop_rects(fitz, pdf, 0, Path(out), table)
     src_words = [w for w in fitz.open(pdf)[0].get_text("words") if src_rect.contains(fitz.Rect(w[:4]))]
     out_words = [w for w in fitz.open(out)[1].get_text("words") if out_rect.contains(fitz.Rect(w[:4]))]
 print(f"src crop {src_rect}  out crop {out_rect}")

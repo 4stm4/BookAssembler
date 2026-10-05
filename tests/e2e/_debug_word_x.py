@@ -12,15 +12,14 @@ sys.path.insert(0, "/app")
 import fitz
 
 from tests.e2e.test_assembled_table_pdf import _extract_table
-from tests.e2e.test_visual_overlay import _build_single_table_pdf, _output_table_rect, _source_table_rect, _table_texts
+from tests.e2e.test_visual_overlay import _build_single_table_pdf, _crop_rects
 
 pdf = Path(sys.argv[1])
 table = _extract_table(pdf)
-src_rect = _source_table_rect(fitz, pdf, 0, table)
-src = [w for w in fitz.open(pdf)[0].get_text("words") if src_rect.contains(fitz.Rect(w[:4]))]
 with tempfile.TemporaryDirectory() as td:
     out_pdf = Path(_build_single_table_pdf(table, td, "wx"))
-    out_rect = _output_table_rect(fitz, out_pdf, 1, _table_texts(table))
+    src_rect, out_rect = _crop_rects(fitz, pdf, 0, out_pdf, table)
+    src = [w for w in fitz.open(pdf)[0].get_text("words") if src_rect.contains(fitz.Rect(w[:4]))]
     out = [w for w in fitz.open(out_pdf)[1].get_text("words") if out_rect.contains(fitz.Rect(w[:4]))]
 for word in sys.argv[2:]:
     s = [(w[0] - src_rect.x0, w[2] - src_rect.x0, w[1] - src_rect.y0) for w in src if w[4] == word][:3]

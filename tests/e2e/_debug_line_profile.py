@@ -15,7 +15,7 @@ import numpy as np
 
 from tests.e2e.test_assembled_table_pdf import _extract_table
 from tests.e2e.test_visual_overlay import (
-    _build_single_table_pdf, _output_table_rect, _render_crop, _source_table_rect, _table_texts,
+    _build_single_table_pdf, _crop_rects, _render_crop,
 )
 
 pdf, y0, y1 = Path(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3])
@@ -37,9 +37,9 @@ def profile(img, height_pt):
 
 with tempfile.TemporaryDirectory() as td:
     out = Path(_build_single_table_pdf(table, td, "lp"))
-    src_rect = _source_table_rect(fitz, pdf, 0, table)
+    src_rect, out_rect = _crop_rects(fitz, pdf, 0, out, table)
     s = profile(_render_crop(fitz, pdf, 0, src_rect, 8.0), src_rect.height)
-    o = profile(_render_crop(fitz, out, 1, _output_table_rect(fitz, out, 1, _table_texts(table)), 8.0), src_rect.height)
+    o = profile(_render_crop(fitz, out, 1, out_rect, 8.0), src_rect.height)
 for name, p in (("src", s), ("out", o)):
     peak = max(p)
     top = next(i for i, v in enumerate(p) if v > 0.02)

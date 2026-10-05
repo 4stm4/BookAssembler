@@ -15,7 +15,7 @@ import numpy as np
 
 from tests.e2e.test_assembled_table_pdf import _extract_table
 from tests.e2e.test_visual_overlay import (
-    _build_single_table_pdf, _output_table_rect, _render_crop, _source_table_rect, _table_texts,
+    _build_single_table_pdf, _crop_rects, _render_crop,
 )
 
 ZOOM = 4.0
@@ -50,8 +50,7 @@ n = int(sys.argv[2]) if len(sys.argv) > 2 else 20
 table = _extract_table(pdf)
 with tempfile.TemporaryDirectory() as td:
     out = Path(_build_single_table_pdf(table, td, "ink"))
-    src_rect = _source_table_rect(fitz, pdf, 0, table)
-    out_rect = _output_table_rect(fitz, out, 1, _table_texts(table))
+    src_rect, out_rect = _crop_rects(fitz, pdf, 0, out, table)
     s = bands(_render_crop(fitz, pdf, 0, src_rect, ZOOM), src_rect.height)
     o = bands(_render_crop(fitz, out, 1, out_rect, ZOOM), src_rect.height)
 for i in range(min(n, max(len(s), len(o)))):

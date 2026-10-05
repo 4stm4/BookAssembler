@@ -15,7 +15,7 @@ import numpy as np
 
 from tests.e2e.test_assembled_table_pdf import _extract_table
 from tests.e2e.test_visual_overlay import (
-    _build_single_table_pdf, _output_table_rect, _render_crop, _source_table_rect, _table_texts,
+    _build_single_table_pdf, _crop_rects, _render_crop,
 )
 
 ZOOM = 6.0
@@ -38,8 +38,8 @@ def starts(img, height_pt):
 
 with tempfile.TemporaryDirectory() as td:
     out = Path(_build_single_table_pdf(table, td, "ws"))
-    src_rect = _source_table_rect(fitz, pdf, 0, table)
+    src_rect, out_rect = _crop_rects(fitz, pdf, 0, out, table)
     s = starts(_render_crop(fitz, pdf, 0, src_rect, ZOOM), src_rect.height)
-    o = starts(_render_crop(fitz, out, 1, _output_table_rect(fitz, out, 1, _table_texts(table)), ZOOM), src_rect.height)
+    o = starts(_render_crop(fitz, out, 1, out_rect, ZOOM), src_rect.height)
 print("src", " ".join(f"{v:.1f}" for v in s))
 print("out", " ".join(f"{v:.1f}" for v in o))

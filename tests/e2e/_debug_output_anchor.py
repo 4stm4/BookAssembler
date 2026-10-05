@@ -13,7 +13,7 @@ sys.path.insert(0, "/app")
 import fitz
 
 from tests.e2e.test_assembled_table_pdf import _extract_table
-from tests.e2e.test_visual_overlay import _build_single_table_pdf, _output_table_rect, _table_texts
+from tests.e2e.test_visual_overlay import _build_single_table_pdf, _crop_rects, _table_texts
 
 table = _extract_table(Path(sys.argv[1]))
 texts = _table_texts(table)
@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory() as td:
         if len(t) >= 6:
             hits = page.search_for(t)
             print(f"{'  ' if hits else 'NO'} {min((h.y0 for h in hits), default=0):6.1f}-{max((h.y1 for h in hits), default=0):6.1f}  {t[:50]!r}")
-    print("crop", _output_table_rect(fitz, out, 1, texts))
+    print("crops", _crop_rects(fitz, Path(sys.argv[1]), 0, out, table))
     if len(sys.argv) > 2:
         text = page.get_text()
         i = text.find(sys.argv[2])

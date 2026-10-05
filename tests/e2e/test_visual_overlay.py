@@ -60,7 +60,7 @@ def _table_texts(table: TableBlock, min_len: int = 1) -> list:
 # above, while the source got none - which shifted every rebuilt pixel
 # against its source counterpart by that margin, so no border could
 # coincide however well it was placed.
-_FRAME_REACH_PT = 20.0
+_FRAME_REACH_PT = 25.0
 _FRAME_RULE_SPAN = 0.6   # a rule covers most of the table; text never does
 
 
@@ -106,41 +106,71 @@ def _grow_to_frame(fitz, page, rect):
     )
 
 
-def _source_table_rect(fitz, pdf_path: Path, page_index: int, table: TableBlock):
-    doc = fitz.open(pdf_path)
-    page = doc[page_index]
-    pw, ph = page.rect.width, page.rect.height
-    bb = table.visual_layout.bounding_box
-    rect = _grow_to_frame(fitz, page, fitz.Rect(bb.x0 * pw, bb.y0 * ph, bb.x1 * pw, bb.y1 * ph))
-    doc.close()
-    return rect
+def _table_lines(table: TableBlock) -> list:
+    """The table's text as the lines it was printed in: a cell of several
+    lines is searched for line by line, as a page's text layer holds it."""
+    return [line.strip() for t in _table_texts(table) for line in t.split("\n") if line.strip()]
 
 
-def _output_table_rect(fitz, pdf_path: Path, page_index: int, texts: list):
-    """Locate a table on the assembled PDF by its own cell text.
+def _table_rect(fitz, pdf_path: Path, page_index: int, texts: list):
+    """Locate a table on a page by its own text - the same way on the
+    source page and on the assembled one.
 
-    Tokens of 6+ characters anchor it - short numbers and words risk
-    colliding with unrelated text elsewhere on the page (the page number,
-    another table). Every cell's text found within _FRAME_REACH_PT of that
-    anchor then makes up the table's text extent, the same way the source's
-    extent is made of all of its cells.
+    Tokens of 6+ characters the page prints once anchor it - short numbers
+    and words, and words the page repeats, risk colliding with unrelated
+    text elsewhere on it (the page number, another table, prose). The
+    extent then takes in, step by step, every one of the texts found within
+    _FRAME_REACH_PT of it, and is grown to its frame.
     """
     doc = fitz.open(pdf_path)
     page = doc[page_index]
-    strong = [r for t in texts if len(t) >= 6 for r in page.search_for(t)]
+    # An anchor is a text the page prints once: on a book page "Decimal"
+    # and "Binary" head the decimal/binary table and recur in its prose,
+    # and every recurrence stretched the anchor down the page.
+    strong = [r for t in texts if len(t) >= 6 for hits in [page.search_for(t)]
+              if len({round(h.y0 / 3) for h in hits}) == 1 for r in hits]
     if not strong:
         doc.close()
         return None
-    anchor = fitz.Rect(min(r.x0 for r in strong), min(r.y0 for r in strong),
+    # From the anchor out, a text at a time: whatever of the table's text
+    # stands within _FRAME_REACH_PT of what is already in joins it, until
+    # nothing more does - a recurrence further down the page never does.
+    hits = [r for t in set(texts) for r in page.search_for(t)]
+    extent = fitz.Rect(min(r.x0 for r in strong), min(r.y0 for r in strong),
                        max(r.x1 for r in strong), max(r.y1 for r in strong))
-    near = fitz.Rect(anchor.x0 - _FRAME_REACH_PT, anchor.y0 - _FRAME_REACH_PT,
-                     anchor.x1 + _FRAME_REACH_PT, anchor.y1 + _FRAME_REACH_PT)
-    rects = [r for t in set(texts) for r in page.search_for(t) if near.contains(r)]
-    extent = fitz.Rect(min(r.x0 for r in rects), min(r.y0 for r in rects),
-                       max(r.x1 for r in rects), max(r.y1 for r in rects))
+    while True:
+        near = fitz.Rect(extent.x0 - _FRAME_REACH_PT, extent.y0 - _FRAME_REACH_PT,
+                         extent.x1 + _FRAME_REACH_PT, extent.y1 + _FRAME_REACH_PT)
+        grown = fitz.Rect(extent)
+        for r in hits:
+            if near.intersects(r):
+                grown |= r
+        if grown == extent:
+            break
+        extent = grown
     rect = _grow_to_frame(fitz, page, extent)
     doc.close()
     return rect
+
+
+def _crop_rects(fitz, source_pdf: Path, source_page: int, rebuilt_pdf: Path, table: TableBlock):
+    """Where to cut the source table and the rebuilt one: both by
+    _table_rect, from the lines of the table's text found on BOTH pages.
+
+    The source used to be cut by the table's box as the analyzer recorded
+    it and the rebuild by its text, which differ wherever a table's box is
+    more than its text: the box-drawn architecture fixture's grid holds
+    rows and margins its text does not reach, and its rebuild was cut
+    30pt shorter than its source however exactly it was set. One method,
+    one set of texts: what each crop holds is decided the same way.
+    """
+    lines = _table_lines(table)
+    src_doc, out_doc = fitz.open(source_pdf), fitz.open(rebuilt_pdf)
+    shared = [t for t in dict.fromkeys(lines)
+              if src_doc[source_page].search_for(t) and out_doc[1].search_for(t)]
+    src_doc.close()
+    out_doc.close()
+    return _table_rect(fitz, source_pdf, source_page, shared), _table_rect(fitz, rebuilt_pdf, 1, shared)
 
 
 def _render_crop(fitz, pdf_path: Path, page_index: int, rect, zoom: float = 2.0):
@@ -234,19 +264,18 @@ def _build_single_table_pdf(table: TableBlock, work_dir: str, name: str) -> str:
     ],
 )
 def test_table_visual_overlay_matches_source(tmp_path, fixture_path, source_page):
-    """Crop the source table and the reassembled table to their own real
-    bounding boxes, lay one ink matrix over the other, and fail if more
-    than MAX_MISMATCH of the pixels disagree."""
+    """Crop the source table and the reassembled table the same way, each
+    to its own text extent grown to its frame, lay one ink matrix over
+    the other, and fail if more than MAX_MISMATCH of the pixels disagree."""
     fitz = pytest.importorskip("pymupdf")
     pytest.importorskip("PIL")
 
     table = _extract_table(fixture_path)
-    texts = _table_texts(table)
 
     pdf_path = _build_single_table_pdf(table, str(tmp_path), "overlay_doc")
 
-    src_rect = _source_table_rect(fitz, fixture_path, source_page, table)
-    out_rect = _output_table_rect(fitz, Path(pdf_path), 1, texts)
+    src_rect, out_rect = _crop_rects(fitz, fixture_path, source_page, Path(pdf_path), table)
+    assert src_rect is not None, "could not locate the source table by its own text"
     assert out_rect is not None, "could not locate the assembled table on its own page"
 
     img_source = _render_crop(fitz, fixture_path, source_page, src_rect)

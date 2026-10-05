@@ -15,7 +15,7 @@ import fitz
 
 from tests.e2e.test_assembled_table_pdf import _extract_table
 from tests.e2e.test_visual_overlay import (
-    _build_single_table_pdf, _ink_mask, _output_table_rect, _render_crop, _source_table_rect, _table_texts,
+    _build_single_table_pdf, _crop_rects, _ink_mask, _render_crop,
 )
 
 pdf = Path(sys.argv[1])
@@ -23,8 +23,9 @@ bands = int(sys.argv[2]) if len(sys.argv) > 2 else 12
 table = _extract_table(pdf)
 with tempfile.TemporaryDirectory() as td:
     out = Path(_build_single_table_pdf(table, td, "map"))
-    a = _ink_mask(_render_crop(fitz, pdf, 0, _source_table_rect(fitz, pdf, 0, table)))
-    b = _ink_mask(_render_crop(fitz, out, 1, _output_table_rect(fitz, out, 1, _table_texts(table))))
+    src_rect, out_rect = _crop_rects(fitz, pdf, 0, out, table)
+    a = _ink_mask(_render_crop(fitz, pdf, 0, src_rect))
+    b = _ink_mask(_render_crop(fitz, out, 1, out_rect))
 total = a.size
 print(f"mismatch {(a ^ b).sum() / total:.2%}  source-only {(a & ~b).sum() / total:.2%}  rebuild-only {(b & ~a).sum() / total:.2%}")
 print(f"ink: source {a.sum() / total:.2%}  rebuild {b.sum() / total:.2%}  both {(a & b).sum() / total:.2%}")

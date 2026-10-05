@@ -15,7 +15,10 @@ import numpy as np
 from src.assembler.latex_builder import build_latex, compile_xelatex
 from src.krm.models import ContainerUnit, KnowledgeDocument
 from tests.e2e.test_assembled_table_pdf import FIXTURE_A, FIXTURE_B, _extract_table
-from tests.e2e.test_visual_overlay import _INK_THRESHOLD, _output_table_rect, _source_table_rect, _table_texts
+from tests.e2e.test_visual_overlay import (
+    _INK_THRESHOLD, _table_texts,
+)
+from tests.e2e._debug_crops import _output_table_rect, _source_table_rect
 
 ZOOM = 6.0
 

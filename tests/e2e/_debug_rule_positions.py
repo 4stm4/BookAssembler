@@ -16,7 +16,10 @@ import fitz
 from src.assembler.latex_builder import build_latex, compile_xelatex
 from src.krm.models import ContainerUnit, KnowledgeDocument
 from tests.e2e.test_assembled_table_pdf import FIXTURE_A, FIXTURE_B, _extract_table
-from tests.e2e.test_visual_overlay import _table_texts, _output_table_rect
+from tests.e2e.test_visual_overlay import (
+    _table_texts,
+)
+from tests.e2e._debug_crops import _output_table_rect
 from tests.e2e._debug_row_height_solve import horizontal_rules
 PH = 841.89
 for name, fx in (("A", FIXTURE_A), ("B", FIXTURE_B)):

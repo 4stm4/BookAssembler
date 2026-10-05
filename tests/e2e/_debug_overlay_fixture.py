@@ -14,16 +14,15 @@ import numpy as np
 from PIL import Image
 from tests.e2e.test_assembled_table_pdf import _extract_table
 from tests.e2e.test_visual_overlay import (
-    _MASK_SIZE, _build_single_table_pdf, _ink_mask, _mask_mismatch, _output_table_rect,
-    _render_crop, _source_table_rect, _table_texts,
+    _MASK_SIZE, _build_single_table_pdf, _crop_rects, _ink_mask, _mask_mismatch,
+    _render_crop, _table_texts,
 )
 
 fx = Path(sys.argv[1])
 t = _extract_table(fx, index=int(sys.argv[2]) if len(sys.argv) > 2 else 0)
 with tempfile.TemporaryDirectory() as td:
     pdf = Path(_build_single_table_pdf(t, td, "overlay_doc"))
-    s = _source_table_rect(fitz, fx, 0, t)
-    o = _output_table_rect(fitz, pdf, 1, _table_texts(t))
+    s, o = _crop_rects(fitz, fx, 0, Path(pdf), t)
     a, b = _render_crop(fitz, fx, 0, s), _render_crop(fitz, pdf, 1, o)
     ma, mb = _ink_mask(a), _ink_mask(b)
     print(f"{fx.name}: source crop {s.width:.1f}x{s.height:.1f}  rebuild crop {o.width:.1f}x{o.height:.1f}"

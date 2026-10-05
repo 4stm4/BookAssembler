@@ -11,7 +11,10 @@ import fitz
 from src.assembler.latex_builder import build_latex, compile_xelatex
 from src.krm.models import ContainerUnit, KnowledgeDocument
 from tests.e2e.test_assembled_table_pdf import FIXTURE_A, _extract_table
-from tests.e2e.test_visual_overlay import _table_texts, _source_table_rect
+from tests.e2e.test_visual_overlay import (
+    _table_texts,
+)
+from tests.e2e._debug_crops import _source_table_rect
 
 table = _extract_table(FIXTURE_A)
 texts = _table_texts(table)
