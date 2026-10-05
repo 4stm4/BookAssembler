@@ -139,7 +139,10 @@ def _ink_size(np, dark, cell: "BoxCell", z: float, inset: float) -> float:
     if not bands:
         return 0.0
     a, b = bands[0]
-    first_line = (sorted(cell.words, key=lambda w: w[1])[0][4] if cell.words else "")
+    # The whole first line, not its first word: "Command Line Interpreter"
+    # reaches below its baseline in "p", and judged by "Command" alone it
+    # was set at 12.5pt beside its neighbours' 9.3-10.2.
+    first_line = _cell_lines(cell.words).split("\n")[0] if cell.words else ""
     share = _CAP_SHARE + (_DESCENT_SHARE if any(ch in "gjpqy" for ch in first_line) else 0.0)
     return (b - a) / z / share
 
