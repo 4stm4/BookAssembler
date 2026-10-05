@@ -1308,25 +1308,37 @@ def _render_table(table: TableBlock) -> str:
                     # 9.5pt the pin description fixture's capitals stood
                     # 6.9pt to the print's 7.6, every baseline 1pt high.
                     _ink = md.get("ink_size_pt", 0.0) * _TEX_PT_PER_BP
-                    _grow = _ink - median_pt if median_pt > 0 and _leading > 0 else 0.0
+                    _size = _ink if median_pt > 0 and _leading > 0 and _ink > median_pt else median_pt
+                    # At the weight the page shows (the analyzer's stroke_pt),
+                    # as the table's rules are drawn at theirs: Heros as cut
+                    # drew the fixture's 1.5pt strokes at 1.0. The FakeBold
+                    # outline grows each glyph by half its stroke gain all
+                    # round, so the type is set that much smaller and its
+                    # capitals still stand as tall as the print's.
+                    _fb = 0.0
+                    if md.get("stroke_pt") and md.get("typeface") == "sans" and _size > 0:
+                        _fb = min(_FAKEBOLD_MAX, max(0.0, (md["stroke_pt"] - _HEROS_STROKE_EM * _size)
+                                                      / (_FAKEBOLD_STROKE_EM * _size)))
+                        if _fb < 0.5:
+                            _fb = 0.0
+                    _outline = _fb * _FAKEBOLD_STROKE_EM * _size / 2.0
+                    _size -= 2.0 * _outline / _HEROS_CAP_EM
+                    _grow = _size - median_pt if median_pt > 0 and _leading > 0 else 0.0
                     _ink_x0 = md.get("column_ink_x0") or []
                     if _ink_x0 and col < len(_ink_x0) and _ink_x0[col] is not None:
                         placed_from_ink[(row_idx, col)] = _ink_x0[col]
+                    # lowered so the capitals' top, outline and all, stays
+                    # where the print's is
+                    _drop = _HEROS_CAP_EM * _grow + _outline
                     _positioned = _positioned_lines(
-                        cell, raw, drop_pt=_HEROS_CAP_EM * _grow if _grow > 0 else 0.0,
+                        cell, raw, drop_pt=_drop if _drop > 0 else 0.0,
                         origin_x=_ink_x0[col] if col < len(_ink_x0) and _ink_x0[col] is not None else None,
                     )
-                    _glyphs = (
-                        f"\\fontsize{{{_ink:.2f}}}{{{_leading:.2f}}}\\selectfont " if _positioned and _grow > 0 else ""
-                    )
-                    # and at the weight the page shows (the analyzer's
-                    # stroke_pt), as the table's rules are drawn at theirs:
-                    # Heros as cut drew the fixture's 1.5pt strokes at 1.0.
-                    _size = _ink if _grow > 0 else median_pt
-                    if _positioned and md.get("stroke_pt") and md.get("typeface") == "sans" and _size > 0:
-                        _fb = (md["stroke_pt"] - _HEROS_STROKE_EM * _size) / (_FAKEBOLD_STROKE_EM * _size)
-                        if _fb >= 0.5:
-                            _glyphs = f"\\addfontfeatures{{FakeBold={min(_fb, _FAKEBOLD_MAX):.1f}}}" + _glyphs
+                    _glyphs = ""
+                    if _positioned and abs(_grow) > 0.05:
+                        _glyphs += f"\\fontsize{{{_size:.2f}}}{{{_leading:.2f}}}\\selectfont "
+                    if _positioned and _fb:
+                        _glyphs = f"\\addfontfeatures{{FakeBold={_fb:.1f}}}" + _glyphs
                     body = "\\lineskiplimit=-\\maxdimen " + _glyphs + (
                         _positioned or "\\newline ".join(_line_texts(cell, raw))
                     )

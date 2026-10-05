@@ -92,3 +92,8 @@ for k in range(16):
             scores.append(((a[s, x0:] ^ sb[s, x0:]).sum(), dx, dy))
     m, dx, dy = min(scores)
     print(f"  band {k:2d}: ({dx:+d}, {dy:+d})  ({m / total:.2%} vs {(a[s, x0:] ^ b[s, x0:]).sum() / total:.2%})")
+print("source-only / rebuild-only by column band:")
+for k in range(8):
+    s = slice(k * w // 8, (k + 1) * w // 8)
+    print(f"  band {k}: src-only {(a[:, s] & ~b[:, s]).sum() / total:.2%}  out-only {(b[:, s] & ~a[:, s]).sum() / total:.2%}"
+          f"  ink src {a[:, s].sum() / total:.2%} out {b[:, s].sum() / total:.2%}")
