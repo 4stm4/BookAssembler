@@ -8,6 +8,7 @@ page height would not take it - and has tesseract write the text layer.
 Needs tesseract (eng) next to PyMuPDF; the project image does not carry it.
 
     python3 tests/fixtures/build_scanned_fixture.py            # all of FIXTURES
+    python3 tests/fixtures/build_scanned_fixture.py toc/toc_a.pdf ...   # just these
     python3 tests/fixtures/build_scanned_fixture.py SRC OUT [width_pt] [psm] [min_dpi]
 
 psm is tesseract's page segmentation mode (default 3). The page is
@@ -54,21 +55,47 @@ def build(src: str, out: str, width_pt: float = 500.0, psm: int = 3, min_dpi: in
     print(f"{out}: {dpi} dpi, {pdf[0].rect}, {len(pdf[0].get_text('words'))} words")
 
 
-# How each fixture in tests/fixtures is built from its source in src/:
-# (source, fixture, width_pt, psm, min_dpi).
+def build_pages(srcs: list, out: str, width_pt: float = 500.0, psm: int = 3, min_dpi: int = 0) -> None:
+    """A fixture of several pages, one per source image, in their order: a
+    table of contents runs on over pages."""
+    pages = []
+    for k, src in enumerate(srcs):
+        part = f"{out[:-4]}.part{k}.pdf"
+        build(src, part, width_pt, psm, min_dpi)
+        pages.append(part)
+    doc = pymupdf.open()
+    for part in pages:
+        with pymupdf.open(part) as one:
+            doc.insert_pdf(one)
+    doc.save(out)
+    from pathlib import Path
+    for part in pages:
+        Path(part).unlink(missing_ok=True)
+        Path(part + ".page.png").unlink(missing_ok=True)
+
+
+# How each fixture in tests/fixtures is built from its source images
+# (paths relative to tests/fixtures; several make one page each):
+# (sources, fixture, width_pt, psm, min_dpi).
 FIXTURES = [
-    ("dc_characteristics_table.png", "dc_characteristics_table.pdf", 500, 3, 0),
-    ("pin_description_table.png", "pin_description_table.pdf", 500, 3, 250),
-    ("index_to_advertisers.webp", "index_to_advertisers.pdf", 500, 3, 0),
+    (["src/dc_characteristics_table.png"], "dc_characteristics_table.pdf", 500, 3, 0),
+    (["src/pin_description_table.png"], "pin_description_table.pdf", 500, 3, 250),
+    (["src/index_to_advertisers.webp"], "index_to_advertisers.pdf", 500, 3, 0),
     # A diagram's labels stand apart, in boxes: read as sparse text (psm 11)
     # its OCR finds "OS/8", "Debugger", "Bootstrap", "LEDs" and "PPI" that
     # page layout analysis (psm 3) lost or broke up ("Deb ebuager").
-    ("software_architecture.png", "software_architecture.pdf", 500, 11, 250),
+    (["src/software_architecture.png"], "software_architecture.pdf", 500, 11, 250),
+    # Tables of contents (tests/e2e/test_toc_overlay.py).
+    # One column of entries, their numbers set apart: psm 4 reads the numbers
+    # 3-14 that page layout analysis (psm 3) lost.
+    (["toc/Fixture_A.png"], "toc/toc_a.pdf", 500, 4, 0),
+    (["toc/Fixture_B.png"], "toc/toc_b.pdf", 500, 3, 0),
+    (["toc/Fixture_C1.png", "toc/Fixture_C2.png", "toc/Fixture_C3.png"], "toc/toc_c.pdf", 500, 3, 0),
 ]
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 2:
+    if len(sys.argv) > 2 and not sys.argv[1].endswith(".pdf"):
         build(
             sys.argv[1], sys.argv[2],
             float(sys.argv[3]) if len(sys.argv) > 3 else 500.0,
@@ -78,6 +105,12 @@ if __name__ == "__main__":
     else:
         from pathlib import Path
         here = Path(__file__).parent
-        for src, out, width, psm, min_dpi in FIXTURES:
-            build(str(here / "src" / src), str(here / out), width, psm, min_dpi)
-            (here / (out + ".page.png")).unlink(missing_ok=True)
+        only = set(sys.argv[1:])           # fixture names to rebuild; all when none
+        for srcs, out, width, psm, min_dpi in FIXTURES:
+            if only and out not in only:
+                continue
+            if len(srcs) == 1:
+                build(str(here / srcs[0]), str(here / out), width, psm, min_dpi)
+                (here / (out + ".page.png")).unlink(missing_ok=True)
+            else:
+                build_pages([str(here / s) for s in srcs], str(here / out), width, psm, min_dpi)
