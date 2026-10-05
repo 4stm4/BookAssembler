@@ -2219,3 +2219,30 @@ class TestPrintedWeight:
                                                style=StyleDescriptor(font_size_pt=12)))])
             return _body_stroke(page, TableBlock(grid=rows, row_count=4, column_count=1, visual_layout=rows[0][0].visual_layout))
         assert stroke_of("hebo") > stroke_of("helv")
+
+
+class TestFromInkEdge:
+    def test_lines_placed_from_the_column_ink_edge_start_there(self):
+        import re
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("one two\nthree", x0=0.185, y0=0.32),
+                 _cell("V", x0=0.33, y0=0.32)]]
+        cell = rows[1][1]
+        box = cell.visual_layout.bounding_box
+        cell.visual_layout.bounding_box = NormalizedRect(x0=box.x0, y0=box.y0, x1=box.x1, y1=box.y0 + 0.025)
+        cell.metadata["line_segments"] = [[[box.x0, "one two", box.x0 + 0.05]], [[box.x0, "three", box.x0 + 0.03]]]
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        grid = [[c if c.visual_layout.style else _styled(c) for c in row] for row in rows]
+        table = TableBlock(grid=grid, row_count=2, column_count=3, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.40, y1=0.36), page_or_screen_index=0))
+        for row in grid:
+            for c in row:
+                c.border_left = c.border_right = True
+        # the middle column ruled at 0.175, its ink 0.010 past the rule
+        table.metadata = {"column_rule_x": [0.175, 0.275], "column_ink_x0": [0.10, 0.185, 0.30]}
+        tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
+        tabcolsep = float(re.search(r"\\setlength\{\\tabcolsep\}\{([\d.]+)pt\}", tex).group(1))
+        rule_w = float(re.search(r"\\setlength\{\\arrayrulewidth\}\{([\d.]+)pt\}", tex).group(1))
+        shift = float(re.search(r"\\leftskip=(-?[\d.]+)pt\\relax", tex).group(1))
+        assert abs(shift - (0.010 * 21 * 72.27 / 2.54 - rule_w / 2 - tabcolsep)) < 0.05

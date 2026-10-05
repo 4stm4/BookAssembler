@@ -1200,6 +1200,9 @@ def _render_table(table: TableBlock) -> str:
     stacked: set = set()
     # (row, col) of a stacked cell -> the pitch its lines were printed at.
     line_pitch: Dict[Tuple[int, int], float] = {}
+    # (row, col) of a cell whose lines _positioned_lines set from its
+    # column's ink edge -> that edge (page fraction).
+    placed_from_ink: Dict[Tuple[int, int], float] = {}
     # Populated below only when bins are available (real per-column source
     # geometry); stays None otherwise so the fallback path further down
     # knows to fall back to the old content-length-driven estimate.
@@ -1307,6 +1310,8 @@ def _render_table(table: TableBlock) -> str:
                     _ink = md.get("ink_size_pt", 0.0) * _TEX_PT_PER_BP
                     _grow = _ink - median_pt if median_pt > 0 and _leading > 0 else 0.0
                     _ink_x0 = md.get("column_ink_x0") or []
+                    if _ink_x0 and col < len(_ink_x0) and _ink_x0[col] is not None:
+                        placed_from_ink[(row_idx, col)] = _ink_x0[col]
                     _positioned = _positioned_lines(
                         cell, raw, drop_pt=_HEROS_CAP_EM * _grow if _grow > 0 else 0.0,
                         origin_x=_ink_x0[col] if col < len(_ink_x0) and _ink_x0[col] is not None else None,
@@ -2076,6 +2081,21 @@ def _render_table(table: TableBlock) -> str:
             phase = _phase_from(col, (half - left_over) % _dot_pitch_pt)
             return text.replace("\\dotfill ", _dots_at(phase, weight=weight), 1)
         return text
+
+    def _from_ink_edge(col: int, ink_x0: float) -> str:
+        """What sets a cell's lines - each placed from its column's ink edge
+        (_positioned_lines) - over to where that edge is: the column's text
+        starts half its rule and a \\tabcolsep past the rule, and its ink a
+        little further in the print. The narrow columns' indent calibration
+        allows for a glyph box's inset from its ink; words boxed to their
+        ink have none, and without this the pin description fixture's
+        descriptions all stood 1.2pt left of their print."""
+        if _source_bounds is None or col >= len(_source_bounds) - 1:
+            return ""
+        left_open = col == 0 and _open_left
+        start = _source_bounds[col] + (0.0 if left_open else (_rule_w_pt / 2.0 + _tabcolsep_pt) / _A4_WIDTH_PT)
+        shift = (ink_x0 - start) * _A4_WIDTH_PT
+        return f"\\leftskip={shift:.2f}pt\\relax " if abs(shift) > 0.05 else ""
 
     def _fit_to_column(text: str, col: int) -> str:
         """A one-line cell of a narrow column, boxed to the column's width
@@ -3157,6 +3177,8 @@ def _render_table(table: TableBlock) -> str:
                 if isinstance(c, str):
                     _lead = cells[col - 1] if 0 < col <= len(cells) else ""
                     c = _joined_leaders(c, col, lead_bold=isinstance(_lead, str) and "\\bfseries" in _lead)
+                if isinstance(c, str) and (i, col) in placed_from_ink:
+                    c = _from_ink_edge(col, placed_from_ink[(i, col)]) + c
                 rendered.append(_render_cell(c, col, row_idx=i))
         extra = ""
         _row_extra_pt = raw_extra_pt[i] * _extra_scale if i < len(raw_extra_pt) else 0.0
