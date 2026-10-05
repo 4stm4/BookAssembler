@@ -1539,6 +1539,53 @@ def _line_feet(lines: List[List[Any]]) -> List[float]:
     return feet
 
 
+_WORD_GAP_SHARE = 0.22       # an ink gap this share of the line high parts words
+_WORD_ZOOM = 4.0
+
+
+def _ink_words(page, line: List[Any]) -> List[Tuple[float, float]]:
+    """Each word of a printed line where its ink runs (pt), not where OCR
+    boxed it: the line's ink cut at gaps wider than _WORD_GAP_SHARE of its
+    height, taken word for word where they come out as many as its words.
+    OCR's word boxes are rough - on the pin description fixture an "8"
+    boxed 1.6pt wide, and lines set by them drifted 2-5pt off their print
+    towards their ends. Where the cuts come out more or fewer than the
+    words, each word takes the cuts centred in its box, or keeps its box."""
+    import numpy as np
+    import pymupdf
+    boxes = [(w[0], w[2]) for w in line]
+    heights = sorted(w[3] - w[1] for w in line)
+    usual = heights[len(heights) // 2]
+    fair = [w for w in line if w[3] - w[1] <= _TALL_WORD * usual] or line
+    clip = pymupdf.Rect(min(w[0] for w in line) - 2, min(w[1] for w in fair),
+                        max(w[2] for w in line) + 2, max(w[3] for w in fair)) & page.rect
+    if clip.is_empty or len(line) < 2:
+        return boxes
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(_WORD_ZOOM, _WORD_ZOOM), clip=clip, colorspace=pymupdf.csGRAY)
+    ink = (np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width) < _RULE_INK_LEVEL).any(axis=0)
+    cols = np.flatnonzero(ink)
+    if not len(cols):
+        return boxes
+    gap = _WORD_GAP_SHARE * usual * _WORD_ZOOM
+    parts, start, prev = [], int(cols[0]), int(cols[0])
+    for c in cols[1:]:
+        if c - prev > gap:
+            parts.append((start, prev + 1))
+            start = int(c)
+        prev = int(c)
+    parts.append((start, prev + 1))
+    runs = [(clip.x0 + a / _WORD_ZOOM, clip.x0 + b / _WORD_ZOOM) for a, b in parts]
+    if len(runs) == len(line):
+        return runs
+    # Cut into more runs or fewer than words ("I/O" in two, a word with a
+    # wide gap): each word takes the runs centred inside its box.
+    out = []
+    for x0, x1 in boxes:
+        mine = [(a, b) for a, b in runs if x0 - 1 <= (a + b) / 2 <= x1 + 1]
+        out.append((min(a for a, _ in mine), max(b for _, b in mine)) if mine else (x0, x1))
+    return out
+
+
 def _regrid_ruled_bands(page, table) -> None:
     """Rebuild the rows of a ruled grid from its rules and the page's words.
 
@@ -1645,6 +1692,11 @@ def _regrid_ruled_bands(page, table) -> None:
             # and where each line stands: its words' feet, those OCR boxed
             # over several lines left out (_line_feet)
             part.metadata["line_base"] = [f / ph for f in _line_feet(ws_lines)]
+            # and each word where its ink is, [start, text, end] (_ink_words)
+            part.metadata["line_words"] = [
+                [[a / pw, w[4], b / pw] for w, (a, b) in zip(line, _ink_words(page, line))]
+                for line in ws_lines
+            ]
             row.append(part)
         new_grid.append(row)
     if not changed:

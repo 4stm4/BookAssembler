@@ -2113,3 +2113,37 @@ class TestInkBodySize:
         drop = float(re.search(r"\\raisebox\{-([\d.]+)pt\}\[\\height\]\[\\depth\]", tex).group(1))
         assert abs(size - 9.0 * 72.27 / 72) < 0.02
         assert abs(drop - 0.718 * (size - 8.03)) < 0.05
+
+
+class TestInkWords:
+    def test_words_are_where_their_ink_is_not_where_ocr_boxed_them(self):
+        import pymupdf
+        from src.analyzers.table.rules import _ink_words
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((100, 300), "Lower 8 bits of the", fontsize=10)
+        words = page.get_text("words")
+        # OCR's boxes, rough: the "8" boxed far too narrow, "bits" shifted
+        rough = [list(w) for w in words]
+        rough[1][2] = rough[1][0] + 1.6
+        rough[2][0] += 2.0
+        rough[2][2] += 2.0
+        got = _ink_words(page, [tuple(w) for w in rough])
+        for (a, b), w in zip(got, words):
+            assert abs(a - w[0]) < 1.0 and abs(b - w[2]) < 1.0
+
+    def test_lines_are_set_word_by_word_where_printed(self):
+        import re
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("one two\nthree", x0=0.20, y0=0.32),
+                 _cell("V", x0=0.33, y0=0.32)]]
+        cell = rows[1][1]
+        box = cell.visual_layout.bounding_box
+        cell.visual_layout.bounding_box = NormalizedRect(x0=box.x0, y0=box.y0, x1=box.x1, y1=box.y0 + 0.025)
+        cell.metadata["line_segments"] = [[[box.x0, "one two", box.x0 + 0.05]], [[box.x0, "three", box.x0 + 0.03]]]
+        cell.metadata["line_words"] = [[[box.x0, "one", box.x0 + 0.02], [box.x0 + 0.03, "two", box.x0 + 0.05]],
+                                       [[box.x0, "three", box.x0 + 0.03]]]
+        tex = _ruled_tex(rows)
+        scale = 21 * 72.27 / 2.54
+        m = re.search(r"\\resizebox\{([\d.]+)pt\}\{\\height\}\{one\}\\hspace\*\{([\d.]+)pt\}\\resizebox\{([\d.]+)pt\}\{\\height\}\{two\}", tex)
+        assert m and abs(float(m.group(1)) - 0.02 * scale) < 0.05 and abs(float(m.group(2)) - 0.01 * scale) < 0.05

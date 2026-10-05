@@ -615,8 +615,26 @@ def _positioned_lines(cell: Any, raw: str, drop_pt: float = 0.0) -> str:
     if not segments or box is None or len(segments) != raw.count("\n") + 1:
         return ""
     flags = md.get("line_bold") or []
+    words_of = md.get("line_words") or []
     lines = []
-    for n, runs in enumerate(segments):
+    if len(words_of) == len(segments):
+        # Every word where its ink was printed and as wide: a run's words,
+        # set at our face's widths, drifted off the print's along it.
+        for n, line in enumerate(words_of):
+            line_flags = flags[n] if n < len(flags) else []
+            out = ""
+            indent = (line[0][0] - box.x0) * _A4_WIDTH_PT
+            if indent > _PLACE_MIN_PT:
+                out += f"\\rule{{{indent:.2f}pt}}{{0pt}}"
+            for k, (x0, word, x1) in enumerate(line):
+                marked = _bold_marked([word], line_flags[k:k + 1])
+                out += f"\\resizebox{{{max(0.1, (x1 - x0) * _A4_WIDTH_PT):.2f}pt}}{{\\height}}{{{marked}}}"
+                if k + 1 < len(line):
+                    out += f"\\hspace*{{{(line[k + 1][0] - x1) * _A4_WIDTH_PT:.2f}pt}}"
+            if drop_pt > 0.05:
+                out = f"\\raisebox{{{-drop_pt:.2f}pt}}[\\height][\\depth]{{{out}}}"
+            lines.append(out)
+    for n, runs in enumerate(segments if not lines else []):
         line_flags = flags[n] if n < len(flags) else []
         out = ""
         indent = (runs[0][0] - box.x0) * _A4_WIDTH_PT
