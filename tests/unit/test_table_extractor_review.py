@@ -1771,7 +1771,7 @@ class TestLeaderToNumber:
         tex = build_latex(doc)
         spec = re.search(r"\\begin\{tabular\}\{(.*)\}", tex).group(1)
         assert "cm}@{}>" in spec                      # closed up where the leader crosses
-        leader = (r"\\leaders\\hbox to ([\d.]+)pt\{\\kern([\d.]+)pt\\makebox\[0pt\]\{((?:\\[a-z]+series )?)\.\}"
+        leader = (r"(?:\\leavevmode)?\\leaders\\hbox to ([\d.]+)pt\{\\kern([\d.]+)pt\\makebox\[0pt\]\{((?:\\[a-z]+series )?)\.\}"
                   r"\\hss\}\\hfill\\kern(-?[\d.]+)pt")
         m = re.search(r"NAME 3" + leader + r"\s*\}? &[^&]*?" + leader + r"\s*13", tex)
         assert m, "the leader runs from the name on to the number"
@@ -2031,7 +2031,7 @@ class TestLeaderGrid:
                           "leader_pitch": 0.0104, "leader_phase": 0.0068}
         tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
         scale = 21 * 72.27 / 2.54
-        m = re.search(r"NAME 3\\leaders\\hbox to ([\d.]+)pt\{\\kern([\d.]+)pt", tex)
+        m = re.search(r"NAME 3(?:\\leavevmode)?\\leaders\\hbox to ([\d.]+)pt\{\\kern([\d.]+)pt", tex)
         assert m and abs(float(m.group(1)) - 0.0104 * scale) < 0.01
         # the names' column starts at 0.10: the first dot 0.0068 - 0.10 on, mod a pitch
         assert abs(float(m.group(2)) - ((0.0068 - 0.10) * scale) % (0.0104 * scale)) < 0.02

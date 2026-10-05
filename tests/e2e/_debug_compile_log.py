@@ -20,7 +20,12 @@ with tempfile.TemporaryDirectory() as td:
     Path(td, "t.tex").write_text(tex)
     subprocess.run(["xelatex", "-interaction=nonstopmode", "t.tex"], cwd=td, capture_output=True)
     log = Path(td, "t.log").read_text(errors="replace").splitlines()
+    src = tex.splitlines()
     for i, line in enumerate(log):
         if line.startswith("!"):
             print("\n".join(log[i:i + 6]))
+            for l in log[i:i + 8]:
+                if l.startswith("l.") and l[2:].split(" ")[0].isdigit():
+                    n = int(l[2:].split(" ")[0])
+                    print("TeX line", n, ":", src[n - 1][:900] if n <= len(src) else "?")
             print("---")

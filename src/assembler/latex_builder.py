@@ -2094,8 +2094,10 @@ def _render_table(table: TableBlock) -> str:
         the leader on past its cell, so the dot whose pitch straddles a
         boundary is set (a leader sets only whole pitches). weight sets
         the dots' own weight where the cell's is not the leader's."""
+        # \leavevmode: a leader opening a p{} cell would stand in vertical
+        # mode, where \leaders takes a vertical skip and \hfill is an error
         return (
-            f"\\leaders\\hbox to {_dot_pitch_pt:.3f}pt{{\\kern{phase_pt:.3f}pt\\makebox[0pt]{{{weight}.}}\\hss}}"
+            f"\\leavevmode\\leaders\\hbox to {_dot_pitch_pt:.3f}pt{{\\kern{phase_pt:.3f}pt\\makebox[0pt]{{{weight}.}}\\hss}}"
             f"\\hfill\\kern{-overhang_pt:.3f}pt "
         )
 
