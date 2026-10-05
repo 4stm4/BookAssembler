@@ -80,7 +80,12 @@ def build_pages(srcs: list, out: str, width_pt: float = 500.0, psm: int = 3, min
 FIXTURES = [
     (["src/dc_characteristics_table.png"], "dc_characteristics_table.pdf", 500, 3, 0),
     (["src/pin_description_table.png"], "pin_description_table.pdf", 500, 3, 250),
-    (["src/index_to_advertisers.webp"], "index_to_advertisers.pdf", 500, 3, 0),
+    # Names and page numbers apart across leaders: read as sparse text
+    # (psm 11) its OCR finds "HEWLETT-PACKARD", "HOLLAND ELECTRONICS",
+    # "WRIGHT LINE INC", "TRI-DATA CORP." and most page numbers, which page
+    # layout analysis (psm 3) lost, and none of the "eee cece" it read the
+    # leaders as.
+    (["src/index_to_advertisers.webp"], "index_to_advertisers.pdf", 500, 11, 0),
     # A diagram's labels stand apart, in boxes: read as sparse text (psm 11)
     # its OCR finds "OS/8", "Debugger", "Bootstrap", "LEDs" and "PPI" that
     # page layout analysis (psm 3) lost or broke up ("Deb ebuager").
