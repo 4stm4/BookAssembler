@@ -112,11 +112,59 @@ def _table_lines(table: TableBlock) -> list:
     return [line.strip() for t in _table_texts(table) for line in t.split("\n") if line.strip()]
 
 
+_GLYPH_CONTRAST = 120    # summed RGB difference from the paper or fill a glyph is set on
+# A row or column this full of ink is a rule crossing the word, pads and
+# all: a short word's own strokes fill most of its width ("PPI" at 0.6
+# lost the rows through its bowls and was read 0.5pt high).
+_TEXT_RULE_SPAN = 0.9
+
+
+def _ink_of(fitz, page, rect):
+    """Where the ink of a text found at rect is.
+
+    A found text's box is its source's guess, not its print: tesseract
+    boxed the architecture fixture's "USER" 4.0pt above its ink, the
+    rebuild's font 0.8pt above its own - and a crop cut from boxes shifted
+    the rebuilt table 2-3pt against its source however exactly it was
+    set. A glyph is what stands out from what it is printed on (paper, or
+    a box's fill), darker; its line is the run of such rows through the
+    box's middle, rules left out.
+    """
+    import numpy as np
+    zoom = 4.0
+    clip = fitz.Rect(rect.x0 - 2, rect.y0 - rect.height / 2,
+                     rect.x1 + 2, rect.y1 + rect.height / 2) & page.rect
+    if clip.is_empty:
+        return rect
+    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
+    rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].astype(int)
+    ground = np.median(rgb.reshape(-1, 3), axis=0)
+    ink = (np.abs(rgb - ground).sum(axis=2) > _GLYPH_CONTRAST) & (rgb.sum(axis=2) < ground.sum())
+    ink[ink.mean(axis=1) > _TEXT_RULE_SPAN, :] = False
+    ink[:, ink.mean(axis=0) > _TEXT_RULE_SPAN] = False
+    rows = ink.any(axis=1)
+    middle = min(max(int(((rect.y0 + rect.y1) / 2 - clip.y0) * zoom), 0), len(rows) - 1)
+    if not rows[middle]:
+        near = np.flatnonzero(rows)
+        if not len(near):
+            return rect
+        middle = int(near[np.abs(near - middle).argmin()])
+    top, bottom = middle, middle
+    while top > 0 and rows[top - 1]:
+        top -= 1
+    while bottom < len(rows) - 1 and rows[bottom + 1]:
+        bottom += 1
+    cols = np.flatnonzero(ink[top:bottom + 1].any(axis=0))
+    return fitz.Rect(clip.x0 + cols[0] / zoom, clip.y0 + top / zoom,
+                     clip.x0 + (cols[-1] + 1) / zoom, clip.y0 + (bottom + 1) / zoom)
+
+
 def _table_rect(fitz, pdf_path: Path, page_index: int, texts: list):
     """Locate a table on a page by its own text - the same way on the
     source page and on the assembled one.
 
-    Tokens of 6+ characters the page prints once anchor it - short numbers
+    Each text found stands for its ink (_ink_of), not its box. Tokens of
+    6+ characters the page prints once anchor it - short numbers
     and words, and words the page repeats, risk colliding with unrelated
     text elsewhere on it (the page number, another table, prose). The
     extent then takes in, step by step, every one of the texts found within
@@ -127,7 +175,7 @@ def _table_rect(fitz, pdf_path: Path, page_index: int, texts: list):
     # An anchor is a text the page prints once: on a book page "Decimal"
     # and "Binary" head the decimal/binary table and recur in its prose,
     # and every recurrence stretched the anchor down the page.
-    strong = [r for t in texts if len(t) >= 6 for hits in [page.search_for(t)]
+    strong = [_ink_of(fitz, page, r) for t in texts if len(t) >= 6 for hits in [page.search_for(t)]
               if len({round(h.y0 / 3) for h in hits}) == 1 for r in hits]
     if not strong:
         doc.close()
@@ -135,7 +183,7 @@ def _table_rect(fitz, pdf_path: Path, page_index: int, texts: list):
     # From the anchor out, a text at a time: whatever of the table's text
     # stands within _FRAME_REACH_PT of what is already in joins it, until
     # nothing more does - a recurrence further down the page never does.
-    hits = [r for t in set(texts) for r in page.search_for(t)]
+    hits = [_ink_of(fitz, page, r) for t in set(texts) for r in page.search_for(t)]
     extent = fitz.Rect(min(r.x0 for r in strong), min(r.y0 for r in strong),
                        max(r.x1 for r in strong), max(r.y1 for r in strong))
     while True:
