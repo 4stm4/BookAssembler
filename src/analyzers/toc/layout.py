@@ -190,7 +190,8 @@ def _nearest_left(ln: Line, lines: Sequence[Line]) -> Optional[Line]:
 def _page_candidates(lines: Sequence[Line]) -> List[Line]:
     """Lines that may carry a page reference: text ending in leader + page,
     or a bare reference with a title or a leader run to its left - not a
-    numbering word ("Section | 2" numbers a section). A number
+    numbering word with a title after it ("Section | 2 | Introduction"
+    numbers a section). A number
     with nothing but another number before it is a section number of the
     next column (MetaPost: "…графика 33 | 9 Продвинутая…"); a title can be
     all digits as long as it runs out in a leader (TeX Live: "10.1.1 2003
@@ -201,9 +202,13 @@ def _page_candidates(lines: Sequence[Line]) -> List[Line]:
         t = ln.text.strip()
         if is_page_ref(t):
             left = _nearest_left(ln, lines)
-            # "Section | 2" is a section's number, not the page it is on
-            # (a typewritten contents list sets the two apart).
-            if left is not None and _NUMBERING_WORD_RE.match(left.text.strip()):
+            # "Section | 2 | Introduction" is a section's number, not the
+            # page it is on (a typewritten contents list sets the two
+            # apart) - where its title follows it; "IV Appendix . . . 170"
+            # ends in its page (Buildroot).
+            if left is not None and _NUMBERING_WORD_RE.match(left.text.strip()) and any(
+                o.x0 > ln.x1 and _same_row(o, ln, PAGE_ATTACH) for o in lines
+            ):
                 continue
             if left is not None and (
                 any(c.isalpha() for c in left.text) or ends_with_leader(left.text)
