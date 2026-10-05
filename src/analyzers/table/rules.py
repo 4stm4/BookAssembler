@@ -17,6 +17,7 @@ from src.krm.models import (
     TextLineInline,
     VisualLayout,
 )
+from src.analyzers.printed import ink_mask as _ink_mask, likeness as _likeness
 
 _RULE_ZOOM = 3.0          # render scale for rule detection
 _RULE_PAD_PT = 20.0       # printed rules sit outside the cells' own text boxes
@@ -2029,42 +2030,6 @@ _TYPEFACE_MIN_LETTERS = 6
 # Base-14 faces a cell's text is set in to be compared with its print:
 # (regular, bold, italic, bold italic).
 _FACES = {"sans": ("helv", "hebo", "heit", "hebi"), "serif": ("tiro", "tibo", "tiit", "tibi")}
-
-
-def _ink_mask(np, pix):
-    """A pixmap's ink, cut to the ink's own bounding box (None if none)."""
-    grey = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].mean(axis=2)
-    ink = grey < _RULE_INK_LEVEL
-    rows, cols = np.flatnonzero(ink.any(axis=1)), np.flatnonzero(ink.any(axis=0))
-    if not len(rows) or not len(cols):
-        return None
-    return ink[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
-
-
-def _thickened(np, mask):
-    """A mask grown by a pixel each way, so strokes a pixel apart still meet."""
-    out = mask.copy()
-    out[1:] |= mask[:-1]
-    out[:-1] |= mask[1:]
-    out[:, 1:] |= out[:, :-1].copy()
-    out[:, :-1] |= out[:, 1:].copy()
-    return out
-
-
-def _likeness(np, pymupdf, print_mask, text: str, fontname: str) -> float:
-    """How well text set in fontname covers the print: the overlap of
-    their ink, each cut to its own extent and scaled onto the print's."""
-    doc = pymupdf.open()
-    page = doc.new_page(width=40 * len(text) + 40, height=80)
-    page.insert_text((10, 50), text, fontsize=30, fontname=fontname)
-    mask = _ink_mask(np, page.get_pixmap())
-    doc.close()
-    if mask is None:
-        return 0.0
-    h, w = print_mask.shape
-    scaled = mask[(np.arange(h) * mask.shape[0] // h)][:, (np.arange(w) * mask.shape[1] // w)]
-    a, b = _thickened(np, print_mask), _thickened(np, scaled)
-    return float((a & b).sum()) / max(1, float((a | b).sum()))
 
 
 def _mark_typeface(np, pymupdf, page, table) -> Optional[str]:

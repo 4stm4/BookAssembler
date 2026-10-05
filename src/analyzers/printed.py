@@ -1,0 +1,414 @@
+"""printed: what a line of a page looks like in print, read off its pixels.
+
+Where its ink stands, its baseline, its type size, face, weight, slant,
+colour and underline: what a page rebuilt where it was printed needs
+(RFC 0021 §3, positional render), and what neither OCR nor a scan's text
+layer says - tesseract boxes a line by its own guess and sizes it from
+that box, and calls nothing bold, italic, blue or underlined.
+
+measure_line reads one line's facts; settle_page decides, from all the
+lines of a page together, the face and weight each is set in - one line
+alone is too short to tell a bold from a heavily printed regular, or a
+grotesque from a roman. A line is measured as the builder will set it:
+the faces compared with its print are the base-14 counterparts of the
+TeX Gyre faces the builder sets (Termes, Heros, Cursor), and its size is
+its capitals' or ascenders' height over the share of the size they reach
+in that face.
+"""
+
+from typing import Any, Dict, List, Optional
+
+from src.adapters.pdf_adapter import _measure_stroke_pt
+
+# Base-14 faces a line's text is set in to be compared with its print:
+# (regular, bold, italic, bold italic).
+FACES = {
+    "serif": ("tiro", "tibo", "tiit", "tibi"),
+    "sans": ("helv", "hebo", "heit", "hebi"),
+    "mono": ("cour", "cobo", "coit", "cobi"),
+}
+# What the builder's faces reach over their size, measured on the TeX Gyre
+# files: capitals ("H") and lowercase ascenders ("d").
+CAP_EM = {"serif": 0.662, "sans": 0.728, "mono": 0.562}
+ASCENDER_EM = {"serif": 0.682, "sans": 0.728, "mono": 0.602}
+_ASCENDERS = set("bdfhklt")
+# Their strokes over their size, as pdf_adapter._measure_stroke_pt measures
+# a print: (regular, bold) upright and (regular, bold) italic.
+STROKE_EM = {
+    "serif": ((0.094, 0.144), (0.081, 0.125)),
+    "sans": ((0.094, 0.150), (0.094, 0.150)),
+    "mono": ((0.044, 0.119), (0.044, 0.119)),
+}
+# What each unit of fontspec's FakeBold adds to a stroke, over the size.
+FAKEBOLD_STROKE_EM = 0.0083
+FAKEBOLD_MAX = 8.0
+_FAKEBOLD_MIN = 0.5
+_FACE_MIN_LETTERS = 6     # a line this long votes for its page's face
+_WEIGHT_MIN_LETTERS = 4   # a line this long says what the page's regular weight is
+_SKEW_MIN_PT = 80.0       # a line this wide says how its stretch of the page is skewed
+_SAME_SIZE = 0.3          # within this of its kind's usual size, a line is set at it
+_BOLD_GAIN = 0.6          # of the gap from regular to bold, over the page's lightest
+
+ITALIC_SLANT = 0.12       # tan of the lean; an italic leans 0.2 or so
+_INK_LEVEL = 160          # 0-255 grey below which a pixel is ink, for face likeness
+_GLYPH_CONTRAST = 120     # summed RGB difference from what a glyph is printed on
+_RULE_SPAN = 0.9          # a row this full of ink is a rule crossing the line
+_UNDERLINE_SPAN = 0.8     # a rule under the line covering this much of it underlines it
+_BASELINE_DENSITY = 0.3   # a row this dense against the line's densest is above the baseline
+_HEAD_DENSITY = 0.08      # a row this dense against the line's densest is its capitals', not a stray descender
+_COLOUR_SPREAD = 80       # channels this far apart: printed in a colour, not black
+_ZOOM = 6.0
+
+
+def _thickened(np, mask):
+    """A mask grown by a pixel each way, so strokes a pixel apart still meet."""
+    out = mask.copy()
+    out[1:] |= mask[:-1]
+    out[:-1] |= mask[1:]
+    out[:, 1:] |= out[:, :-1].copy()
+    out[:, :-1] |= out[:, 1:].copy()
+    return out
+
+
+def ink_mask(np, pix):
+    """A pixmap's ink, cut to the ink's own bounding box (None if none)."""
+    grey = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].mean(axis=2)
+    ink = grey < _INK_LEVEL
+    rows, cols = np.flatnonzero(ink.any(axis=1)), np.flatnonzero(ink.any(axis=0))
+    if not len(rows) or not len(cols):
+        return None
+    return ink[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
+
+
+def likeness(np, pymupdf, print_mask, text: str, fontname: str) -> float:
+    """How well text set in fontname covers the print: the overlap of
+    their ink, each cut to its own extent and scaled onto the print's."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=40 * len(text) + 40, height=80)
+    page.insert_text((10, 50), text, fontsize=30, fontname=fontname)
+    mask = ink_mask(np, page.get_pixmap())
+    doc.close()
+    if mask is None:
+        return 0.0
+    h, w = print_mask.shape
+    scaled = mask[(np.arange(h) * mask.shape[0] // h)][:, (np.arange(w) * mask.shape[1] // w)]
+    a, b = _thickened(np, print_mask), _thickened(np, scaled)
+    return float((a & b).sum()) / max(1, float((a | b).sum()))
+
+
+def slant(np, ink) -> float:
+    """How far a block of ink leans right, as the shear that stands its
+    strokes upright: the one that piles the ink into the fewest columns."""
+    ys, xs = np.nonzero(ink)
+    ys = ys - ys.mean()
+    best, best_score = 0.0, -1.0
+    for shear in np.linspace(-0.1, 0.4, 26):
+        cols = np.round(xs + shear * ys).astype(int)
+        score = float((np.bincount(cols - cols.min()) ** 2).sum())
+        if score > best_score:
+            best, best_score = float(shear), score
+    return best
+
+
+def _rows_through(np, rows, middle: int):
+    """The run of True rows through middle, or the nearest run to it."""
+    if not rows[middle]:
+        near = np.flatnonzero(rows)
+        if not len(near):
+            return None
+        middle = int(near[np.abs(near - middle).argmin()])
+    top, bottom = middle, middle
+    while top > 0 and rows[top - 1]:
+        top -= 1
+    while bottom < len(rows) - 1 and rows[bottom + 1]:
+        bottom += 1
+    return top, bottom
+
+
+_BOX_CORE = 0.2           # of a box's height in from each edge: surely its own line
+_LINE_GAP_SHARE = 0.15    # a row this light against the line's own is between lines
+
+
+def _own_rows(np, glyphs, run, rect, clip):
+    """The rows of a line's own ink, out of the run of inked rows through
+    it: lines set close or askew touch, and the run goes on into the next
+    one. It is cut at its lightest row past the source box's edge, where
+    one line ends and the next begins, when that row is light against
+    the line's own."""
+    top, bottom = run
+    density = glyphs.sum(axis=1)
+    core_lo = int((rect.y0 + rect.height * _BOX_CORE - clip.y0) * _ZOOM)
+    core_hi = int((rect.y1 - rect.height * _BOX_CORE - clip.y0) * _ZOOM)
+    core = density[max(core_lo, top):min(core_hi, bottom) + 1]
+    light = _LINE_GAP_SHARE * (float(np.median(core)) if len(core) else 0.0)
+    if bottom > core_hi + 1:
+        seam = core_hi + 1 + int(np.argmin(density[core_hi + 1:bottom + 1]))
+        if density[seam] <= light:
+            bottom = seam - 1
+    if top < core_lo - 1 and core_lo > 0:
+        seam = top + int(np.argmin(density[top:core_lo]))
+        if density[seam] <= light:
+            top = seam + 1
+    return (top, bottom) if top <= bottom else run
+
+
+def _foot_and_head(np, band):
+    """A line's baseline row - the last as dense as _BASELINE_DENSITY of
+    its densest; under it only descenders - and its capitals' top: where
+    the unbroken ink over the baseline starts, from the first row its
+    capitals and ascenders fill (a descender or two from the line above
+    fill less). (None, None) where there is no ink."""
+    if not len(band) or band.max() == 0:
+        return None, None
+    foot = int(np.flatnonzero(band >= _BASELINE_DENSITY * band.max())[-1])
+    head = foot
+    while head > 0 and band[head - 1] > 0:
+        head -= 1
+    while head < foot and band[head] < _HEAD_DENSITY * band.max():
+        head += 1
+    return foot, head
+
+
+def _skew(np, region) -> float:
+    """How far a line's baseline falls over its width (dy/dx), from the
+    baseline of each of its thirds."""
+    h, w = region.shape
+    feet = []
+    for k in range(3):
+        a, b = k * w // 3, (k + 1) * w // 3
+        if b - a < 2:
+            continue
+        foot, _ = _foot_and_head(np, region[:, a:b].mean(axis=1))
+        if foot is not None:
+            feet.append(((a + b) / 2.0, float(foot)))
+    if len(feet) < 2:
+        return 0.0
+    return float(np.polyfit([f[0] for f in feet], [f[1] for f in feet], 1)[0])
+
+
+def _lift(skew: float, width: int) -> int:
+    """How far down a straightened line's rows are set: room for the
+    columns a falling line moves up."""
+    return int(round(max(0.0, skew * width)))
+
+
+def _straightened(np, region, skew: float):
+    """A line's ink with each column moved up by its fall, so the line
+    stands straight at its left edge's height."""
+    h, w = region.shape
+    lift = _lift(skew, w)
+    out = np.zeros((h + int(round(abs(skew) * w)) + 1, w), dtype=bool)
+    for x in range(w):
+        shift = lift - int(round(skew * x))
+        lo = max(0, shift)
+        src_lo = max(0, -shift)
+        n = min(h - src_lo, out.shape[0] - lo)
+        if n > 0:
+            out[lo:lo + n, x] = region[src_lo:src_lo + n, x]
+    return out
+
+
+def _word_inks(np, region, words, x_of) -> List[List[Any]]:
+    """Where each word of a line prints: its ink's left and right column in
+    region (x_of turns a page point into a region column), from the ink
+    inside its box run out to where its ink ends - a glyph OCR boxed short
+    - but never into the next word's box."""
+    inked = region.any(axis=0)
+    w = len(inked)
+    boxes = sorted(words, key=lambda wd: wd[0])
+    out = []
+    for k, wd in enumerate(boxes):
+        a = max(0, min(w, int(round(x_of(wd[0])))))
+        b = max(0, min(w, int(round(x_of(wd[2])))))
+        cols = np.flatnonzero(inked[a:b])
+        if not len(cols):
+            continue
+        lo, hi = a + int(cols[0]), a + int(cols[-1]) + 1
+        floor = int(round(x_of(boxes[k - 1][2]))) if k > 0 else 0
+        ceil = int(round(x_of(boxes[k + 1][0]))) if k + 1 < len(boxes) else w
+        while lo > max(floor, 0) and inked[lo - 1]:
+            lo -= 1
+        while hi < min(ceil, w) and inked[hi]:
+            hi += 1
+        out.append([lo, hi, wd[4]])
+    return out
+
+
+def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] = None) -> Optional[Dict[str, Any]]:
+
+    """The print of one line, boxed (in points) at rect by its source.
+
+    Returns, in points on the page: "box" [x0, y0, x1, y1] - the line's
+    ink; "baseline" - at its left ink edge, and "skew" - how far it falls
+    over its length (dy/dx); "height" - from its capitals' top to the
+    baseline;
+    "stroke" - its strokes' median width; "italic" (and "slant", the lean
+    it was judged by); "scores" - how well each face covers it, regular
+    and bold, upright or italic as it leans; "rgb" - its colour where it
+    is not black; "underline" [y, thickness] where a rule runs under it.
+    None where the box holds no ink.
+    """
+    pad_y = rect.height / 2.0
+    clip = pymupdf.Rect(rect.x0 - 2, rect.y0 - pad_y, rect.x1 + 2, rect.y1 + pad_y) & page.rect
+    if clip.is_empty:
+        return None
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(_ZOOM, _ZOOM), clip=clip)
+    rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].astype(int)
+    ground = np.median(rgb.reshape(-1, 3), axis=0)
+    ink = (np.abs(rgb - ground).sum(axis=2) > _GLYPH_CONTRAST) & (rgb.sum(axis=2) < ground.sum())
+    ruled = ink.mean(axis=1) > _RULE_SPAN
+    glyphs = ink.copy()
+    glyphs[ruled, :] = False
+    glyphs[:, ink.mean(axis=0) > _RULE_SPAN] = False
+    middle = min(max(int(((rect.y0 + rect.y1) / 2 - clip.y0) * _ZOOM), 0), pix.height - 1)
+    run = _rows_through(np, glyphs.any(axis=1), middle)
+    if run is None:
+        return None
+    top, bottom = _own_rows(np, glyphs, run, rect, clip)
+    cols = np.flatnonzero(glyphs[top:bottom + 1].any(axis=0))
+    if not len(cols):
+        return None
+    left, right = int(cols[0]), int(cols[-1]) + 1
+    mask = glyphs[top:bottom + 1, left:right]
+    # A scan stands its lines askew, several points over a long one: the
+    # skew is read from the baseline of each third of the line, the line
+    # is stood straight by it, and its baseline and capitals' top are read
+    # off the straightened ink - askew, they smear over the fall.
+    region = glyphs[top:bottom + 1, left:right]
+    skew = _skew(np, region)
+    upright = _straightened(np, region, skew)
+    foot, head = _foot_and_head(np, upright.mean(axis=1))
+    if foot is None:
+        return None
+    # the straightened rows are the line's at its left edge
+    base = top + foot + 1.0 - _lift(skew, right - left)
+    height = float(foot + 1 - head)
+
+    def pt_x(px: float) -> float:
+        return clip.x0 + px / _ZOOM
+
+    def pt_y(px: float) -> float:
+        return clip.y0 + px / _ZOOM
+
+    # A rule just under the line, across most of it, underlines it (a link).
+    underline = None
+    for r in range(bottom + 1, min(pix.height, bottom + 1 + int(rect.height * _ZOOM / 2))):
+        if ink[r, left:right].mean() >= _UNDERLINE_SPAN:
+            end = r
+            while end + 1 < pix.height and ink[end + 1, left:right].mean() >= _UNDERLINE_SPAN:
+                end += 1
+            underline = [pt_y((r + end + 1) / 2.0), (end + 1 - r) / _ZOOM]
+            break
+
+    lean = slant(np, mask)
+    variant = 2 if lean >= ITALIC_SLANT else 0
+    scores = {
+        name: [likeness(np, pymupdf, mask, text.strip(), variants[variant + w]) for w in (0, 1)]
+        for name, variants in FACES.items()
+    } if text.strip() else {}
+
+    pixels = rgb[top:bottom + 1, left:right][mask]
+    colour = None
+    if len(pixels):
+        med = np.median(pixels, axis=0)
+        if med.max() - med.min() > _COLOUR_SPREAD:
+            colour = [int(v) for v in med]
+
+    placed = []
+    if words:
+        placed = [[pt_x(left + a), pt_x(left + b), t] for a, b, t in
+                  _word_inks(np, region, words, lambda x: (x - clip.x0) * _ZOOM - left)]
+
+    return {
+        "words": placed,
+        "box": [pt_x(left), pt_y(top), pt_x(right), pt_y(bottom + 1)],
+        "baseline": pt_y(base),
+        "skew": skew,
+        "height": height / _ZOOM,
+        "stroke": _measure_stroke_pt(page, pymupdf.Rect(pt_x(left), pt_y(top), pt_x(right), pt_y(bottom + 1))) or 0.0,
+        "italic": lean >= ITALIC_SLANT,
+        "slant": lean,
+        "scores": scores,
+        "rgb": colour,
+        "underline": underline,
+    }
+
+
+def size_in(face: str, height: float, text: str) -> float:
+    """The type size whose capitals - or, in a line of lowercase,
+    ascenders - stand height tall in face."""
+    tall = any(ch in _ASCENDERS for ch in text)
+    capitals = any(ch.isupper() or ch.isdigit() for ch in text)
+    return height / (ASCENDER_EM[face] if tall and not capitals else CAP_EM[face])
+
+
+def _letters(text: str) -> int:
+    return sum(ch.isalpha() for ch in text)
+
+
+def settle_page(lines: List[Dict[str, Any]]) -> None:
+    """Decide, for the measured lines of one page (measure_line, each with
+    its "text"), the type each is set in: "face", "size", "bold" and
+    "fakebold" are added to each, and a short line's "skew" is its
+    neighbours'.
+
+    The face is the page's: each line long enough votes for the face that
+    covers its print best, one line alone being too short to tell. A line
+    is bold where its strokes stand out from the page's lightest by most of
+    the gap between its face's regular and bold. What a scan prints
+    heavier than the face as cut - every line, its ink spread by the scan
+    - is made up with FakeBold, which thickens a glyph all round as the
+    spread does; the type is then set that much smaller, so its capitals
+    stand as tall as the print's.
+    """
+    votes = {face: 0 for face in FACES}
+    for line in lines:
+        if _letters(line["text"]) >= _FACE_MIN_LETTERS and line.get("scores"):
+            votes[max(line["scores"], key=lambda f: max(line["scores"][f]))] += 1
+    face = max(votes, key=lambda f: (votes[f], f == "serif"))
+
+    def excess(line) -> float:
+        size = size_in(face, line["height"], line["text"])
+        regular = STROKE_EM[face][1 if line["italic"] else 0][0]
+        return line["stroke"] / size - regular if size > 0 else 0.0
+
+    # A short line's skew is its few glyphs' own: it takes the skew of the
+    # nearest long line, scanned with it.
+    long_lines = [l for l in lines if l["box"][2] - l["box"][0] >= _SKEW_MIN_PT]
+    for line in lines:
+        if line["box"][2] - line["box"][0] < _SKEW_MIN_PT:
+            near = min(long_lines, key=lambda l: abs(l["baseline"] - line["baseline"]), default=None)
+            line["skew"] = near["skew"] if near is not None else 0.0
+
+    weighed = sorted(excess(l) for l in lines if _letters(l["text"]) >= _WEIGHT_MIN_LETTERS and l["stroke"])
+    lightest = weighed[len(weighed) // 5] if weighed else 0.0
+    for line in lines:
+        stems = STROKE_EM[face][1 if line["italic"] else 0]
+        bold = bool(line["stroke"]) and excess(line) - lightest > _BOLD_GAIN * (stems[1] - stems[0])
+        size = size_in(face, line["height"], line["text"])
+        fakebold = 0.0
+        if line["stroke"] and size > 0:
+            fakebold = min(FAKEBOLD_MAX, max(0.0, (line["stroke"] - stems[1 if bold else 0] * size)
+                                             / (FAKEBOLD_STROKE_EM * size)))
+            if fakebold < _FAKEBOLD_MIN:
+                fakebold = 0.0
+        outline = fakebold * FAKEBOLD_STROKE_EM * size / 2.0
+        line.update({
+            "face": face,
+            "bold": bold,
+            "fakebold": fakebold,
+            "size": size - 2.0 * outline / CAP_EM[face],
+        })
+    # One kind of line - its weight and slant - is set at one size on a
+    # page: a line measured off it by less than _SAME_SIZE is set at its
+    # kind's usual. On a page scanned askew a descender of the line above
+    # touches the next line's capitals, and read so "Introduction, Basic
+    # Programming Choices" came to 17.4pt among its neighbours' 13.8.
+    for kind in {(l["bold"], l["italic"]) for l in lines}:
+        same = [l for l in lines if (l["bold"], l["italic"]) == kind]
+        if len(same) < 3:
+            continue
+        usual = sorted(l["size"] for l in same)[len(same) // 2]
+        for line in same:
+            if abs(line["size"] / usual - 1.0) < _SAME_SIZE:
+                line["size"] = usual
