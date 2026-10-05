@@ -10,7 +10,8 @@ rules), normalizing them to a common size, and comparing the two
 black/white ink matrices pixel by pixel.
 
 The rule: both crops become a black/white ink matrix, one is laid over the
-other, and more than MAX_MISMATCH of the pixels disagreeing fails the test.
+other, and more than MAX_MISMATCH of the ink missing the other's fails the
+test.
 No per-fixture leniency - a rebuilt table either lands on top of the one it
 was extracted from or it does not.
 
@@ -23,9 +24,8 @@ condition rows, a `with line`/`with load` sub-column inside CHARACTERISTICS,
 and CONDITIONS holding its own nested two-row block. A red test here is the
 honest state, and the specification for that work.
 
-Two earlier metrics were tried and thrown out for reporting green on this
-same visibly-wrong output; see _mask_mismatch for what they were and why
-they failed.
+Three earlier metrics were thrown out for reporting green on visibly
+wrong output; see _mask_mismatch for what they were and why they failed.
 """
 
 from pathlib import Path
@@ -185,17 +185,21 @@ def _render_crop(fitz, pdf_path: Path, page_index: int, rect, zoom: float = 2.0)
 
 _MASK_SIZE = (400, 600)  # both crops normalized to this before overlaying
 _INK_THRESHOLD = 160     # 0-255 grey level below which a pixel counts as ink
+# Ink within this many mask pixels of the other crop's ink lands on it. A
+# crop laid over itself one pixel to the side disagrees on 42-64% of its
+# ink: at 400x600 one pixel is a fraction of a stroke, and no rebuild can
+# be placed closer than that to a scan.
+_MATCH_REACH_PX = 1
 
-# Share of pixels allowed to disagree between the two overlaid ink matrices.
-# One number for every fixture on purpose: a rebuilt table either lands on
-# top of the page it came from or it does not, and a per-fixture exception
-# is just a way to keep a failing render green.
+# Share of the ink allowed to miss the other crop's ink. One number for
+# every fixture on purpose: a rebuilt table either lands on top of the page
+# it came from or it does not, and a per-fixture exception is just a way to
+# keep a failing render green.
 #
-# Raised from 3% to 10% on 2026-09-30 by the maintainer's explicit
-# decision, together with the symmetric crop above. The rest is glyph
-# shape: the source is a scan set in a different face, and its ink edges
-# can never coincide pixel for pixel with any font the rebuild sets.
-MAX_MISMATCH = 0.10
+# Raised from 3% to 10% of the crop's area on 2026-09-30, then on
+# 2026-10-05 measured against the ink instead of the area and set to 7%,
+# both by the maintainer's explicit decision.
+MAX_MISMATCH = 0.07
 
 
 def _ink_mask(img):
@@ -210,26 +214,46 @@ def _ink_mask(img):
     return grey < _INK_THRESHOLD
 
 
+def _near(mask, reach: int):
+    """Every pixel within reach pixels of the mask's ink."""
+    import numpy as np
+    h, w = mask.shape
+    padded = np.pad(mask, reach)
+    out = np.zeros_like(mask)
+    for dy in range(2 * reach + 1):
+        for dx in range(2 * reach + 1):
+            out |= padded[dy:dy + h, dx:dx + w]
+    return out
+
+
 def _mask_mismatch(img_a, img_b) -> float:
-    """Share of pixels where the two ink masks disagree (0.0 = identical).
+    """Share of the ink that misses the other crop's ink (0.0 = every
+    stroke lands on one).
 
-    Both crops become a black/white matrix, laid one over the other; every
-    pixel where one has ink and the other does not counts as a mismatch.
+    Both crops become a black/white matrix, laid one over the other; ink of
+    either with no ink of the other within _MATCH_REACH_PX counts as a
+    miss, and the misses are taken over the ink of either - not over the
+    crop's whole area, which on a sparse page (a typewritten contents list)
+    is mostly white the two crops share: there a rebuild that had lost
+    every title disagreed on only 9.3% of the area.
 
-    This replaced two earlier metrics that were thrown out for not actually
+    This replaced three earlier metrics that were thrown out for not
     measuring overlay agreement:
       - a raw whole-image pixel diff, which mostly compared the white
         background the two crops share and barely moved when real content
         differed (0.7948 vs 0.7963 with a known bug reintroduced);
       - a per-row ink-density profile correlation, same problem at row
-        granularity (0.398 vs 0.409 on that same test).
-    Both let a visibly wrong render pass. This one cannot: misplaced ink is
-    counted twice, once for being absent where the source has it and once
-    for being present where the source does not.
+        granularity (0.398 vs 0.409 on that same test);
+      - disagreeing pixels over the crop's area, the white-background
+        problem again (above).
+    Misplaced ink is counted twice, once for being absent where the source
+    has it and once for being present where the source does not.
     """
     ma = _ink_mask(img_a)
     mb = _ink_mask(img_b)
-    return float((ma ^ mb).sum()) / float(ma.size)
+    miss = (ma & ~_near(mb, _MATCH_REACH_PX)) | (mb & ~_near(ma, _MATCH_REACH_PX))
+    ink = (ma | mb).sum()
+    return float(miss.sum()) / float(ink) if ink else 0.0
 
 
 def _build_single_table_pdf(table: TableBlock, work_dir: str, name: str) -> str:
@@ -266,7 +290,7 @@ def _build_single_table_pdf(table: TableBlock, work_dir: str, name: str) -> str:
 def test_table_visual_overlay_matches_source(tmp_path, fixture_path, source_page):
     """Crop the source table and the reassembled table the same way, each
     to its own text extent grown to its frame, lay one ink matrix over
-    the other, and fail if more than MAX_MISMATCH of the pixels disagree."""
+    the other, and fail if more than MAX_MISMATCH of the ink misses."""
     fitz = pytest.importorskip("pymupdf")
     pytest.importorskip("PIL")
 
@@ -283,7 +307,7 @@ def test_table_visual_overlay_matches_source(tmp_path, fixture_path, source_page
 
     mismatch = _mask_mismatch(img_source, img_output)
     assert mismatch <= MAX_MISMATCH, (
-        f"{mismatch:.1%} of pixels disagree between the source table and the "
+        f"{mismatch:.1%} of the ink misses between the source table and the "
         f"reassembled one (limit {MAX_MISMATCH:.0%}) - overlaid, they do not "
         f"line up: the rebuild is not reproducing the source table's layout"
     )

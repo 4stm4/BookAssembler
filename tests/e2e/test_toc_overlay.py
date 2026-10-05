@@ -180,7 +180,7 @@ def _crop_rects(fitz, source_pdf: Path, source_page: int, rebuilt_pdf: Path, tex
 def test_toc_visual_overlay_matches_source(tmp_path, fixture_path, source_page):
     """Crop a source page's contents and the reassembled ones the same way,
     lay one ink matrix over the other, and fail if more than MAX_MISMATCH
-    of the pixels disagree."""
+    of the ink misses."""
     fitz = pytest.importorskip("pymupdf")
     pytest.importorskip("PIL")
 
@@ -200,7 +200,7 @@ def test_toc_visual_overlay_matches_source(tmp_path, fixture_path, source_page):
 
     mismatch = _mask_mismatch(img_source, img_output)
     assert mismatch <= MAX_MISMATCH, (
-        f"{mismatch:.1%} of pixels disagree between the source contents and the "
+        f"{mismatch:.1%} of the ink misses between the source contents and the "
         f"reassembled ones (limit {MAX_MISMATCH:.0%}) - overlaid, they do not "
         f"line up: the rebuild is not reproducing the source page's layout"
     )
