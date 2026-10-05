@@ -2092,7 +2092,34 @@ def _mark_typeface(np, pymupdf, page, table) -> Optional[str]:
     size = _ink_body_size(np, pymupdf, page, table)
     if size:
         table.metadata["ink_size_pt"] = size
+    stroke = _body_stroke(page, table)
+    if stroke:
+        table.metadata["stroke_pt"] = stroke
     return face
+
+
+def _body_stroke(page, table) -> Optional[float]:
+    """How heavy a table's regular text was printed: the median stroke
+    width (pdf_adapter's measure, pt) of its cells not set bold, of four
+    letters or more. A scan prints type heavier than the face it was set
+    in - the pin description fixture's regular strokes are 1.5pt where
+    Heros at its size draws 1.0. None where too few cells could be read."""
+    from src.adapters.pdf_adapter import _measure_stroke_pt
+    import pymupdf
+    pw, ph = page.rect.width, page.rect.height
+    strokes = []
+    for row in table.grid:
+        for cell in row:
+            vl = cell.visual_layout
+            if vl is None or vl.bounding_box is None or (vl.style is not None and vl.style.is_bold):
+                continue
+            if sum(ch.isalpha() for ch in _cell_text_of(cell)) < 4:
+                continue
+            b = vl.bounding_box
+            value = _measure_stroke_pt(page, pymupdf.Rect(b.x0 * pw, b.y0 * ph, b.x1 * pw, b.y1 * ph))
+            if value:
+                strokes.append(value)
+    return sorted(strokes)[len(strokes) // 2] if len(strokes) >= 3 else None
 
 
 _SIZE_ZOOM = 6.0

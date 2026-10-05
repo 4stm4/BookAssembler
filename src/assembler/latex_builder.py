@@ -877,6 +877,11 @@ _FIT_MIN_LETTERS = 4
 _DISPLAY_SHARE = 1.5
 # How tall TeX Gyre Heros' capitals stand over its size.
 _HEROS_CAP_EM = 0.718
+# TeX Gyre Heros' regular stroke, and what each unit of FakeBold adds to
+# it, over the size (as pdf_adapter._measure_stroke_pt measures a scan).
+_HEROS_STROKE_EM = 0.10
+_FAKEBOLD_STROKE_EM = 0.0083
+_FAKEBOLD_MAX = 8.0
 # A dot leader's pitch, as \dotfill sets it.
 _DOT_PITCH_EM = 0.44
 _STRUT_HEIGHT = 0.7
@@ -1309,6 +1314,14 @@ def _render_table(table: TableBlock) -> str:
                     _glyphs = (
                         f"\\fontsize{{{_ink:.2f}}}{{{_leading:.2f}}}\\selectfont " if _positioned and _grow > 0 else ""
                     )
+                    # and at the weight the page shows (the analyzer's
+                    # stroke_pt), as the table's rules are drawn at theirs:
+                    # Heros as cut drew the fixture's 1.5pt strokes at 1.0.
+                    _size = _ink if _grow > 0 else median_pt
+                    if _positioned and md.get("stroke_pt") and md.get("typeface") == "sans" and _size > 0:
+                        _fb = (md["stroke_pt"] - _HEROS_STROKE_EM * _size) / (_FAKEBOLD_STROKE_EM * _size)
+                        if _fb >= 0.5:
+                            _glyphs = f"\\addfontfeatures{{FakeBold={min(_fb, _FAKEBOLD_MAX):.1f}}}" + _glyphs
                     body = "\\lineskiplimit=-\\maxdimen " + _glyphs + (
                         _positioned or "\\newline ".join(_line_texts(cell, raw))
                     )

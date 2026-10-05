@@ -2172,3 +2172,50 @@ class TestSkewedRows:
         tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
         indent = float(re.search(r"\\lineskiplimit=-\\maxdimen \\rule\{([\d.]+)pt\}\{0pt\}", tex).group(1))
         assert abs(indent - 0.003 * 21 * 72.27 / 2.54) < 0.05
+
+
+class TestPrintedWeight:
+    def test_lines_set_where_printed_are_emboldened_to_the_page_s_weight(self):
+        import re
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("one two\nthree", x0=0.20, y0=0.32),
+                 _cell("V", x0=0.33, y0=0.32)]]
+        cell = rows[1][1]
+        box = cell.visual_layout.bounding_box
+        cell.visual_layout.bounding_box = NormalizedRect(x0=box.x0, y0=box.y0, x1=box.x1, y1=box.y0 + 0.025)
+        cell.metadata["line_segments"] = [[[box.x0, "one two", box.x0 + 0.05]], [[box.x0, "three", box.x0 + 0.03]]]
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        grid = [[c if c.visual_layout.style else _styled(c) for c in row] for row in rows]
+        table = TableBlock(grid=grid, row_count=2, column_count=3, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.40, y1=0.36), page_or_screen_index=0))
+        for row in grid:
+            for c in row:
+                c.border_left = c.border_right = True
+        # printed with 1.2pt strokes; Heros at 8.03pt draws 0.8
+        table.metadata = {"column_rule_x": [0.175, 0.275], "typeface": "sans", "stroke_pt": 1.2}
+        tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
+        fb = float(re.search(r"\\addfontfeatures\{FakeBold=([\d.]+)\}", tex).group(1))
+        assert abs(fb - (1.2 - 0.10 * 8.03) / (0.0083 * 8.03)) < 0.1
+        assert tex.count("FakeBold") == 1               # only the cell set where printed
+
+    def test_a_scan_s_stroke_is_measured_from_its_regular_cells(self):
+        import pymupdf
+        from src.analyzers.table.rules import _body_stroke
+        from src.krm.models import StyleDescriptor
+        def stroke_of(fontname):
+            doc = pymupdf.open()
+            page = doc.new_page(width=595, height=842)
+            rows = []
+            for k in range(4):
+                y = 300 + 16 * k
+                page.insert_text((100, y), f"ADDRESS LATCH {k}", fontsize=12, fontname=fontname)
+                ws = [w for w in page.get_text("words") if y - 14 < w[3] <= y + 5]
+                box = NormalizedRect(x0=min(w[0] for w in ws) / 595, y0=min(w[1] for w in ws) / 842,
+                                     x1=max(w[2] for w in ws) / 595, y1=max(w[3] for w in ws) / 842)
+                rows.append([TableCell(
+                    content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text=f"ADDRESS LATCH {k}")])])],
+                    visual_layout=VisualLayout(bounding_box=box, page_or_screen_index=0,
+                                               style=StyleDescriptor(font_size_pt=12)))])
+            return _body_stroke(page, TableBlock(grid=rows, row_count=4, column_count=1, visual_layout=rows[0][0].visual_layout))
+        assert stroke_of("hebo") > stroke_of("helv")
