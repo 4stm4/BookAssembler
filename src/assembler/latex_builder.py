@@ -89,6 +89,8 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 % Its grotesque counterpart, a Helvetica clone, for a table the analyzer
 % found printed in a sans-serif face (TableBlock.metadata["typeface"]).
 \newfontfamily\latinsans{TeX Gyre Heros}
+% And its typewriter one, for a page printed on a typewriter.
+\newfontfamily\latinmono{TeX Gyre Cursor}
 \sloppy
 \begin{document}
 """

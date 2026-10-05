@@ -13,7 +13,10 @@ the headings they name needs the heading tree: TocLinkAnalyzer (linker.py).
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
+from src.analyzers.printed import measure_line, settle_page
+from src.analyzers.source_io import resolve_source_path
 from src.analyzers.toc.layout import Entry, Line, TocRead, read_toc
+from src.analyzers.toc.rules import is_number_token
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.identity import derive_composite_id
@@ -75,7 +78,8 @@ class TocAnalyzer(BaseAnalyzer):
             return
         toc = read_toc(pages)
         if toc.entries:
-            _materialise(toc, blocks, block_lines, styles)
+            container, entries = _materialise(toc, blocks, block_lines, styles)
+            _mark_print(doc, toc, container, entries)
 
 
 def _collect(container: ContainerUnit, out: List[Tuple[ParagraphBlock, ContainerUnit]]) -> None:
@@ -143,7 +147,7 @@ def _materialise(
     blocks: List[Tuple[ParagraphBlock, ContainerUnit]],
     block_lines: Dict[int, List[int]],
     styles: Dict[int, Optional[StyleDescriptor]],
-) -> None:
+) -> Tuple[ContainerUnit, List[Tuple[TocEntryBlock, Entry]]]:
     content_blocks = {
         l.block for e in toc.entries
         for l in e.lines + [x for r in e.description_rows for x in r.all_lines]
@@ -176,6 +180,7 @@ def _materialise(
         confidence_score=min(0.9, conf),
         provenance_info=anchor.provenance_info,
     )
+    entries: List[Tuple[TocEntryBlock, Entry]] = []
     for k, e in enumerate(toc.entries):
         number, title = e.number_and_title()
         sources = sorted({blocks[l.block][0].id for l in e.lines})
@@ -199,6 +204,7 @@ def _materialise(
         if e.description:
             entry.metadata = {"toc_description": e.description}
         container.children.append(entry)
+        entries.append((entry, e))
 
     at = next(i for i, c in enumerate(parent.children) if c is anchor)
     parent.children.insert(at, container)
@@ -208,3 +214,92 @@ def _materialise(
         if not block.metadata:
             block.metadata = {}
         block.metadata["tombstone_reason"] = "merged_into_toc"
+    return container, entries
+
+
+def _parts(e: Entry) -> List[Tuple[str, Line]]:
+    """An entry's printed lines, each with what it prints: its number set
+    apart, its title (a line of it), its page reference, a row of its
+    description."""
+    out: List[Tuple[str, Line]] = []
+    for r, row in enumerate(e.rows):
+        for k, line in enumerate(row.lines):
+            numbered = r == 0 and k == 0 and len(row.lines) > 1 and is_number_token(line.text)
+            out.append(("number" if numbered else "title", line))
+        if row.page_line is not None:
+            out.append(("page", row.page_line))
+    out += [("description", line) for row in e.description_rows for line in row.all_lines]
+    return out
+
+
+def _mark_print(
+    doc: KnowledgeDocument,
+    toc: TocRead,
+    container: ContainerUnit,
+    entries: List[Tuple[TocEntryBlock, Entry]],
+) -> None:
+    """Record how the contents were printed, line by line, for a page
+    rebuilt where it was printed (RFC 0021 §3): each entry's lines
+    (metadata["printed_lines"]) and the heading's (container
+    metadata["printed_title"]), as src/analyzers/printed.py reads them off
+    the source page's pixels - its ink box and baseline (page-normalised),
+    the skew it was scanned at, size, face, weight, slant, colour,
+    underline. Visual facts of the page,
+    beside the entries' text, not in it. Nothing where the source cannot
+    be opened."""
+    path = resolve_source_path(doc)
+    if not path:
+        return
+    try:
+        import numpy as np
+        import pymupdf
+        source = pymupdf.open(path)
+    except Exception:
+        return
+    try:
+        measured: List[Tuple[Any, Dict[str, Any]]] = []
+        words: Dict[int, List[Any]] = {}
+
+        def measure(owner: Any, part: str, line: Line) -> None:
+            if line.page >= source.page_count:
+                return
+            page = source[line.page]
+            pw, ph = page.rect.width, page.rect.height
+            rect = pymupdf.Rect(line.x0 * pw, line.y0 * ph, line.x1 * pw, line.y1 * ph)
+            if line.page not in words:
+                words[line.page] = page.get_text("words")
+            own = [w for w in words[line.page]
+                   if rect.x0 <= (w[0] + w[2]) / 2 <= rect.x1 and rect.y0 <= (w[1] + w[3]) / 2 <= rect.y1]
+            m = measure_line(np, pymupdf, page, rect, line.text, own)
+            if m is not None:
+                m.update({"part": part, "text": line.text, "page": line.page, "pw": pw, "ph": ph})
+                measured.append((owner, m))
+
+        for entry, e in entries:
+            for part, line in _parts(e):
+                measure(entry, part, line)
+        if toc.heading is not None:
+            measure(container, "heading", toc.heading)
+        for page_index in sorted({m["page"] for _, m in measured}):
+            settle_page([m for _, m in measured if m["page"] == page_index])
+
+        for owner, m in measured:
+            pw, ph = m["pw"], m["ph"]
+            x0, y0, x1, y1 = m["box"]
+            line = {
+                "part": m["part"], "text": m["text"], "page": m["page"],
+                "box": [x0 / pw, y0 / ph, x1 / pw, y1 / ph], "baseline": m["baseline"] / ph,
+                "skew": m["skew"],
+                "words": [[a / pw, b / pw, t] for a, b, t in m["words"]],
+                "size": m["size"], "face": m["face"], "bold": m["bold"], "italic": m["italic"],
+                "fakebold": m["fakebold"], "rgb": m["rgb"],
+                "underline": [m["underline"][0] / ph, m["underline"][1]] if m["underline"] else None,
+            }
+            md = dict(owner.metadata or {})
+            if owner is container:
+                md["printed_title"] = line
+            else:
+                md.setdefault("printed_lines", []).append(line)
+            owner.metadata = md
+    finally:
+        source.close()

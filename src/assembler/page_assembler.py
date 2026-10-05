@@ -15,11 +15,13 @@ and StyleDescriptor to reconstruct layout.
 """
 
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.assembler.latex_builder import (
     _esc,
+    _is_latin_only,
     _para_text,
     _translated,
     render_node,
@@ -262,9 +264,14 @@ def _render_positional(slot: PageSlot, target_lang: str) -> str:
     flow: List[Any] = []
     placed: List[Any] = []
 
+    printed: List[str] = []
     for block in slot.blocks:
         if isinstance(block, _ATOMIC):
             atomic.append(block)
+        elif _printed_lines(block):
+            # Read off its print line by line (TocAnalyzer): each line is
+            # set where, how large and in what type it was printed.
+            printed.extend(_printed_nodes(block, target_lang, page_w, page_h))
         elif _positioned_lines(block):
             # A merged block whose inlines kept their own geometry (a title
             # page) is placed line by line — that layout is what makes the page
@@ -316,11 +323,84 @@ def _render_positional(slot: PageSlot, target_lang: str) -> str:
             f"{{{size_cmd}{bold}{italic}{escaped}}};\n"
         )
 
+    lines.extend(printed)
     lines.append("\\end{tikzpicture}\n")
     for block in atomic:
         render_node(lines, block, target_lang, recurse=False)
     lines.append("\\clearpage\n")
     return "".join(lines)
+
+
+_FACE_CMD = {"serif": "\\latinfont ", "sans": "\\latinsans ", "mono": "\\latinmono "}
+
+
+def _printed_lines(block: Any) -> List[Dict[str, Any]]:
+    """The lines of a block as its print was read (TocAnalyzer): an
+    entry's metadata["printed_lines"], a contents heading's
+    metadata["printed_title"]."""
+    md = getattr(block, "metadata", None) or {}
+    if isinstance(block, ContainerUnit):
+        return [md["printed_title"]] if md.get("printed_title") else []
+    return list(md.get("printed_lines") or [])
+
+
+def _printed_nodes(block: Any, target_lang: str, page_w: float, page_h: float) -> List[str]:
+    """Each printed line of a block as tikz nodes: its baseline and left
+    ink edge where the print's are, at the skew it was scanned at, set in
+    the face, weight, slant, size and colour read off it, as heavy as the
+    print (FakeBold); each word boxed to where and how wide it printed -
+    its face's advances and spaces are not the print's. An underline is
+    drawn where the print's runs. A translated title is set once, where
+    the title starts, at its own width."""
+    source = block.title if isinstance(block, ContainerUnit) else getattr(block, "entry_text", "")
+    translated = _translated(block, source or "", target_lang) if target_lang else source
+    title_done = False
+    out: List[str] = []
+    for line in _printed_lines(block):
+        text = line["text"]
+        fit = True
+        if line["part"] in ("title", "heading") and translated != source:
+            if title_done:
+                continue
+            text, fit, title_done = translated, False, True
+        if not text.strip():
+            continue
+        x0, _, x1, _ = line["box"]
+        x_mm, y_mm, w_mm = x0 * page_w, line["baseline"] * page_h, (x1 - x0) * page_w
+        size = line["size"] * 72.27 / 72.0
+        font = _FACE_CMD.get(line["face"], "") if _is_latin_only(text) else ""
+        weight = ("\\bfseries " if line["bold"] else "") + ("\\itshape " if line["italic"] else "")
+        if line.get("fakebold"):
+            # the scan's spread of ink, which the face as cut does not have
+            weight += "\\addfontfeatures{FakeBold=%.1f}" % line["fakebold"]
+        colour = "\\color[RGB]{%d,%d,%d}" % tuple(line["rgb"]) if line.get("rgb") else ""
+        skew = line.get("skew") or 0.0
+        # at the skew it was scanned at: over a long line a point or more
+        turn = -math.degrees(math.atan(skew))
+        style = f"{colour}{font}\\fontsize{{{size:.2f}}}{{{size * 1.2:.2f}}}\\selectfont {weight}"
+        # Word by word where the print's words were placed (their own
+        # widths and spaces are the print's, not the face's), else the
+        # line boxed to its printed width.
+        pieces = (
+            [(a * page_w, (b - a) * page_w, t) for a, b, t in line["words"]]
+            if fit and line.get("words") else [(x_mm, w_mm if fit else None, text)]
+        )
+        for px, pw, piece in pieces:
+            py = y_mm + skew * (px - x_mm)
+            body = f"\\resizebox{{{pw:.2f}mm}}{{\\height}}{{{_esc(piece)}}}" if pw else _esc(piece)
+            out.append(
+                f"  \\node[anchor=base west, inner sep=0pt, rotate={turn:.3f}] at ({px:.2f}mm, -{py:.2f}mm) "
+                f"{{{style}{body}}};\n"
+            )
+        if line.get("underline"):
+            uy, thick = line["underline"]
+            pen = "color={rgb,255:red,%d;green,%d;blue,%d}, " % tuple(line["rgb"]) if line.get("rgb") else ""
+            fall = (line.get("skew") or 0.0) * w_mm
+            out.append(
+                f"  \\draw[{pen}line width={thick:.2f}pt] ({x_mm:.2f}mm, -{uy * page_h:.2f}mm) -- "
+                f"({x_mm + w_mm:.2f}mm, -{uy * page_h + fall:.2f}mm);\n"
+            )
+    return out
 
 
 def _positioned_lines(block: Any) -> List[Any]:
