@@ -14,8 +14,10 @@ Does NOT mutate KRM (RFC 0001 §2, RFC 0021 §5.1). Reads visual_layout, bbox,
 and StyleDescriptor to reconstruct layout.
 """
 
+import functools
 import logging
 import math
+import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -51,6 +53,15 @@ log = logging.getLogger(__name__)
 # escaping would collapse their whitespace and destroy the markup. On a positional
 # page they are emitted in normal flow, below the overlay.
 _ATOMIC = (CodeBlock, TableBlock, FormulaBlock)
+
+_MM_PER_PT = 25.4 / 72.27
+_BP_PER_MM = 72.0 / 25.4
+# How far each unit of fontspec's FakeBold moves each edge of a glyph's
+# ink out, over the size - measured on XeTeX's output.
+_FAKEBOLD_EDGE_EM = 0.005
+_FAKEBOLD_MAX = 12.0
+_FAKEBOLD_MIN = 0.5
+_INK_LEVEL = 160      # 0-255 grey below which a pixel is ink, as the analyzer reads a print
 
 POSITIONAL_ROLES = {"title", "cover", "half_title", "series", "copyright", "toc", "diagram"}
 @dataclass
@@ -332,6 +343,52 @@ def _render_positional(slot: PageSlot, target_lang: str) -> str:
 
 
 _FACE_CMD = {"serif": "\\latinfont ", "sans": "\\latinsans ", "mono": "\\latinmono "}
+# The TeX Gyre files those families are set from.
+_FACE_FILE = {"serif": "texgyretermes", "sans": "texgyreheros", "mono": "texgyrecursor"}
+
+
+@functools.lru_cache(maxsize=None)
+def _font_file(name: str) -> Optional[str]:
+    try:
+        path = subprocess.run(["kpsewhich", name], capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return path or None
+
+
+@functools.lru_cache(maxsize=4096)
+def _ink_in_face(face: str, bold: bool, italic: bool, text: str) -> Optional[Tuple[float, float, float, float, float]]:
+    """Where text set in a face inks, per point of its size: from its
+    origin to its first ink, its ink's width, its advance, its ink's area
+    (per point squared) and its ink's outline. A box is as wide as its
+    advance; its ink sits inside it by its first and last glyphs' side
+    bearings - a typewriter face's are wide. None where the face's file
+    cannot be found."""
+    variant = ("bold" if bold else "") + ("italic" if italic else "") or "regular"
+    path = _font_file(f"{_FACE_FILE.get(face, 'texgyretermes')}-{variant}.otf")
+    if not path or not text.strip():
+        return None
+    import numpy as np
+    import pymupdf
+    size, x0, zoom = 100.0, 20.0, 2.0
+    doc = pymupdf.open()
+    page = doc.new_page(width=x0 * 2 + size * len(text), height=size * 2)
+    page.insert_font(fontname="F", fontfile=path)
+    page.insert_text((x0, size * 1.4), text, fontsize=size, fontname="F")
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
+    grey = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].mean(axis=2)
+    ink = grey < _INK_LEVEL
+    cols = np.flatnonzero(ink.any(axis=0))
+    advance = pymupdf.Font(fontfile=path).text_length(text, fontsize=size)
+    doc.close()
+    if not len(cols):
+        return None
+    padded = np.pad(ink, 1)
+    edges = int((padded[1:, :] != padded[:-1, :]).sum() + (padded[:, 1:] != padded[:, :-1]).sum())
+    unit = zoom * size
+    return ((cols[0] / zoom - x0) / size, (cols[-1] + 1 - cols[0]) / unit, advance / size,
+            float(ink.sum()) / unit ** 2, edges / unit)
+
 
 
 def _printed_lines(block: Any) -> List[Dict[str, Any]]:
@@ -367,26 +424,36 @@ def _printed_nodes(block: Any, target_lang: str, page_w: float, page_h: float) -
             continue
         x0, _, x1, _ = line["box"]
         x_mm, y_mm, w_mm = x0 * page_w, line["baseline"] * page_h, (x1 - x0) * page_w
-        size = line["size"] * 72.27 / 72.0
         font = _FACE_CMD.get(line["face"], "") if _is_latin_only(text) else ""
+        pieces = (
+            [(w[0] * page_w, (w[1] - w[0]) * page_w, w[2], w[3] if len(w) > 3 else None) for w in line["words"]]
+            if fit and line.get("words") else [(x_mm, w_mm if fit else None, text, line.get("area"))]
+        )
+        inks = [_ink_in_face(line["face"], line["bold"], line["italic"], t) if pw and font else None
+                for _, pw, t, _ in pieces]
+        size_bp, outline_bp = _weighed(line, pieces, inks)
+        size = size_bp * 72.27 / 72.0
         weight = ("\\bfseries " if line["bold"] else "") + ("\\itshape " if line["italic"] else "")
-        if line.get("fakebold"):
+        if outline_bp:
             # the scan's spread of ink, which the face as cut does not have
-            weight += "\\addfontfeatures{FakeBold=%.1f}" % line["fakebold"]
+            weight += "\\addfontfeatures{FakeBold=%.1f}" % (outline_bp / (_FAKEBOLD_EDGE_EM * size_bp))
         colour = "\\color[RGB]{%d,%d,%d}" % tuple(line["rgb"]) if line.get("rgb") else ""
         skew = line.get("skew") or 0.0
         # at the skew it was scanned at: over a long line a point or more
         turn = -math.degrees(math.atan(skew))
         style = f"{colour}{font}\\fontsize{{{size:.2f}}}{{{size * 1.2:.2f}}}\\selectfont {weight}"
+        outline_mm = outline_bp / _BP_PER_MM
         # Word by word where the print's words were placed (their own
         # widths and spaces are the print's, not the face's), else the
         # line boxed to its printed width.
-        pieces = (
-            [(a * page_w, (b - a) * page_w, t) for a, b, t in line["words"]]
-            if fit and line.get("words") else [(x_mm, w_mm if fit else None, text)]
-        )
-        for px, pw, piece in pieces:
+        for (px, pw, piece, _), ink in zip(pieces, inks):
             py = y_mm + skew * (px - x_mm)
+            if ink is not None and pw > 2 * outline_mm:
+                # the box widened so that its ink, not its advance, spans
+                # the print's, and set off by its first glyph's bearing
+                lead, inked, advance = ink[:3]
+                scale = (pw - 2 * outline_mm) / (inked * size_bp / _BP_PER_MM)
+                px, pw = px + outline_mm - lead * size_bp / _BP_PER_MM * scale, advance * size_bp / _BP_PER_MM * scale
             body = f"\\resizebox{{{pw:.2f}mm}}{{\\height}}{{{_esc(piece)}}}" if pw else _esc(piece)
             out.append(
                 f"  \\node[anchor=base west, inner sep=0pt, rotate={turn:.3f}] at ({px:.2f}mm, -{py:.2f}mm) "
@@ -401,6 +468,38 @@ def _printed_nodes(block: Any, target_lang: str, page_w: float, page_h: float) -
                 f"({x_mm + w_mm:.2f}mm, -{uy * page_h + fall:.2f}mm);\n"
             )
     return out
+
+
+def _weighed(line: Dict[str, Any], pieces: List[Any], inks: List[Any]) -> Tuple[float, float]:
+    """The size (pt) a printed line is set at and how far FakeBold is to
+    move its ink's edges out (pt): as far as makes its words lay as much
+    ink as the print's - a scan prints heavier than any face is cut, by
+    its spread of ink, which FakeBold reproduces all round as the spread
+    does. A glyph's ink then gains its outline times the edge's move; the
+    type is set smaller by the move, so its capitals stand as tall as the
+    print's."""
+    raw = line["size"]
+    cap = line.get("cap") or 0.7
+    known = [(pw, area, ink) for (_, pw, _, area), ink in zip(pieces, inks)
+             if ink is not None and area and pw]
+    if not known or raw <= 0:
+        return raw, 0.0
+    outline = 0.0
+    for _ in range(3):
+        size = raw - 2.0 * outline / cap
+        laid = edge = 0.0
+        for w_mm, _, ink in known:
+            _, inked, _, area_em, outline_em = ink
+            k = max(0.1, (w_mm * _BP_PER_MM - 2.0 * outline) / (inked * size))
+            laid += area_em * size * size * k
+            edge += outline_em * size * (1.0 + k) / 2.0
+        wanted = sum(area for _, area, _ in known)
+        outline = max(0.0, (wanted - laid) / edge) if edge else 0.0
+        outline = min(outline, _FAKEBOLD_MAX * _FAKEBOLD_EDGE_EM * size)
+    size = raw - 2.0 * outline / cap
+    if outline < _FAKEBOLD_MIN * _FAKEBOLD_EDGE_EM * size:
+        return raw, 0.0
+    return size, outline
 
 
 def _positioned_lines(block: Any) -> List[Any]:

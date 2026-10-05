@@ -244,7 +244,7 @@ def _mark_print(
     metadata["printed_title"]), as src/analyzers/printed.py reads them off
     the source page's pixels - its ink box and baseline (page-normalised),
     the skew it was scanned at, size, face, weight, slant, colour,
-    underline. Visual facts of the page,
+    underline, and how much ink each word lays. Visual facts of the page,
     beside the entries' text, not in it. Nothing where the source cannot
     be opened."""
     path = resolve_source_path(doc)
@@ -290,9 +290,10 @@ def _mark_print(
                 "part": m["part"], "text": m["text"], "page": m["page"],
                 "box": [x0 / pw, y0 / ph, x1 / pw, y1 / ph], "baseline": m["baseline"] / ph,
                 "skew": m["skew"],
-                "words": [[a / pw, b / pw, t] for a, b, t in m["words"]],
+                "words": [[a / pw, b / pw, t, area] for a, b, t, area in m["words"]],
+                "area": m["area"], "cap": m["cap"],
                 "size": m["size"], "face": m["face"], "bold": m["bold"], "italic": m["italic"],
-                "fakebold": m["fakebold"], "rgb": m["rgb"],
+                "rgb": m["rgb"],
                 "underline": [m["underline"][0] / ph, m["underline"][1]] if m["underline"] else None,
             }
             md = dict(owner.metadata or {})

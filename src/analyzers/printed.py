@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 
 from src.adapters.pdf_adapter import _measure_stroke_pt
 
+
 # Base-14 faces a line's text is set in to be compared with its print:
 # (regular, bold, italic, bold italic).
 FACES = {
@@ -39,14 +40,12 @@ STROKE_EM = {
     "sans": ((0.094, 0.150), (0.094, 0.150)),
     "mono": ((0.044, 0.119), (0.044, 0.119)),
 }
-# What each unit of fontspec's FakeBold adds to a stroke, over the size.
-FAKEBOLD_STROKE_EM = 0.0083
-FAKEBOLD_MAX = 8.0
-_FAKEBOLD_MIN = 0.5
 _FACE_MIN_LETTERS = 6     # a line this long votes for its page's face
 _WEIGHT_MIN_LETTERS = 4   # a line this long says what the page's regular weight is
 _SKEW_MIN_PT = 80.0       # a line this wide says how its stretch of the page is skewed
 _SAME_SIZE = 0.3          # within this of its kind's usual size, a line is set at it
+_SHORT_TOKEN = 3          # characters in a token too short to measure its size by
+_SAME_ROW = 0.5           # of the lower box's height two source boxes share on one row
 _BOLD_GAIN = 0.6          # of the gap from regular to bold, over the page's lightest
 
 ITALIC_SLANT = 0.12       # tan of the lean; an italic leans 0.2 or so
@@ -55,6 +54,8 @@ _GLYPH_CONTRAST = 120     # summed RGB difference from what a glyph is printed o
 _RULE_SPAN = 0.9          # a row this full of ink is a rule crossing the line
 _UNDERLINE_SPAN = 0.8     # a rule under the line covering this much of it underlines it
 _BASELINE_DENSITY = 0.3   # a row this dense against the line's densest is above the baseline
+_BASELINE_FALL = 0.6      # the row under the baseline holds less than this of its ink
+_LETTER_GAP = 0.12        # of a line's box height: the widest gap between two letters of a word
 _HEAD_DENSITY = 0.08      # a row this dense against the line's densest is its capitals', not a stray descender
 _COLOUR_SPREAD = 80       # channels this far apart: printed in a colour, not black
 _ZOOM = 6.0
@@ -152,15 +153,29 @@ def _own_rows(np, glyphs, run, rect, clip):
     return (top, bottom) if top <= bottom else run
 
 
+def _foot(np, band) -> int:
+    """A line's baseline row: down from its densest row, the first its ink
+    falls away under by _BASELINE_FALL - from the body of the line to its
+    descenders. Neither the last row of some density nor the steepest fall:
+    a typewriter's heavy "pp" fill the rows under "Appendix"'s baseline as
+    densely, and their ends fall away as steeply."""
+    below = np.append(band[1:], 0)
+    # down from its densest row, the first where the ink falls away sharply
+    for r in range(int(np.argmax(band)), len(band)):
+        if band[r] >= _BASELINE_DENSITY * band.max() and below[r] < _BASELINE_FALL * band[r]:
+            return r
+    rows = np.flatnonzero(band >= _BASELINE_DENSITY * band.max())
+    return int(rows[np.argmax(band[rows] - below[rows])])
+
+
 def _foot_and_head(np, band):
-    """A line's baseline row - the last as dense as _BASELINE_DENSITY of
-    its densest; under it only descenders - and its capitals' top: where
+    """A line's baseline row (_foot) and its capitals' top: where
     the unbroken ink over the baseline starts, from the first row its
     capitals and ascenders fill (a descender or two from the line above
     fill less). (None, None) where there is no ink."""
     if not len(band) or band.max() == 0:
         return None, None
-    foot = int(np.flatnonzero(band >= _BASELINE_DENSITY * band.max())[-1])
+    foot = _foot(np, band)
     head = foot
     while head > 0 and band[head - 1] > 0:
         head -= 1
@@ -208,11 +223,12 @@ def _straightened(np, region, skew: float):
     return out
 
 
-def _word_inks(np, region, words, x_of) -> List[List[Any]]:
+def _word_inks(np, region, words, x_of, gap: int) -> List[List[Any]]:
     """Where each word of a line prints: its ink's left and right column in
     region (x_of turns a page point into a region column), from the ink
-    inside its box run out to where its ink ends - a glyph OCR boxed short
-    - but never into the next word's box."""
+    inside its box run out to where its ink ends - a glyph OCR boxed short,
+    over gaps between letters up to gap columns - but never into the next
+    word's box."""
     inked = region.any(axis=0)
     w = len(inked)
     boxes = sorted(words, key=lambda wd: wd[0])
@@ -226,9 +242,10 @@ def _word_inks(np, region, words, x_of) -> List[List[Any]]:
         lo, hi = a + int(cols[0]), a + int(cols[-1]) + 1
         floor = int(round(x_of(boxes[k - 1][2]))) if k > 0 else 0
         ceil = int(round(x_of(boxes[k + 1][0]))) if k + 1 < len(boxes) else w
-        while lo > max(floor, 0) and inked[lo - 1]:
+        # over the gaps between letters, never a word space
+        while lo > max(floor, 0) and inked[max(floor, 0, lo - gap):lo].any():
             lo -= 1
-        while hi < min(ceil, w) and inked[hi]:
+        while hi < min(ceil, w) and inked[hi:min(ceil, w, hi + gap)].any():
             hi += 1
         out.append([lo, hi, wd[4]])
     return out
@@ -256,6 +273,8 @@ def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] 
     rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].astype(int)
     ground = np.median(rgb.reshape(-1, 3), axis=0)
     ink = (np.abs(rgb - ground).sum(axis=2) > _GLYPH_CONTRAST) & (rgb.sum(axis=2) < ground.sum())
+    # the ink as the overlay reads it - how much of the page the line darkens
+    dark = (rgb.mean(axis=2) < _INK_LEVEL) & ink
     ruled = ink.mean(axis=1) > _RULE_SPAN
     glyphs = ink.copy()
     glyphs[ruled, :] = False
@@ -316,16 +335,20 @@ def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] 
 
     placed = []
     if words:
-        placed = [[pt_x(left + a), pt_x(left + b), t] for a, b, t in
-                  _word_inks(np, region, words, lambda x: (x - clip.x0) * _ZOOM - left)]
+        placed = [[pt_x(left + a), pt_x(left + b), t,
+                   float(dark[top:bottom + 1, left + a:left + b].sum()) / _ZOOM ** 2] for a, b, t in
+                  _word_inks(np, region, words, lambda x: (x - clip.x0) * _ZOOM - left,
+                             max(1, int(rect.height * _ZOOM * _LETTER_GAP)))]
 
     return {
+        "source": [rect.x0, rect.y0, rect.x1, rect.y1],
         "words": placed,
         "box": [pt_x(left), pt_y(top), pt_x(right), pt_y(bottom + 1)],
         "baseline": pt_y(base),
         "skew": skew,
         "height": height / _ZOOM,
         "stroke": _measure_stroke_pt(page, pymupdf.Rect(pt_x(left), pt_y(top), pt_x(right), pt_y(bottom + 1))) or 0.0,
+        "area": float(dark[top:bottom + 1, left:right].sum()) / _ZOOM ** 2,
         "italic": lean >= ITALIC_SLANT,
         "slant": lean,
         "scores": scores,
@@ -348,18 +371,16 @@ def _letters(text: str) -> int:
 
 def settle_page(lines: List[Dict[str, Any]]) -> None:
     """Decide, for the measured lines of one page (measure_line, each with
-    its "text"), the type each is set in: "face", "size", "bold" and
-    "fakebold" are added to each, and a short line's "skew" is its
-    neighbours'.
+    its "text"), the type each is set in: "face", "size" (its capitals as
+    tall as the print's; "cap" is what share of the size they reach) and
+    "bold" are added to each, and a short line's "skew" is its neighbours'.
 
     The face is the page's: each line long enough votes for the face that
     covers its print best, one line alone being too short to tell. A line
     is bold where its strokes stand out from the page's lightest by most of
-    the gap between its face's regular and bold. What a scan prints
-    heavier than the face as cut - every line, its ink spread by the scan
-    - is made up with FakeBold, which thickens a glyph all round as the
-    spread does; the type is then set that much smaller, so its capitals
-    stand as tall as the print's.
+    the gap between its face's regular and bold. How much heavier than the
+    face as cut a scan prints every line is the builder's to make up: it
+    knows the face it sets, and each word's ink ("area") says how much.
     """
     votes = {face: 0 for face in FACES}
     for line in lines:
@@ -385,20 +406,23 @@ def settle_page(lines: List[Dict[str, Any]]) -> None:
     for line in lines:
         stems = STROKE_EM[face][1 if line["italic"] else 0]
         bold = bool(line["stroke"]) and excess(line) - lightest > _BOLD_GAIN * (stems[1] - stems[0])
-        size = size_in(face, line["height"], line["text"])
-        fakebold = 0.0
-        if line["stroke"] and size > 0:
-            fakebold = min(FAKEBOLD_MAX, max(0.0, (line["stroke"] - stems[1 if bold else 0] * size)
-                                             / (FAKEBOLD_STROKE_EM * size)))
-            if fakebold < _FAKEBOLD_MIN:
-                fakebold = 0.0
-        outline = fakebold * FAKEBOLD_STROKE_EM * size / 2.0
-        line.update({
-            "face": face,
-            "bold": bold,
-            "fakebold": fakebold,
-            "size": size - 2.0 * outline / CAP_EM[face],
-        })
+        line.update({"face": face, "bold": bold, "cap": CAP_EM[face],
+                     "size": size_in(face, line["height"], line["text"])})
+    # A number alone ("5", "3.2") is too few glyphs to measure: it stands on
+    # the baseline of, and is set at the size of, the longest line its
+    # source box shares its row with.
+    def shared(a, b) -> float:
+        lo, hi = max(a["source"][1], b["source"][1]), min(a["source"][3], b["source"][3])
+        return (hi - lo) / max(1e-6, min(a["source"][3] - a["source"][1], b["source"][3] - b["source"][1]))
+
+    for line in lines:
+        if len(line["text"].strip()) <= _SHORT_TOKEN:
+            mates = [o for o in lines if o is not line and len(o["text"].strip()) > _SHORT_TOKEN
+                     and shared(o, line) >= _SAME_ROW]
+            if mates:
+                mate = max(mates, key=lambda o: len(o["text"]))
+                line["baseline"] = mate["baseline"] + mate["skew"] * (line["box"][0] - mate["box"][0])
+                line["size"] = mate["size"]
     # One kind of line - its weight and slant - is set at one size on a
     # page: a line measured off it by less than _SAME_SIZE is set at its
     # kind's usual. On a page scanned askew a descender of the line above
