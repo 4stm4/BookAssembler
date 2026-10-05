@@ -558,6 +558,24 @@ def _mark_cell_borders(np, pymupdf, page, table) -> bool:
 def _looks_like_separator(text: str) -> bool:
     return bool(_SEPARATOR_RE.match(text.strip()))
 
+
+# A one-character block under this share of a line's usual height is a speck.
+_SPECK_SHARE = 0.5
+# What OCR makes of a leader's dots: never a placeholder "•", which is content.
+_LEADER_SCRAPS = frozenset(".:;,·'`\"")
+
+
+def _is_leader_residue(text: str, height: float, usual_height: float) -> bool:
+    """A scrap of a leader or a speck the OCR read as text: dots, colons,
+    commas only (".", ":"), or one letter or figure in a box under half a line's
+    usual height ("x", 2 by 3pt, where the index fixture prints a dot). Its
+    leader is read off the pixels (_drop_leaders); as a block of its own
+    it opened a column of the index fixture's table, spanning 37 rows."""
+    t = text.strip()
+    if t and all(ch in _LEADER_SCRAPS for ch in t):
+        return True
+    return len(t) == 1 and t.isalnum() and usual_height > 0 and height < _SPECK_SHARE * usual_height
+
 def _count_columns(text: str) -> int:
     parts = _TAB_SPLIT_RE.split(text.strip())
     return len([p for p in parts if p.strip()])
@@ -752,8 +770,16 @@ def _line_rows(block: Any) -> List[Tuple[str, Optional[NormalizedRect], Optional
         vl = getattr(inline, "visual_layout", None)
         bbox = getattr(vl, "bounding_box", None) if vl else None
         style = getattr(vl, "style", None) if vl else None
-        rows.extend(_split_numeric_pair(text, bbox, style))
-    return rows
+        rows.append((text, bbox, style))
+    # A leader's scraps and specks are no line of the table (_is_leader_residue).
+    heights = sorted(b.y1 - b.y0 for _, b, _ in rows if b is not None)
+    usual = heights[len(heights) // 2] if heights else 0.0
+    out: List[Tuple[str, Optional[NormalizedRect], Optional[Any]]] = []
+    for text, bbox, style in rows:
+        if _is_leader_residue(text, (bbox.y1 - bbox.y0) if bbox is not None else usual, usual):
+            continue
+        out.extend(_split_numeric_pair(text, bbox, style))
+    return out
 
 
 @dataclass(frozen=True)

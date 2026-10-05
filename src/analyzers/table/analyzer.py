@@ -20,7 +20,7 @@ from src.analyzers.caption.signals import _CAPTION_RE
 from src.analyzers.source_io import resolve_source_path
 from src.analyzers.table.boxes import _box_grid, _table_from_box_grid
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
-from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _build_span_map, _cell_x0, _column_bins, _column_of, _find_placeholder_marks, _frame_rules, _cluster_columns, _count_columns, _drop_leaders, _find_table_runs, _fold_label_rows, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _mark_fill, _mark_printed_width, _measure_leader_grid, _deflate_boxes, _mark_italic, _mark_typeface, _size_display_type, _mark_text_colour, _page_idx, _regrid_ruled_bands, _rows_from_block, _rows_from_group, _snap_row_to_columns, _split_cells_at_rules, _table_from_lines
+from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _is_leader_residue, _build_span_map, _cell_x0, _column_bins, _column_of, _find_placeholder_marks, _frame_rules, _cluster_columns, _count_columns, _drop_leaders, _find_table_runs, _fold_label_rows, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _mark_fill, _mark_printed_width, _measure_leader_grid, _deflate_boxes, _mark_italic, _mark_typeface, _size_display_type, _mark_text_colour, _page_idx, _regrid_ruled_bands, _rows_from_block, _rows_from_group, _snap_row_to_columns, _split_cells_at_rules, _table_from_lines
 
 
 def _cell_y0(cell: "TableCell") -> float:
@@ -644,6 +644,13 @@ class TableDetectorAnalyzer(BaseAnalyzer):
 
         para_blocks: List[Tuple[int, ParagraphBlock]] = []
         separator_indices: set = set()
+        # a line's usual height on this container's pages, from its blocks of one line
+        one_line = sorted(
+            _bbox(c).y1 - _bbox(c).y0 for c in container.children
+            if isinstance(c, (ParagraphBlock, UnknownBlock)) and not getattr(c, "is_tombstoned", False)
+            and _bbox(c) is not None and len(getattr(c, "inlines", None) or []) == 1
+        )
+        usual_height = one_line[len(one_line) // 2] if one_line else 0.0
         for idx, child in enumerate(container.children):
             # RFC 0014: blocks already merged into a table on an earlier run are
             # tombstoned. Collecting them again would cluster the same run twice
@@ -655,6 +662,8 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                 bb = _bbox(child)
                 if _looks_like_separator(text):
                     separator_indices.add(idx)
+                    continue
+                if _is_leader_residue(text, bb.y1 - bb.y0, usual_height):
                     continue
                 if (bb.y1 - bb.y0) > MAX_BLOCK_HEIGHT:
                     continue
