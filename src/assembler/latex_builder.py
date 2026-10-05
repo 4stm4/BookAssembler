@@ -209,6 +209,8 @@ def build_latex(
         # index of its own, permanently offsetting every page after it from
         # its counterpart in the original — breaking the page correspondence
         # this pipeline exists to preserve.
+        # Imported here: page_assembler imports this module.
+        from src.assembler.page_assembler import assemble_pages
         return _PREAMBLE + assemble_pages(doc, target_lang) + _POSTAMBLE
 
     body: List[str] = []
