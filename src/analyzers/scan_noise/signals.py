@@ -41,6 +41,11 @@ MAX_DOMINANT_LETTER_SHARE = 0.6
 # has none either ("LD r, (IX+d)", "SBC HL, ss" — the Zilog Z80 contents
 # lost seven entries that way). Debris also shows it in its tokens: the same
 # letter three times running ("1IIIIiK"), or letters broken up by digits and
-# punctuation inside one token ("K,8I").
+# punctuation inside one token ("K,8I"). Not by a hyphen or a slash: that is
+# how a part number is written ("MCS-4/40", "MCS-80/85"), and Intel's
+# contents lost three of its entries to this rule.
 _REPEAT_RE = re.compile(r"([^\W\d_])\1\1", re.IGNORECASE)
-_BROKEN_TOKEN_RE = re.compile(r"[^\W\d_][^\w\s]*\d[^\w\s]*[^\W\d_]|[^\W\d_][^\w\s]+\d|\d[^\w\s]+[^\W\d_]")
+_BREAK = r"[^\w\s\-/]"
+_BROKEN_TOKEN_RE = re.compile(
+    rf"[^\W\d_]{_BREAK}*\d{_BREAK}*[^\W\d_]|[^\W\d_]{_BREAK}+\d|\d{_BREAK}+[^\W\d_]"
+)
