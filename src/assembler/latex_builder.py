@@ -598,7 +598,7 @@ def _line_texts(cell: Any, raw: str) -> List[str]:
     return [_bold_marked(line.split(), f) for line, f in zip(lines, flags)]
 
 
-def _positioned_lines(cell: Any, raw: str) -> str:
+def _positioned_lines(cell: Any, raw: str, drop_pt: float = 0.0) -> str:
     """A stacked cell's lines with each run of words set where it was
     printed, or "" when the cell does not carry its runs.
 
@@ -641,6 +641,11 @@ def _positioned_lines(cell: Any, raw: str) -> str:
                 out += f"\\makebox[{(nxt[0] - x) * _A4_WIDTH_PT:.2f}pt][l]{{{marked}}}"
             else:
                 out += marked
+        # lowered without moving the line's box: its glyphs grown to the
+        # print's size from the same top, their baseline goes where the
+        # print's is
+        if drop_pt > 0.05:
+            out = f"\\raisebox{{{-drop_pt:.2f}pt}}[\\height][\\depth]{{{out}}}"
         lines.append(out)
     # Each line on to the next as much further than the cell's usual step
     # as the print steps between their feet, where the analyzer measured
@@ -847,6 +852,8 @@ _BOX_RULE_PT = 0.6
 _FIT_MIN_LETTERS = 4
 # A cell set this much over the table's usual size is display type.
 _DISPLAY_SHARE = 1.5
+# How tall TeX Gyre Heros' capitals stand over its size.
+_HEROS_CAP_EM = 0.718
 # A dot leader's pitch, as \dotfill sets it.
 _DOT_PITCH_EM = 0.44
 _STRUT_HEIGHT = 0.7
@@ -1263,8 +1270,20 @@ def _render_table(table: TableBlock) -> str:
                     if _h is not None and _n > 1:
                         _leading = max(0.0, (_h - line_box) * _A4_HEIGHT_PT / (_n - 1))
                         line_pitch[(row_idx, col)] = _leading
-                    body = "\\lineskiplimit=-\\maxdimen " + (
-                        _positioned_lines(cell, raw) or "\\newline ".join(_line_texts(cell, raw))
+                    # Lines set where they were printed take their type at
+                    # the size its ink says (the analyzer's ink_size_pt),
+                    # grown down from their capitals' top: their pitch and
+                    # widths are the print's already. At the text layer's
+                    # 9.5pt the pin description fixture's capitals stood
+                    # 6.9pt to the print's 7.6, every baseline 1pt high.
+                    _ink = md.get("ink_size_pt", 0.0) * _TEX_PT_PER_BP
+                    _grow = _ink - median_pt if median_pt > 0 and _leading > 0 else 0.0
+                    _positioned = _positioned_lines(cell, raw, drop_pt=_HEROS_CAP_EM * _grow if _grow > 0 else 0.0)
+                    _glyphs = (
+                        f"\\fontsize{{{_ink:.2f}}}{{{_leading:.2f}}}\\selectfont " if _positioned and _grow > 0 else ""
+                    )
+                    body = "\\lineskiplimit=-\\maxdimen " + _glyphs + (
+                        _positioned or "\\newline ".join(_line_texts(cell, raw))
                     )
                 else:
                     body = " ".join(_line_texts(cell, raw))

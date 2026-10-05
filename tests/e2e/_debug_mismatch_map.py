@@ -57,3 +57,17 @@ for k in range(8):
         scores.append(((a[:, s] ^ sb[:, s]).sum(), dx))
     m, dx = min(scores)
     print(f"  band {k}: dx {dx:+d}  ({m / total:.2%} vs {(a[:, s] ^ b[:, s]).sum() / total:.2%})")
+
+
+def grown(m, r):
+    out = m.copy()
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            out |= np.roll(np.roll(m, dy, axis=0), dx, axis=1)
+    return out
+
+
+for r in (1, 2):
+    far_src = (a & ~grown(b, r)).sum() / total
+    far_out = (b & ~grown(a, r)).sum() / total
+    print(f"beyond {r}px of the other's ink: source-only {far_src:.2%}  rebuild-only {far_out:.2%}")

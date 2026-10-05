@@ -2031,7 +2031,49 @@ def _mark_typeface(np, pymupdf, page, table) -> Optional[str]:
     face = max(votes, key=votes.get)
     if face == "sans":
         table.metadata["typeface"] = "sans"
+    size = _ink_body_size(np, pymupdf, page, table)
+    if size:
+        table.metadata["ink_size_pt"] = size
     return face
+
+
+_SIZE_ZOOM = 6.0
+_BASELINE_DENSITY = 0.3      # a row this dense against its line's densest is above the baseline
+
+
+def _ink_body_size(np, pymupdf, page, table) -> Optional[float]:
+    """The table's body type size read off its ink: each printed line in
+    its cells, its capitals' height - from the line's first row of ink to
+    its baseline, the last row as dense as _BASELINE_DENSITY of its
+    densest (under it only descenders) - over the share of the size they
+    reach (_CAP_SHARE); the median of those. The text layer's size is
+    tesseract's guess from its line boxes: the pin description fixture's
+    9.5pt type prints 7.6pt capitals, 10.2pt type. None where too few
+    lines can be read."""
+    pw, ph = page.rect.width, page.rect.height
+    caps = []
+    for row in table.grid:
+        for cell in row:
+            vl = cell.visual_layout
+            if vl is None or vl.bounding_box is None or sum(ch.isalpha() for ch in _cell_text_of(cell)) < 4:
+                continue
+            b = vl.bounding_box
+            clip = pymupdf.Rect(b.x0 * pw, b.y0 * ph, b.x1 * pw, b.y1 * ph) & page.rect
+            if clip.is_empty:
+                continue
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(_SIZE_ZOOM, _SIZE_ZOOM), clip=clip)
+            grey = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].mean(axis=2)
+            density = (grey < _RULE_INK_LEVEL).mean(axis=1)
+            for a, z in _runs_of(np, density > 0):
+                band = density[a:z]
+                if len(band) < 4:
+                    continue
+                base = a + int(np.flatnonzero(band >= _BASELINE_DENSITY * band.max())[-1])
+                caps.append((base + 1 - a) / _SIZE_ZOOM)
+    if len(caps) < 5:
+        return None
+    caps.sort()
+    return caps[len(caps) // 2] / _CAP_SHARE
 
 
 def _deflate_boxes(np, pymupdf, page, table) -> int:

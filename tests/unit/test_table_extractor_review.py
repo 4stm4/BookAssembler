@@ -2066,3 +2066,50 @@ class TestPrintedWidth:
         tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
         m = re.search(r"\\resizebox\{([\d.]+)pt\}\{\\height\}\{NAME NUMBER 3\}\\dotfill", tex)
         assert m and abs(float(m.group(1)) - grid[3][0].metadata["printed_width"] * 21 * 72.27 / 2.54) < 0.05
+
+
+class TestInkBodySize:
+    def test_the_body_size_is_read_off_the_capitals(self):
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _ink_body_size
+        from src.krm.models import StyleDescriptor
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        rows = []
+        for k in range(6):
+            y = 300 + 16 * k
+            page.insert_text((100, y), f"ADDRESS LATCH {k} ENABLE", fontsize=12, fontname="helv")
+            words = [w for w in page.get_text("words") if y - 14 < w[3] <= y + 5]
+            box = NormalizedRect(x0=min(w[0] for w in words) / 595, y0=min(w[1] for w in words) / 842,
+                                 x1=max(w[2] for w in words) / 595, y1=max(w[3] for w in words) / 842)
+            # the text layer's guess at its size is off
+            rows.append([TableCell(
+                content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text=f"ADDRESS LATCH {k} ENABLE")])])],
+                visual_layout=VisualLayout(bounding_box=box, page_or_screen_index=0, style=StyleDescriptor(font_size_pt=10)))])
+        table = TableBlock(grid=rows, row_count=6, column_count=1, visual_layout=rows[0][0].visual_layout)
+        assert abs(_ink_body_size(np, pymupdf, page, table) - 12) < 0.8
+
+    def test_lines_set_where_printed_take_that_size_from_the_same_top(self):
+        import re
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("one two three\nfour five six", x0=0.20, y0=0.32),
+                 _cell("V", x0=0.33, y0=0.32)]]
+        cell = rows[1][1]
+        box = cell.visual_layout.bounding_box
+        cell.visual_layout.bounding_box = NormalizedRect(x0=box.x0, y0=box.y0, x1=box.x1, y1=box.y0 + 0.025)
+        cell.metadata["line_segments"] = [[[box.x0, "one two three", box.x0 + 0.06]], [[box.x0, "four five six", box.x0 + 0.06]]]
+        from src.assembler.latex_builder import build_latex
+        from src.krm.models import KnowledgeDocument
+        grid = [[c if c.visual_layout.style else _styled(c) for c in row] for row in rows]
+        table = TableBlock(grid=grid, row_count=2, column_count=3, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.40, y1=0.36), page_or_screen_index=0))
+        for row in grid:
+            for c in row:
+                c.border_left = c.border_right = True
+        table.metadata = {"column_rule_x": [0.175, 0.275], "ink_size_pt": 9.0}
+        tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
+        size = float(re.search(r"\\fontsize\{([\d.]+)\}\{[\d.]+\}\\selectfont \\raisebox", tex).group(1))
+        drop = float(re.search(r"\\raisebox\{-([\d.]+)pt\}\[\\height\]\[\\depth\]", tex).group(1))
+        assert abs(size - 9.0 * 72.27 / 72) < 0.02
+        assert abs(drop - 0.718 * (size - 8.03)) < 0.05
