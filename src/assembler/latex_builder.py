@@ -1853,6 +1853,15 @@ def _render_table(table: TableBlock) -> str:
         ]
         if all(f is not None and f > 0 for f in fractions):
             col_width_cm = [f * _A4_FULL_WIDTH_CM for f in fractions]
+            # A right-set column's values end at their usual right edge,
+            # not at the next column's start: the DC characteristics
+            # fixture's TYP figures stood 29pt right of their print, against
+            # MAX, and its units against CONDITIONS.
+            for i in range(ncols):
+                if (col_is_right is not None and col_is_right[i]
+                        and i < len(col_edge_x1) and col_edge_x1[i] is not None):
+                    _col_indent_pt[i] = max(
+                        0.0, (_starts[i] + fractions[i] - col_edge_x1[i]) * _A4_FULL_WIDTH_CM * _PT_PER_CM)
 
     # Narrow columns hold short numeric-ish values (MIN/TYP/MAX/UNITS) that
     # the source right-aligns, not the wide CHARACTERISTICS/CONDITIONS text
