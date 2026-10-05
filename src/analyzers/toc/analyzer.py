@@ -24,6 +24,7 @@ from src.krm.models import (
     ParagraphBlock,
     StyleDescriptor,
     TocEntryBlock,
+    UnknownBlock,
     VisualLayout,
 )
 
@@ -32,6 +33,11 @@ from src.krm.models import (
 _CONF_HEADING = 0.9
 _CONF_SHAPE = 0.8
 _DEFAULT_TITLE = "Оглавление"
+
+# Text a contents line can be read from: what the adapter emits, not yet
+# classified (RFC 0008 §5.2), and prose. Exact types: a title page or a
+# caption is not a contents line, however it subclasses.
+TEXT_BLOCKS = (UnknownBlock, ParagraphBlock)
 
 
 class TocAnalyzer(BaseAnalyzer):
@@ -77,7 +83,7 @@ def _collect(container: ContainerUnit, out: List[Tuple[ParagraphBlock, Container
         if isinstance(child, ContainerUnit):
             if child.semantic_type != "toc":
                 _collect(child, out)
-        elif type(child) is ParagraphBlock and not child.is_tombstoned:
+        elif type(child) in TEXT_BLOCKS and not child.is_tombstoned:
             out.append((child, container))
 
 

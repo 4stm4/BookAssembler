@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from src.analyzers.access import block_text
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
+from src.analyzers.toc.analyzer import TEXT_BLOCKS
 from src.analyzers.toc.folios import EDGE_BOTTOM, EDGE_TOP, PageMap, folio_candidates
 from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
@@ -25,7 +26,6 @@ from src.krm.models import (
     ContainerUnit,
     EphemeraBlock,
     KnowledgeDocument,
-    ParagraphBlock,
     TocEntryBlock,
 )
 
@@ -124,7 +124,7 @@ def _page_map(containers: List[ContainerUnit]) -> PageMap:
             # labels (MCS-40, chapter 3), and it still says what page it is.
             if isinstance(n, EphemeraBlock):
                 consider(n.visual_layout, n.repeated_text)
-            elif type(n) is ParagraphBlock:
+            elif type(n) in TEXT_BLOCKS:
                 lines = [il for il in (n.inlines or []) if getattr(il, "visual_layout", None)]
                 if lines:
                     for il in lines:
