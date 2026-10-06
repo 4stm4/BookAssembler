@@ -98,6 +98,12 @@ FIXTURES = [
     # ("2.1"-"5.3"); read as one column of lines, scaled up, it reads them all.
     (["toc/Fixture_B.png"], "toc/toc_b.pdf", 500, 4, 300),
     (["toc/Fixture_C1.png", "toc/Fixture_C2.png", "toc/Fixture_C3.png"], "toc/toc_c.pdf", 500, 3, 0),
+    # Paragraphs (tests/e2e/test_paragraph_overlay.py).
+    (["paragraph/fixture_A.png"], "paragraph/paragraph_a.pdf", 500, 3, 0),
+    (["paragraph/fixture_B.png"], "paragraph/paragraph_b.pdf", 500, 3, 0),
+    (["paragraph/fixture_C.png"], "paragraph/paragraph_c.pdf", 500, 3, 0),
+    (["paragraph/fixture_D.png"], "paragraph/paragraph_d.pdf", 500, 3, 0),
+    (["paragraph/fixture_E.png"], "paragraph/paragraph_e.pdf", 500, 3, 0),
 ]
 
 
