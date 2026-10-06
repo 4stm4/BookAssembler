@@ -26,6 +26,19 @@ MAX_BLOCK_HEIGHT = 0.05
 # misread as a table before this existed).
 _SINGLE_COL_PROSE_LEN = 60
 
+# A paragraph wraps to its measure: its lines run one after another across
+# the full width, each one run of words. A table's rows are cells apart. A
+# line OCR broke at a wide justified space ("problem." | "It must terminate
+# in" | "a finite number of steps. This", the paragraph fixtures B, D, E)
+# is still one run: its pieces stand a word space apart - up to 1.9 of its
+# characters' average width there, beside an overlined "W" - where a
+# table's columns stand further. A candidate whose rows are mostly such
+# lines is prose - in narrow columns too, where a line holds fewer than
+# _SINGLE_COL_PROSE_LEN characters.
+_PROSE_SPAN = 0.9         # of the candidate's width a prose line runs across
+_PROSE_GAP = 2.5          # of its characters' average width: its widest word space
+_PROSE_MIN_WORDS = 5      # words of two letters or more in a prose line
+
 _SEPARATOR_RE = re.compile(r"^[\s\-_=|+:·.─━┃│┼┤├┬┴]{3,}$")
 
 _TAB_SPLIT_RE = re.compile(r"\t|  {2,}|(?:\s{2,}\|?\s{2,})")

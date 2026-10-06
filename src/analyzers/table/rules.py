@@ -1,6 +1,6 @@
 """table: Pure decision logic — no KRM writes, no I/O."""
 
-from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, X_OVERLAP_THRESHOLD, Y_STEP_TOLERANCE, _SEPARATOR_RE, _SINGLE_COL_PROSE_LEN, _TAB_SPLIT_RE, log
+from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, X_OVERLAP_THRESHOLD, Y_STEP_TOLERANCE, _PROSE_GAP, _PROSE_MIN_WORDS, _PROSE_SPAN, _SEPARATOR_RE, _SINGLE_COL_PROSE_LEN, _TAB_SPLIT_RE, log
 import logging
 import re
 from dataclasses import dataclass
@@ -1244,6 +1244,31 @@ def _header_row_for_block(block: Any) -> Optional[List["TableCell"]]:
     return [_make_cell(t, b, s, page_idx) for t, b, s in row]
 
 
+def _reads_as_prose(rows: List[List[Tuple[str, Any]]]) -> bool:
+    """Whether a table candidate's rows - each its (text, box) pieces - are
+    a paragraph's lines: most of them one run of words across the
+    candidate's whole width (signals._PROSE_SPAN et al.)."""
+    boxed = [sorted((p for p in row if p[1] is not None), key=lambda p: p[1].x0) for row in rows]
+    boxed = [row for row in boxed if row]
+    if not boxed:
+        return False
+    left = min(p[1].x0 for row in boxed for p in row)
+    width = max(p[1].x1 for row in boxed for p in row) - left
+
+    def prose_line(row) -> bool:
+        # boxes are page shares, x and y apart: a gap is weighed by the
+        # line's own characters, across
+        advance = sum(p[1].x1 - p[1].x0 for p in row) / max(1, sum(len(p[0]) for p in row))
+        if any(b[1].x0 - a[1].x1 > _PROSE_GAP * advance for a, b in zip(row, row[1:])):
+            return False
+        if row[-1][1].x1 - row[0][1].x0 < _PROSE_SPAN * width:
+            return False
+        words = " ".join(p[0] for p in row).split()
+        return sum(1 for w in words if sum(ch.isalpha() for ch in w) >= 2) >= _PROSE_MIN_WORDS
+
+    return width > 0 and 2 * sum(prose_line(row) for row in boxed) > len(boxed)
+
+
 def _table_from_lines(block: Any) -> Optional[TableBlock]:
     """A TableBlock built from one block's own lines, or None.
 
@@ -1261,6 +1286,8 @@ def _table_from_lines(block: Any) -> Optional[TableBlock]:
 
     rows = _group_into_rows(fragments)
     if len(rows) < MIN_TABLE_ROWS:
+        return None
+    if _reads_as_prose([[(t, bbox) for t, bbox, _ in row] for row in rows]):
         return None
 
     is_single_col = all(len(row) <= 1 for row in rows)

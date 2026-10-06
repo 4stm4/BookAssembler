@@ -20,7 +20,7 @@ from src.analyzers.caption.signals import _CAPTION_RE
 from src.analyzers.source_io import resolve_source_path
 from src.analyzers.table.boxes import _box_grid, _table_from_box_grid
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
-from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _is_leader_residue, _marks_on_leaders, _reseat_stacked_lines, _build_span_map, _cell_x0, _column_bins, _column_of, _find_placeholder_marks, _frame_rules, _cluster_columns, _count_columns, _drop_leaders, _find_table_runs, _fold_label_rows, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _mark_fill, _mark_printed_width, _measure_leader_grid, _deflate_boxes, _mark_italic, _mark_typeface, _size_display_type, _mark_text_colour, _page_idx, _regrid_ruled_bands, _rows_from_block, _rows_from_group, _snap_row_to_columns, _split_cells_at_rules, _table_from_lines
+from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _is_leader_residue, _marks_on_leaders, _reseat_stacked_lines, _build_span_map, _cell_x0, _column_bins, _column_of, _find_placeholder_marks, _frame_rules, _cluster_columns, _count_columns, _drop_leaders, _find_table_runs, _fold_label_rows, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _mark_fill, _mark_printed_width, _measure_leader_grid, _deflate_boxes, _reads_as_prose, _mark_italic, _mark_typeface, _size_display_type, _mark_text_colour, _page_idx, _regrid_ruled_bands, _rows_from_block, _rows_from_group, _snap_row_to_columns, _split_cells_at_rules, _table_from_lines
 
 
 def _cell_y0(cell: "TableCell") -> float:
@@ -767,6 +767,12 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                     grid: List[List[TableCell]] = []
                     for rows in precomputed_rows:
                         grid.extend(rows)
+                    # A column of paragraphs, evenly spaced, is no table.
+                    if _reads_as_prose([
+                        [(_cell_text(c), c.visual_layout.bounding_box if c.visual_layout else None) for c in row]
+                        for row in grid
+                    ]):
+                        continue
 
                     grid = _merge_orphan_rows(grid)
 
