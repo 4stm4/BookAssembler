@@ -805,6 +805,8 @@ _PT_PER_CM = 72.27 / 2.54
 _A4_HEIGHT_PT = 29.7 * _PT_PER_CM
 # A source's type sizes are PDF points (bp) and go out as TeX points too.
 _TEX_PT_PER_BP = 72.27 / 72.0
+# How tall a line of type stands, capitals to descenders, over its size.
+_TYPE_HEIGHT_EM = 0.9
 
 
 def _size_of(style: Any) -> float:
@@ -1169,6 +1171,13 @@ def _render_table(table: TableBlock) -> str:
         and cell.visual_layout.style.font_size_pt
     )
     median_pt = _sizes[len(_sizes) // 2] if _sizes else 0.0
+    # The size the body's ink says, where the analyzer read it and it is
+    # more than noise over the text layer's guess: tesseract sizes a line
+    # from its box, and the DC characteristics fixture's 8.8pt type came
+    # out 7.65pt, every line's words falling short of their print.
+    _ink_body = (getattr(table, "metadata", None) or {}).get("ink_size_pt", 0.0) * _TEX_PT_PER_BP
+    if median_pt > 0 and _ink_body > median_pt * (1.0 + _SIZE_NOISE_TOLERANCE):
+        median_pt = _ink_body
     line_box = _median_line_box(grid)
 
     bins = _column_bins(grid)
@@ -2997,8 +3006,14 @@ def _render_table(table: TableBlock) -> str:
         )
         # A wrapping row still keeps its own need: its lines have to fit
         # whatever the step to the next row implies.
+        # A row under another sharing its columns shrinks as far as its
+        # type's own height allows - the print set them that close, at
+        # this size: the DC characteristics fixture's "CLK / EN / All
+        # Other Inputs" step 10pt under a 14.8pt usual row, and the
+        # stretch alone (-4.2pt) left each 0.6pt and more too tall.
         floor = content if content > 0 else (
-            -(_base_line_pt - 0.5) if _disjoint_below(i) else _compress_floor_pt
+            -(_base_line_pt - 0.5) if _disjoint_below(i)
+            else min(_compress_floor_pt, -(_base_line_pt - _TYPE_HEIGHT_EM * (median_pt or 8.0)))
         )
         raw_extra_pt.append(max(floor, surplus))
     _extra_scale = 1.0

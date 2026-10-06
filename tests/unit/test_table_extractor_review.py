@@ -2113,10 +2113,12 @@ class TestInkBodySize:
                 c.border_left = c.border_right = True
         table.metadata = {"column_rule_x": [0.175, 0.275], "ink_size_pt": 9.0}
         tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
-        size = float(re.search(r"\\fontsize\{([\d.]+)\}\{[\d.]+\}\\selectfont \\raisebox", tex).group(1))
-        drop = float(re.search(r"\\raisebox\{-([\d.]+)pt\}\[\\height\]\[\\depth\]", tex).group(1))
+        # the table is set at its ink's size, the stacked lines with it: at
+        # the table's size they need no growing, and no drop to keep their
+        # capitals' top where the print's is
+        size = float(re.search(r"\\fontsize\{([\d.]+)\}\{[\d.]+\}\\selectfont\n\\begin\{tabular\}", tex).group(1))
         assert abs(size - 9.0 * 72.27 / 72) < 0.02
-        assert abs(drop - 0.718 * (size - 8.03)) < 0.05
+        assert not re.search(r"\\raisebox\{-[\d.]+pt\}\[\\height\]\[\\depth\]", tex)
 
 
 class TestInkWords:
@@ -2272,12 +2274,12 @@ class TestOutlineAccounted:
                 c.border_left = c.border_right = True
         table.metadata = {"column_rule_x": [0.175, 0.275], "typeface": "sans", "stroke_pt": 1.3, "ink_size_pt": 9.0}
         tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
-        ink, median = 9.0 * 72.27 / 72, 8.03
+        # the table at its ink's size; the emboldened lines that much
+        # smaller by their outline, so their capitals stand as tall
+        ink = 9.0 * 72.27 / 72
         fb = (1.3 - 0.10 * ink) / (0.0083 * ink)
         outline = fb * 0.0083 * ink / 2
         size = ink - 2 * outline / 0.718
         got_fb = float(re.search(r"FakeBold=([\d.]+)", tex).group(1))
         got_size = float(re.search(r"FakeBold=[\d.]+\}\\fontsize\{([\d.]+)\}", tex).group(1))
-        got_drop = float(re.search(r"\\raisebox\{-([\d.]+)pt\}\[\\height\]\[\\depth\]", tex).group(1))
         assert abs(got_fb - fb) < 0.06 and abs(got_size - size) < 0.02
-        assert abs(got_drop - (0.718 * (size - median) + outline)) < 0.03
