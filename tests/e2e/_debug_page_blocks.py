@@ -45,6 +45,8 @@ def walk(node, depth=0):
             if "words" in sys.argv[3:]:
                 print("  " * depth + "      " + " ".join(
                     f"{w[2]}[{w[0] * 595:.1f}-{w[1] * 595:.1f}]" + ("".join(k[0].upper() for k in ("bold", "italic") if len(w) > 4 and w[4].get(k)))
+                    + (f"~{w[4]['miss']:.2f}" if len(w) > 4 and "miss" in w[4] else "")
+                    + ("#INK" if len(w) > 4 and w[4].get("ink") else "")
                     for w in pl["words"]))
 
 

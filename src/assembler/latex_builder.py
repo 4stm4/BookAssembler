@@ -544,15 +544,18 @@ def _printed_nodes(block: Any, target_lang: str, page_w: float, page_h: float,
         font = _FACE_CMD.get(line["face"], "") if _is_latin_only(text) else ""
         # each word in its own weight and slant where they were read (a
         # bold or italic word in a regular line), else in its line's
+        # - and a word its text does not draw (OCR read a subscript as
+        # letters of the line) from its print's own ink
         pieces = (
             [(w[0] * page_w, (w[1] - w[0]) * page_w, w[2], w[3] if len(w) > 3 else None,
               (w[4] if len(w) > 4 else {}).get("bold", line["bold"]),
-              (w[4] if len(w) > 4 else {}).get("italic", line["italic"])) for w in line["words"]]
+              (w[4] if len(w) > 4 else {}).get("italic", line["italic"]),
+              (w[4] if len(w) > 4 else {}).get("ink")) for w in line["words"]]
             if fit and line.get("words")
-            else [(x_mm, w_mm if fit else None, text, line.get("area"), line["bold"], line["italic"])]
+            else [(x_mm, w_mm if fit else None, text, line.get("area"), line["bold"], line["italic"], None)]
         )
-        inks = [_ink_in_face(line["face"], bold, italic, t) if pw and font else None
-                for _, pw, t, _, bold, italic in pieces]
+        inks = [_ink_in_face(line["face"], bold, italic, t) if pw and font and not scan else None
+                for _, pw, t, _, bold, italic, scan in pieces]
         size_bp, outline_bp = _weighed(line, pieces, inks)
         size = size_bp * 72.27 / 72.0
         spread = ""
@@ -567,10 +570,20 @@ def _printed_nodes(block: Any, target_lang: str, page_w: float, page_h: float,
         # Word by word where the print's words were placed (their own
         # widths and spaces are the print's, not the face's), else the
         # line boxed to its printed width.
-        for (px, pw, piece, _, bold, italic), ink in zip(pieces, inks):
+        pen = "color={rgb,255:red,%d;green,%d;blue,%d}, " % tuple(line["rgb"]) if line.get("rgb") else ""
+        for (px, pw, piece, _, bold, italic, scan), ink in zip(pieces, inks):
             weight = ("\\bfseries " if bold else "") + ("\\itshape " if italic else "")
             style = f"{colour}{font}\\fontsize{{{size:.2f}}}{{{size * 1.2:.2f}}}\\selectfont {weight}{spread}"
             py = y_mm + skew * (px - x_mm)
+            if scan:
+                # its print's ink, its text over it unseen - for what reads it
+                out.append(_scan_ink(scan, page_w, page_h, origin, pen))
+                out.append(
+                    f"  \\node[anchor=base west, inner sep=0pt, text opacity=0] "
+                    f"at ({px - origin[0]:.2f}mm, {origin[1] - py:.2f}mm) "
+                    f"{{{style}\\resizebox{{{pw:.2f}mm}}{{\\height}}{{{_esc(piece)}}}}};\n"
+                )
+                continue
             if ink is not None and pw > 2 * outline_mm:
                 # the box widened so that its ink, not its advance, spans
                 # the print's, and set off by its first glyph's bearing
@@ -582,7 +595,6 @@ def _printed_nodes(block: Any, target_lang: str, page_w: float, page_h: float,
                 f"  \\node[anchor=base west, inner sep=0pt, rotate={turn:.3f}] "
                 f"at ({px - origin[0]:.2f}mm, {origin[1] - py:.2f}mm) {{{style}{body}}};\n"
             )
-        pen = "color={rgb,255:red,%d;green,%d;blue,%d}, " % tuple(line["rgb"]) if line.get("rgb") else ""
         if line.get("underline"):
             uy, thick = line["underline"]
             fall = skew * w_mm
@@ -598,6 +610,31 @@ def _printed_nodes(block: Any, target_lang: str, page_w: float, page_h: float,
                 f"({bx1 * page_w - origin[0]:.2f}mm, {origin[1] - by * page_h - fall:.2f}mm);\n"
             )
     return out
+
+
+def _scan_ink(scan: Dict[str, Any], page_w: float, page_h: float, origin: Tuple[float, float], pen: str) -> str:
+    """A word's print drawn from its own ink (printed._mark_misread): its
+    runs of pixels as rectangles, a run under the same run of the row above
+    joined to it."""
+    x0, y0, x1, y1 = scan["box"]
+    rows, cols = scan["shape"]
+    pw, ph = (x1 - x0) * page_w / cols, (y1 - y0) * page_h / rows
+    spans: Dict[Tuple[int, int], List[int]] = {}
+    rects: List[List[int]] = []
+    for r, a, b in scan["runs"]:
+        held = spans.get((a, b))
+        if held is not None and held[1] == r:
+            held[1] = r + 1
+        else:
+            held = [r, r + 1, a, b]
+            rects.append(held)
+            spans[(a, b)] = held
+    path = " ".join(
+        f"({x0 * page_w + a * pw - origin[0]:.3f}mm, {origin[1] - y0 * page_h - top * ph:.3f}mm) rectangle "
+        f"({x0 * page_w + b * pw - origin[0]:.3f}mm, {origin[1] - y0 * page_h - end * ph:.3f}mm)"
+        for top, end, a, b in rects
+    )
+    return f"  \\fill[{pen.rstrip(', ')}] {path};\n" if path else ""
 
 
 def _weighed(line: Dict[str, Any], pieces: List[Any], inks: List[Any]) -> Tuple[float, float]:
