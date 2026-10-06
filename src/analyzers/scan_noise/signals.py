@@ -49,3 +49,11 @@ _BREAK = r"[^\w\s\-/]"
 _BROKEN_TOKEN_RE = re.compile(
     rf"[^\W\d_]{_BREAK}*\d{_BREAK}*[^\W\d_]|[^\W\d_]{_BREAK}+\d|\d{_BREAK}+[^\W\d_]"
 )
+
+# A character prints no narrower than this share of its line's height ("i",
+# "l" take a quarter of it). OCR of glyphs cut off by the page's edge boxes
+# its guesses far narrower: the paragraph fixture E's last line, half under
+# the scan's border, came through as "ely" in 1pt, "to" in 1pt, "ai" in 2pt
+# at 7pt type. A block most of whose lines of two characters or more are
+# boxed narrower than this is debris, whatever its letters spell.
+MIN_ADVANCE_EM = 0.2

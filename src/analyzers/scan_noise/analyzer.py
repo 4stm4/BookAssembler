@@ -1,6 +1,6 @@
 """scan_noise: The analyzer itself: orchestration and KRM writes."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.analyzers.access import block_text
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
@@ -8,7 +8,7 @@ from src.graph.knowledge_graph import KnowledgeGraph
 from src.graph.reading_graph import ReadingGraph
 from src.krm.models import ContainerUnit, KnowledgeDocument, ParagraphBlock, UnknownBlock
 
-from src.analyzers.scan_noise.rules import is_scan_noise
+from src.analyzers.scan_noise.rules import is_scan_noise, is_squeezed
 
 
 class ScanNoiseAnalyzer(BaseAnalyzer):
@@ -42,19 +42,37 @@ class ScanNoiseAnalyzer(BaseAnalyzer):
         kg: KnowledgeGraph,
         context: Optional[Dict[str, Any]] = None,
     ) -> None:
+        sizes = (doc.metadata or {}).get("page_sizes_pt") or []
         for container in doc.root_containers:
-            self._process(container)
+            self._process(container, sizes)
 
-    def _process(self, container: ContainerUnit) -> None:
+    def _process(self, container: ContainerUnit, sizes: List[Any]) -> None:
         for child in container.children:
             if isinstance(child, ContainerUnit):
-                self._process(child)
+                self._process(child, sizes)
             elif (
                 type(child) in (ParagraphBlock, UnknownBlock)
                 and not child.is_tombstoned
-                and is_scan_noise(block_text(child))
+                and (is_scan_noise(block_text(child)) or is_squeezed(_lines_pt(child, sizes)))
             ):
                 child.is_tombstoned = True
                 if not child.metadata:
                     child.metadata = {}
                 child.metadata["tombstone_reason"] = "scan_noise"
+
+
+def _lines_pt(block: Any, sizes: List[Any]) -> List[Tuple[str, float, float]]:
+    """A block's lines as (text, width, height) in points, where its page's
+    size is known."""
+    out: List[Tuple[str, float, float]] = []
+    for il in block.inlines or []:
+        vl = getattr(il, "visual_layout", None)
+        if vl is None or vl.bounding_box is None or vl.page_or_screen_index is None:
+            continue
+        if vl.page_or_screen_index >= len(sizes) or not sizes[vl.page_or_screen_index]:
+            continue
+        pw, ph = sizes[vl.page_or_screen_index][:2]
+        b = vl.bounding_box
+        text = "".join(getattr(s, "text", "") for s in il.spans)
+        out.append((text, (b.x1 - b.x0) * pw, (b.y1 - b.y0) * ph))
+    return out

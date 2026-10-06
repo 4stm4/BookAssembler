@@ -1,9 +1,11 @@
 """scan_noise: Pure decision logic — no KRM writes, no I/O."""
 
 from collections import Counter
+from typing import List, Tuple
 
 from src.analyzers.scan_noise.signals import (
     MAX_DOMINANT_LETTER_SHARE,
+    MIN_ADVANCE_EM,
     MIN_LETTERS,
     _BROKEN_TOKEN_RE,
     _CYRILLIC_VOWELS,
@@ -47,3 +49,12 @@ def is_scan_noise(text: str) -> bool:
     if any(is_real_word(w) for w in _WORD_RE.findall(core)):
         return False
     return any(_REPEAT_RE.search(t) or _BROKEN_TOKEN_RE.search(t) for t in core.split())
+
+
+def is_squeezed(lines: List[Tuple[str, float, float]]) -> bool:
+    """Debris by its boxes: lines - (text, width, height), in points -
+    most of which are boxed narrower than their characters could print
+    (MIN_ADVANCE_EM)."""
+    judged = [(len(t.strip()), w, h) for t, w, h in lines if len(t.strip()) >= 2 and h > 0]
+    squeezed = sum(1 for n, w, h in judged if w < MIN_ADVANCE_EM * h * n)
+    return bool(judged) and 2 * squeezed > len(judged)
