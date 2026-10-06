@@ -78,6 +78,11 @@ _LETTER_GAP = 0.15
 _HEAD_DENSITY = 0.08      # a row this dense against the line's densest is its capitals', not a stray descender
 _COLOUR_SPREAD = 80       # channels this far apart: printed in a colour, not black
 _MISREAD = 0.5            # of a word's and its set text's ink, the most one misses of the other
+# - and of a word of signs alone, no letter or figure in it: OCR takes one
+# sign for another most of all, an arrow for a dash ("(SP-2) <- IXL" read
+# "(SP—2) — IXz", the dash missing 0.46 of the arrow), and no reader reads
+# a sign for its text
+_MISREAD_SIGN = 0.3
 _OVERLINE_REACH = 0.35    # of a line's ink height: how far over its top an overline stands
 _OVERLINE_DIP = 0.1       # of it: how far under its top - an overline is its topmost ink, a hyphen is not
 _OVERLINE_MIN = 0.4       # of a line's ink height: the shortest overline, over one capital
@@ -692,6 +697,7 @@ def _mark_misread(np, pymupdf, lines: List[Dict[str, Any]]) -> None:
     print - its ink as runs of pixels ("ink": "box" page-normalised,
     "shape", "runs") - its text kept for what reads it."""
     for line in lines:
+        judged = []
         for word, (mask, x0, y0) in zip(line["words"], line.get("marks") or []):
             if len(word) < 5 or not word[2].strip() or not mask.any():
                 continue
@@ -699,7 +705,13 @@ def _mark_misread(np, pymupdf, lines: List[Dict[str, Any]]) -> None:
             if miss is None:
                 continue
             word[4]["miss"] = miss
-            if miss > _MISREAD:
+            sign = not any(ch.isalnum() for ch in word[2])
+            judged.append((word, mask, x0, y0, miss > (_MISREAD_SIGN if sign else _MISREAD)))
+        # a line OCR misread half of is misread whole: a formula's line,
+        # its arrows read as dashes, its subscripts as letters
+        whole = len(judged) >= 2 and 2 * sum(m for *_, m in judged) >= len(judged)
+        for word, mask, x0, y0, misread in judged:
+            if misread or whole:
                 rows, cols = np.flatnonzero(mask.any(axis=1)), np.flatnonzero(mask.any(axis=0))
                 ink = mask[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
                 pw, ph = line["pw"], line["ph"]
