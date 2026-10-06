@@ -10,6 +10,7 @@
 - `tests/e2e/test_krm_roundtrip.py`
 - `tests/e2e/test_assembled_table_pdf.py`
 - `tests/e2e/test_visual_overlay.py`
+- `tests/e2e/test_toc_overlay.py` (и его фикстуры `tests/fixtures/toc/`)
 
 ## Что именно запрещено
 
@@ -112,6 +113,11 @@ HEWLETT-PACKARD, HOLLAND ELECTRONICS, WRIGHT LINE INC, TRI-DATA CORP. и
 менялись. Состояние после пересборки: D — 62.8%, **красная** (геометрия
 рамок psm 11 иная, раскладка строк разъехалась) — спецификация дальнейшей
 работы.
+
+2026-10-06, по явному решению пользователя («зафиксируй тесты оглавления и
+больше не трогай»), в стоп-лист внесён `tests/e2e/test_toc_overlay.py`.
+Состояние на момент внесения: A — 0.7%, B — 6.1%, C — 1.2% / 3.8% / 5.7%,
+все **проходят** (лимит 7%).
 
 ## Исключение
 
