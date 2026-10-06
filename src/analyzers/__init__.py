@@ -40,6 +40,7 @@ from src.analyzers.printed_lines import PrintedLinesAnalyzer
 from src.analyzers.pipeline import PipelineRunner
 from src.analyzers.proper_noun import ProperNounExtractorAnalyzer
 from src.analyzers.reading_order import ReadingOrderAnalyzer
+from src.analyzers.register import RegisterAnalyzer
 from src.analyzers.scan_noise import ScanNoiseAnalyzer
 from src.analyzers.table import TableDetectorAnalyzer
 from src.analyzers.theorem import TheoremDetectorAnalyzer
@@ -59,6 +60,9 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         OCRAnalyzer(),
         # No-op unless the document came from a notebook (RFC 0008 §3.4).
         NotebookOutputAnalyzer(),
+        # A register drawn as a framed row of bits, a table of them -
+        # before its ticks, read as stray letters, are measured as text.
+        RegisterAnalyzer(),
         # How each line of a scanned page was printed - its weight, size,
         # face - read once, before anything judges by it (a heading's
         # weight), for the builder to set the page by.
@@ -142,6 +146,7 @@ __all__ = [
     "ProperNounExtractorAnalyzer",
     "RGPermission",
     "ReadingOrderAnalyzer",
+    "RegisterAnalyzer",
     "ScanNoiseAnalyzer",
     "SecurityViolationError",
     "TableDetectorAnalyzer",
