@@ -8,6 +8,7 @@ via fontspec + polyglossia). Tombstoned nodes are skipped (RFC 0001 §2.4).
 """
 
 import bisect
+import functools
 import logging
 import os
 import re
@@ -537,7 +538,29 @@ def _styled_cell_text(
     box = getattr(vl, "bounding_box", None) if vl else None
     one_line = box is not None and "\n" not in (raw or text) and "\\newline" not in text and "\\makebox" not in text
     if median_pt > 0 and size_pt > _DISPLAY_SHARE * median_pt and one_line:
-        body = f"\\resizebox{{{(box.x1 - box.x0) * _A4_WIDTH_PT:.2f}pt}}{{\\height}}{{{body}}}"
+        spans = (getattr(cell, "metadata", None) or {}).get("printed_words")
+        tokens = (raw or text).split()
+        if spans and len(spans) == len(tokens) > 1:
+            # word by word where each was printed: a heading's face is not
+            # ours, and fitted whole the index fixture's condensed "index"
+            # came out 1.5pt narrow, its "to" 2pt off
+            # each boxed so its ink, not its advance, spans the print's
+            face = "sans" if latin_font == "\\latinsans" else "serif"
+            bold, italic = bool(getattr(style, "is_bold", False)), bool(getattr(style, "is_italic", False))
+            fitted, pen = "", 0.0
+            for token, (a, b) in zip(tokens, spans):
+                start, width = a * _A4_WIDTH_PT, max(0.1, (b - a) * _A4_WIDTH_PT)
+                box, shift = width, 0.0
+                ink = _ink_in_face(face, bold, italic, token) if font_prefix else None
+                if ink is not None and ink[1] > 0:
+                    scale = width / (ink[1] * size_pt)
+                    box, shift = ink[2] * size_pt * scale, -ink[0] * size_pt * scale
+                fitted += f"\\hspace{{{start + shift - pen:.2f}pt}}"
+                fitted += f"\\resizebox{{{box:.2f}pt}}{{\\height}}{{{prefix}{_esc(token)}}}"
+                pen = start + shift + box
+            body = "\\leavevmode" + fitted
+        else:
+            body = f"\\resizebox{{{(box.x1 - box.x0) * _A4_WIDTH_PT:.2f}pt}}{{\\height}}{{{body}}}"
     lead, words = False, text
     if one_line and fit_width and sum(ch.isalpha() for ch in (raw or text)) >= _FIT_MIN_LETTERS:
         # A line of words at its printed width too, its leader left to run
@@ -805,6 +828,53 @@ _PT_PER_CM = 72.27 / 2.54
 _A4_HEIGHT_PT = 29.7 * _PT_PER_CM
 # A source's type sizes are PDF points (bp) and go out as TeX points too.
 _TEX_PT_PER_BP = 72.27 / 72.0
+_FACE_INK_LEVEL = 160  # 0-255 grey below which a pixel is ink, as the analyzer reads a print
+# The TeX Gyre files those families are set from.
+_FACE_FILE = {"serif": "texgyretermes", "sans": "texgyreheros", "mono": "texgyrecursor"}
+
+
+@functools.lru_cache(maxsize=None)
+def _font_file(name: str) -> Optional[str]:
+    try:
+        path = subprocess.run(["kpsewhich", name], capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return path or None
+
+
+@functools.lru_cache(maxsize=4096)
+def _ink_in_face(face: str, bold: bool, italic: bool, text: str) -> Optional[Tuple[float, float, float, float, float]]:
+    """Where text set in a face inks, per point of its size: from its
+    origin to its first ink, its ink's width, its advance, its ink's area
+    (per point squared) and its ink's outline. A box is as wide as its
+    advance; its ink sits inside it by its first and last glyphs' side
+    bearings - a typewriter face's are wide. None where the face's file
+    cannot be found."""
+    variant = ("bold" if bold else "") + ("italic" if italic else "") or "regular"
+    path = _font_file(f"{_FACE_FILE.get(face, 'texgyretermes')}-{variant}.otf")
+    if not path or not text.strip():
+        return None
+    import numpy as np
+    import pymupdf
+    size, x0, zoom = 100.0, 20.0, 2.0
+    doc = pymupdf.open()
+    page = doc.new_page(width=x0 * 2 + size * len(text), height=size * 2)
+    page.insert_font(fontname="F", fontfile=path)
+    page.insert_text((x0, size * 1.4), text, fontsize=size, fontname="F")
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
+    grey = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].mean(axis=2)
+    ink = grey < _FACE_INK_LEVEL
+    cols = np.flatnonzero(ink.any(axis=0))
+    advance = pymupdf.Font(fontfile=path).text_length(text, fontsize=size)
+    doc.close()
+    if not len(cols):
+        return None
+    padded = np.pad(ink, 1)
+    edges = int((padded[1:, :] != padded[:-1, :]).sum() + (padded[:, 1:] != padded[:, :-1]).sum())
+    unit = zoom * size
+    return ((cols[0] / zoom - x0) / size, (cols[-1] + 1 - cols[0]) / unit, advance / size,
+            float(ink.sum()) / unit ** 2, edges / unit)
+
 # How tall a line of type stands, capitals to descenders, over its size.
 _TYPE_HEIGHT_EM = 0.9
 
@@ -1390,7 +1460,14 @@ def _render_table(table: TableBlock) -> str:
                 elif raw.strip() in _PLACEHOLDER_MARKS and x0 is not None and x1 is not None:
                     printed_x[(row_idx, col)] = (x0, x1, _PLACE_EXPLICIT_PT)
                 elif x0 is not None and x1 is not None and not (cell.metadata or {}).get("x_estimated"):
-                    printed_x[(row_idx, col)] = (x0, x1, _PLACE_INDENT_PT)
+                    # Display type is set where it was printed to the point:
+                    # the indent threshold that keeps ordinary values on
+                    # their column's edge left the index fixture's "index
+                    # to" 2.7pt off its print beside a placed "advertisers".
+                    _style = cell.visual_layout.style if cell.visual_layout else None
+                    _display = (_style is not None and median_pt > 0
+                                and _size_of(_style) > _DISPLAY_SHARE * median_pt)
+                    printed_x[(row_idx, col)] = (x0, x1, _PLACE_EXPLICIT_PT if _display else _PLACE_INDENT_PT)
                 row_span = getattr(cell, "row_span", 1) or 1
                 col_span = getattr(cell, "col_span", 1) or 1
 

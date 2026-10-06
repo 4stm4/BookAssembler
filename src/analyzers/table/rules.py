@@ -2234,7 +2234,8 @@ def _mark_printed_width(page, table) -> int:
     """Record how wide each one-line cell's words were printed
     (metadata["printed_width"], a page fraction): from its first word's
     left edge to its last's right, its words found by their text
-    (_row_words) and measured by their ink. A cell's box is no measure of that - the decimal/binary
+    (_row_words) and measured by their ink - and each word's span from the
+    first's start (metadata["printed_words"]). A cell's box is no measure of that - the decimal/binary
     fixture boxes its headings wider than their words - and the builder
     sets a line at this width. Returns how many cells were measured."""
     pw, ph = page.rect.width, page.rect.height
@@ -2249,7 +2250,10 @@ def _mark_printed_width(page, table) -> int:
             # by the words' ink (_ink_words), not their boxes: OCR boxed the
             # index fixture's names a letter short of their print
             inks = _ink_words(page, found)
-            cell.metadata["printed_width"] = (max(b for _, b in inks) - min(a for a, _ in inks)) / pw
+            start = min(a for a, _ in inks)
+            cell.metadata["printed_width"] = (max(b for _, b in inks) - start) / pw
+            # and each word's span from the first's start (page fractions)
+            cell.metadata["printed_words"] = [[(a - start) / pw, (b - start) / pw] for a, b in inks]
             measured += 1
     return measured
 

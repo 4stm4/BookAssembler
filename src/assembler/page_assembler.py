@@ -14,15 +14,14 @@ Does NOT mutate KRM (RFC 0001 §2, RFC 0021 §5.1). Reads visual_layout, bbox,
 and StyleDescriptor to reconstruct layout.
 """
 
-import functools
 import logging
 import math
-import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.assembler.latex_builder import (
     _esc,
+    _ink_in_face,
     _is_latin_only,
     _para_text,
     _translated,
@@ -61,7 +60,6 @@ _BP_PER_MM = 72.0 / 25.4
 _FAKEBOLD_EDGE_EM = 0.005
 _FAKEBOLD_MAX = 12.0
 _FAKEBOLD_MIN = 0.5
-_INK_LEVEL = 160      # 0-255 grey below which a pixel is ink, as the analyzer reads a print
 
 POSITIONAL_ROLES = {"title", "cover", "half_title", "series", "copyright", "toc", "diagram"}
 @dataclass
@@ -343,54 +341,6 @@ def _render_positional(slot: PageSlot, target_lang: str) -> str:
 
 
 _FACE_CMD = {"serif": "\\latinfont ", "sans": "\\latinsans ", "mono": "\\latinmono "}
-# The TeX Gyre files those families are set from.
-_FACE_FILE = {"serif": "texgyretermes", "sans": "texgyreheros", "mono": "texgyrecursor"}
-
-
-@functools.lru_cache(maxsize=None)
-def _font_file(name: str) -> Optional[str]:
-    try:
-        path = subprocess.run(["kpsewhich", name], capture_output=True, text=True, timeout=10).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return path or None
-
-
-@functools.lru_cache(maxsize=4096)
-def _ink_in_face(face: str, bold: bool, italic: bool, text: str) -> Optional[Tuple[float, float, float, float, float]]:
-    """Where text set in a face inks, per point of its size: from its
-    origin to its first ink, its ink's width, its advance, its ink's area
-    (per point squared) and its ink's outline. A box is as wide as its
-    advance; its ink sits inside it by its first and last glyphs' side
-    bearings - a typewriter face's are wide. None where the face's file
-    cannot be found."""
-    variant = ("bold" if bold else "") + ("italic" if italic else "") or "regular"
-    path = _font_file(f"{_FACE_FILE.get(face, 'texgyretermes')}-{variant}.otf")
-    if not path or not text.strip():
-        return None
-    import numpy as np
-    import pymupdf
-    size, x0, zoom = 100.0, 20.0, 2.0
-    doc = pymupdf.open()
-    page = doc.new_page(width=x0 * 2 + size * len(text), height=size * 2)
-    page.insert_font(fontname="F", fontfile=path)
-    page.insert_text((x0, size * 1.4), text, fontsize=size, fontname="F")
-    pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
-    grey = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].mean(axis=2)
-    ink = grey < _INK_LEVEL
-    cols = np.flatnonzero(ink.any(axis=0))
-    advance = pymupdf.Font(fontfile=path).text_length(text, fontsize=size)
-    doc.close()
-    if not len(cols):
-        return None
-    padded = np.pad(ink, 1)
-    edges = int((padded[1:, :] != padded[:-1, :]).sum() + (padded[:, 1:] != padded[:, :-1]).sum())
-    unit = zoom * size
-    return ((cols[0] / zoom - x0) / size, (cols[-1] + 1 - cols[0]) / unit, advance / size,
-            float(ink.sum()) / unit ** 2, edges / unit)
-
-
-
 def _printed_lines(block: Any) -> List[Dict[str, Any]]:
     """The lines of a block as its print was read (TocAnalyzer): an
     entry's metadata["printed_lines"], a contents heading's
