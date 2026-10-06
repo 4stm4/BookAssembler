@@ -92,6 +92,27 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 \newfontfamily\latinsans{TeX Gyre Heros}
 % And its typewriter one, for a page printed on a typewriter.
 \newfontfamily\latinmono{TeX Gyre Cursor}
+% A line of words each where it was printed, its text kept whole:
+% \printedwords{words}{gap/width,gap/width,...} (pt, one pair per word).
+\ExplSyntaxOn
+\seq_new:N \l__pw_words_seq
+\seq_new:N \l__pw_dims_seq
+\int_new:N \l__pw_k_int
+\cs_new_protected:Npn \__pw_word:nn #1#2 { \__pw_place:w #1 \q_stop {#2} }
+\cs_new_protected:Npn \__pw_place:w #1 / #2 \q_stop #3 { \hspace{#1pt}\resizebox{#2pt}{\height}{#3} }
+\NewDocumentCommand \printedwords { m m }
+  {
+    \seq_set_split:Nnn \l__pw_words_seq { ~ } {#1}
+    \seq_set_split:Nnn \l__pw_dims_seq { , } {#2}
+    \leavevmode
+    \int_zero:N \l__pw_k_int
+    \seq_map_inline:Nn \l__pw_words_seq
+      {
+        \int_incr:N \l__pw_k_int
+        \exp_args:Nf \__pw_word:nn { \seq_item:Nn \l__pw_dims_seq { \l__pw_k_int } } {##1}
+      }
+  }
+\ExplSyntaxOff
 \sloppy
 \begin{document}
 """
@@ -574,8 +595,19 @@ def _styled_cell_text(
             and ".." not in (raw or text)):
         # (not where OCR's leftover dots are among its words: their width
         # is a leader's, and a name fitted to it ran out of its column)
-        body = prefix + f"\\leavevmode\\resizebox{{{printed * _A4_WIDTH_PT:.2f}pt}}{{\\height}}{{{words}}}" + (
-            "\\dotfill" if lead else "")
+        spans = (getattr(cell, "metadata", None) or {}).get("printed_words")
+        tokens = words.split(" ")
+        if spans and len(spans) == len(tokens) > 1 and all(tokens):
+            # word by word where each was printed - our face's widths and
+            # spaces drifted the index fixture's names 2-4pt off their
+            # print - its text kept whole (\printedwords)
+            dims = ",".join(
+                f"{(a - (spans[k - 1][1] if k else 0.0)) * _A4_WIDTH_PT:.2f}/{max(0.1, (b - a) * _A4_WIDTH_PT):.2f}"
+                for k, (a, b) in enumerate(spans))
+            body = prefix + f"\\printedwords{{{words}}}{{{dims}}}" + ("\\dotfill" if lead else "")
+        else:
+            body = prefix + f"\\leavevmode\\resizebox{{{printed * _A4_WIDTH_PT:.2f}pt}}{{\\height}}{{{words}}}" + (
+                "\\dotfill" if lead else "")
 
     colour = getattr(style, "text_color_rgb", None)
     if colour and tuple(colour) != (0, 0, 0):

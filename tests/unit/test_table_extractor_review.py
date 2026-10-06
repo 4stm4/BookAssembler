@@ -2068,8 +2068,14 @@ class TestPrintedWidth:
         inks = _ink_words(page, words)
         assert abs(width - (inks[-1][1] - inks[0][0])) < 0.01 and width < words[-1][2] - words[0][0]
         tex = build_latex(KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])]))
-        m = re.search(r"\\resizebox\{([\d.]+)pt\}\{\\height\}\{NAME NUMBER 3\}\\dotfill", tex)
-        assert m and abs(float(m.group(1)) - grid[3][0].metadata["printed_width"] * 21 * 72.27 / 2.54) < 0.05
+        # word by word where each was printed, the text kept whole, the
+        # words and gaps spanning the printed width
+        m = re.search(r"\\printedwords\{NAME NUMBER 3\}\{([\d.,/-]+)\}\\dotfill", tex)
+        assert m
+        dims = [tuple(float(v) for v in d.split("/")) for d in m.group(1).split(",")]
+        assert len(dims) == 3
+        span = sum(g + w for g, w in dims) - dims[0][0]
+        assert abs(span - grid[3][0].metadata["printed_width"] * 21 * 72.27 / 2.54) < 0.05
 
 
 class TestInkBodySize:
