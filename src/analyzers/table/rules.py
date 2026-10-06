@@ -1996,6 +1996,9 @@ _CAP_SHARE = 0.72           # capitals and ascenders over the type size
 _DESCENT_SHARE = 0.21       # descenders under the baseline over the type size
 
 
+_DISPLAY_REACH = 0.3         # of a display cell's box height: how far its ink is looked for past its box
+
+
 def _size_display_type(np, pymupdf, page, table) -> int:
     """Size each cell of display type by its ink, not its box.
 
@@ -2027,12 +2030,15 @@ def _size_display_type(np, pymupdf, page, table) -> int:
             if vl.style.font_size_pt < _DISPLAY_SHARE * usual or not any(ch.isupper() or ch in "bdfhklt" for ch in text):
                 continue
             b = vl.bounding_box
-            clip = pymupdf.Rect(b.x0 * pw, b.y0 * ph, b.x1 * pw, b.y1 * ph) & page.rect
+            # a little wider than the box: OCR boxes display type short too
+            reach = _DISPLAY_REACH * (b.y1 - b.y0) * ph
+            clip = pymupdf.Rect(b.x0 * pw - reach, b.y0 * ph, b.x1 * pw + reach, b.y1 * ph) & page.rect
             if clip.is_empty:
                 continue
             pix = page.get_pixmap(matrix=pymupdf.Matrix(_RULE_ZOOM, _RULE_ZOOM), clip=clip)
             grey = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].mean(axis=2)
             rows = np.flatnonzero((grey < _RULE_INK_LEVEL).any(axis=1))
+            cols = np.flatnonzero((grey < _RULE_INK_LEVEL).any(axis=0))
             if not len(rows):
                 continue
             share = _CAP_SHARE + (_DESCENT_SHARE if any(ch in "gjpqy" for ch in text) else 0.0)
@@ -2040,7 +2046,12 @@ def _size_display_type(np, pymupdf, page, table) -> int:
             # Its box from its ink's top, too: the type's top is where its
             # rows step from, and OCR boxed the index fixture's two heading
             # lines 2.7 and 1.8pt over their ink - set 2.2pt too far apart.
-            vl.bounding_box = replace(b, y0=(clip.y0 + rows[0] / _RULE_ZOOM) / ph)
+            # And from its ink's left and right: the builder sets it from
+            # its box's left, and OCR boxed the index fixture's "index to"
+            # 1.8pt in from its ink - it came out 4.7pt right of its print.
+            vl.bounding_box = replace(b, y0=(clip.y0 + rows[0] / _RULE_ZOOM) / ph,
+                                      x0=(clip.x0 + cols[0] / _RULE_ZOOM) / pw,
+                                      x1=(clip.x0 + (cols[-1] + 1) / _RULE_ZOOM) / pw)
             resized += 1
     return resized
 
