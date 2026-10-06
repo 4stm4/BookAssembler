@@ -3230,6 +3230,12 @@ def _render_table(table: TableBlock) -> str:
                     c = _fit_to_column(c, col)
                 if isinstance(c, str):
                     _lead = cells[col - 1] if 0 < col <= len(cells) else ""
+                    if not c.strip() and col in _leader_joins and isinstance(_lead, str) and "\\dotfill" in _lead:
+                        # A leader whose page number OCR lost runs on as
+                        # printed, to where the number stands: the index
+                        # fixture's "DATA GENERAL . . . 7" stopped at its
+                        # column's end.
+                        c = "\\leavevmode\\dotfill \\phantom{00}"
                     c = _joined_leaders(c, col, lead_bold=isinstance(_lead, str) and "\\bfseries" in _lead)
                 if isinstance(c, str) and (i, col) in placed_from_ink:
                     c = _from_ink_edge(col, placed_from_ink[(i, col)]) + c
