@@ -42,3 +42,11 @@ _PROSE_MIN_WORDS = 5      # words of two letters or more in a prose line
 _SEPARATOR_RE = re.compile(r"^[\s\-_=|+:·.─━┃│┼┤├┬┴]{3,}$")
 
 _TAB_SPLIT_RE = re.compile(r"\t|  {2,}|(?:\s{2,}\|?\s{2,})")
+
+# A table of labels and their values: "Cycles: 3 / States: 15 / Flags:
+# none" under each instruction of the Z80 manual (the paragraph fixture C),
+# a label ending in a colon, its value apart from it in a column of its
+# own. Its labels stand within _LABEL_ALIGN of one another across, its
+# values too; a value longer than _LABEL_VALUE_LEN is a sentence, no cell.
+_LABEL_ALIGN = 0.01
+_LABEL_VALUE_LEN = 40

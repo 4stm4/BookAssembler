@@ -20,7 +20,7 @@ from src.analyzers.caption.signals import _CAPTION_RE
 from src.analyzers.source_io import resolve_source_path
 from src.analyzers.table.boxes import _box_grid, _table_from_box_grid
 from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
-from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _is_leader_residue, _marks_on_leaders, _reseat_stacked_lines, _build_span_map, _cell_x0, _column_bins, _column_of, _find_placeholder_marks, _frame_rules, _cluster_columns, _count_columns, _drop_leaders, _find_table_runs, _fold_label_rows, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _mark_fill, _mark_printed_width, _measure_leader_grid, _deflate_boxes, _reads_as_prose, _mark_italic, _mark_typeface, _size_display_type, _mark_text_colour, _page_idx, _regrid_ruled_bands, _rows_from_block, _rows_from_group, _snap_row_to_columns, _split_cells_at_rules, _table_from_lines
+from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _is_leader_residue, _marks_on_leaders, _reseat_stacked_lines, _build_span_map, _cell_x0, _column_bins, _column_of, _find_placeholder_marks, _frame_rules, _cluster_columns, _count_columns, _drop_leaders, _find_table_runs, _fold_label_rows, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _mark_fill, _mark_printed_width, _measure_leader_grid, _deflate_boxes, _reads_as_prose, _label_rows, _label_table, _mark_italic, _mark_typeface, _size_display_type, _mark_text_colour, _page_idx, _regrid_ruled_bands, _rows_from_block, _rows_from_group, _snap_row_to_columns, _split_cells_at_rules, _table_from_lines
 
 
 def _cell_y0(cell: "TableCell") -> float:
@@ -355,11 +355,45 @@ class TableDetectorAnalyzer(BaseAnalyzer):
         self._table_count = 0
         self._detect_box_tables(doc)
         for container in doc.root_containers:
+            self._detect_label_tables(container)
+        for container in doc.root_containers:
             self._process_container(container)
         if self._table_count:
             log.info("TableDetectorAnalyzer: %d table(s) detected", self._table_count)
         self._absorb_framed_rows(doc)
         self._mark_borders(doc)
+
+    def _detect_label_tables(self, container: ContainerUnit) -> None:
+        """Tables of labels and values (rules._label_table) over runs of
+        consecutive blocks each of whose lines is a label and its value:
+        the blocks tombstoned into the table (RFC 0001 SS2.4), the table in
+        the first one's place."""
+        for child in container.children:
+            if isinstance(child, ContainerUnit):
+                self._detect_label_tables(child)
+        runs: List[List[int]] = []
+        for idx, child in enumerate(container.children):
+            labelled = (isinstance(child, (ParagraphBlock, UnknownBlock)) and not child.is_tombstoned
+                        and _bbox(child) is not None and _label_rows(child) is not None)
+            if not labelled:
+                if not getattr(child, "is_tombstoned", False):
+                    runs.append([])
+                continue
+            if runs and runs[-1] and _page_idx(container.children[runs[-1][-1]]) == _page_idx(child):
+                runs[-1].append(idx)
+            else:
+                runs.append([idx])
+        for run in reversed([r for r in runs if r]):
+            blocks = [container.children[i] for i in run]
+            table = _label_table(blocks)
+            if table is None:
+                continue
+            table.id = derive_composite_id("table", *[b.id for b in blocks])
+            for b in blocks:
+                b.is_tombstoned = True
+                b.metadata = {**(b.metadata or {}), "tombstone_reason": "merged_into_table"}
+            container.children.insert(run[0], table)
+            self._table_count += 1
 
     def _detect_box_tables(self, doc: KnowledgeDocument) -> None:
         """Find the tables drawn as boxes (boxes._box_grid), before the
@@ -474,10 +508,12 @@ class TableDetectorAnalyzer(BaseAnalyzer):
         if not rules:
             return
         page_index = _page_idx(table)
+        # A table read off its own drawn boxes is no row of another's: its
+        # frame is its own.
         blocks = [
             c for c in container.children
             if isinstance(c, (ParagraphBlock, UnknownBlock, TableBlock)) and not c.is_tombstoned
-            and c is not table and _bbox(c) is not None and _page_idx(c) == page_index
+            and c is not table and not _is_box_table(c) and _bbox(c) is not None and _page_idx(c) == page_index
         ]
         tops = sorted({_cell_y0(cell) for row in table.grid for cell in row if cell.visual_layout})
         steps = sorted(b - a for a, b in zip(tops, tops[1:]) if b - a > 0)

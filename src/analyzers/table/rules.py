@@ -1,6 +1,6 @@
 """table: Pure decision logic — no KRM writes, no I/O."""
 
-from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, X_OVERLAP_THRESHOLD, Y_STEP_TOLERANCE, _PROSE_GAP, _PROSE_MIN_WORDS, _PROSE_SPAN, _SEPARATOR_RE, _SINGLE_COL_PROSE_LEN, _TAB_SPLIT_RE, log
+from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, X_OVERLAP_THRESHOLD, Y_STEP_TOLERANCE, _LABEL_ALIGN, _LABEL_VALUE_LEN, _PROSE_GAP, _PROSE_MIN_WORDS, _PROSE_SPAN, _SEPARATOR_RE, _SINGLE_COL_PROSE_LEN, _TAB_SPLIT_RE, log
 import logging
 import re
 from dataclasses import dataclass
@@ -1267,6 +1267,68 @@ def _reads_as_prose(rows: List[List[Tuple[str, Any]]]) -> bool:
         return sum(1 for w in words if sum(ch.isalpha() for ch in w) >= 2) >= _PROSE_MIN_WORDS
 
     return width > 0 and 2 * sum(prose_line(row) for row in boxed) > len(boxed)
+
+
+def _label_rows(block: Any) -> Optional[List[List[Tuple[str, Any, Any]]]]:
+    """A block's lines as rows of a label and its value - (text, box,
+    style) each - or None where a line is no such row: its first piece a
+    label ending in a colon, the rest, apart from it, a short value."""
+    pieces = [(t, b, st) for t, b, st in _line_rows(block) if b is not None]
+    rows: List[List[Tuple[str, Any, Any]]] = []
+    for piece in sorted(pieces, key=lambda p: (p[1].y0 + p[1].y1) / 2):
+        middle = (piece[1].y0 + piece[1].y1) / 2
+        if rows and abs(middle - (rows[-1][0][1].y0 + rows[-1][0][1].y1) / 2) < (piece[1].y1 - piece[1].y0) / 2:
+            rows[-1].append(piece)
+        else:
+            rows.append([piece])
+    out = []
+    for row in rows:
+        row.sort(key=lambda p: p[1].x0)
+        label, rest = row[0], row[1:]
+        if not rest or not label[0].endswith(":") or not any(ch.isalpha() for ch in label[0]):
+            return None
+        value = " ".join(t for t, _, _ in rest)
+        if len(value) > _LABEL_VALUE_LEN:
+            return None
+        box = NormalizedRect(min(b.x0 for _, b, _ in rest), min(b.y0 for _, b, _ in rest),
+                             max(b.x1 for _, b, _ in rest), max(b.y1 for _, b, _ in rest))
+        out.append([label, (value, box, rest[0][2])])
+    return out or None
+
+
+def _label_table(blocks: List[Any]) -> Optional[TableBlock]:
+    """A table of labels and values from consecutive blocks' rows
+    (_label_rows): at least MIN_TABLE_ROWS of them, labels in one column
+    and values in another (_LABEL_ALIGN)."""
+    rows = [row for b in blocks for row in (_label_rows(b) or [])]
+    if len(rows) < MIN_TABLE_ROWS:
+        return None
+    labels = [r[0][1].x0 for r in rows]
+    values = [r[1][1].x0 for r in rows]
+    if max(labels) - min(labels) > _LABEL_ALIGN or max(values) - min(values) > _LABEL_ALIGN:
+        return None
+    page_idx = _page_idx(blocks[0])
+    grid = [[_make_cell(t, b, st, page_idx, source_block_id=blk.id) for t, b, st in row]
+            for blk in blocks for row in (_label_rows(blk) or [])]
+    boxes = [c.visual_layout.bounding_box for r in grid for c in r if c.visual_layout]
+    first = blocks[0]
+    table = TableBlock(
+        grid=grid,
+        row_count=len(grid),
+        column_count=2,
+        parent_container_id=first.parent_container_id,
+        provenance_info=first.provenance_info,
+        visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(min(b.x0 for b in boxes), min(b.y0 for b in boxes),
+                                        max(b.x1 for b in boxes), max(b.y1 for b in boxes)),
+            page_or_screen_index=page_idx or 0,
+        ),
+        extraction_confidence=min(b.extraction_confidence for b in blocks),
+        classification_confidence=0.7,
+        confidence_score=min(min(b.extraction_confidence for b in blocks), 0.7),
+        span_map=_build_span_map(grid),
+    )
+    return table
 
 
 def _table_from_lines(block: Any) -> Optional[TableBlock]:
