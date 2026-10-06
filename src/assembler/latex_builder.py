@@ -550,12 +550,14 @@ def _printed_nodes(block: Any, target_lang: str, page_w: float, page_h: float,
             [(w[0] * page_w, (w[1] - w[0]) * page_w, w[2], w[3] if len(w) > 3 else None,
               (w[4] if len(w) > 4 else {}).get("bold", line["bold"]),
               (w[4] if len(w) > 4 else {}).get("italic", line["italic"]),
-              (w[4] if len(w) > 4 else {}).get("ink")) for w in line["words"]]
+              (w[4] if len(w) > 4 else {}).get("ink"),
+              [(a * page_w, b * page_w) for a, b in (w[4] if len(w) > 4 else {}).get("glyphs") or []])
+             for w in line["words"]]
             if fit and line.get("words")
-            else [(x_mm, w_mm if fit else None, text, line.get("area"), line["bold"], line["italic"], None)]
+            else [(x_mm, w_mm if fit else None, text, line.get("area"), line["bold"], line["italic"], None, [])]
         )
         inks = [_ink_in_face(line["face"], bold, italic, t) if pw and font and not scan else None
-                for _, pw, t, _, bold, italic, scan in pieces]
+                for _, pw, t, _, bold, italic, scan, _ in pieces]
         size_bp, outline_bp = _weighed(line, pieces, inks)
         size = size_bp * 72.27 / 72.0
         spread = ""
@@ -571,10 +573,20 @@ def _printed_nodes(block: Any, target_lang: str, page_w: float, page_h: float,
         # widths and spaces are the print's, not the face's), else the
         # line boxed to its printed width.
         pen = "color={rgb,255:red,%d;green,%d;blue,%d}, " % tuple(line["rgb"]) if line.get("rgb") else ""
-        for (px, pw, piece, _, bold, italic, scan), ink in zip(pieces, inks):
+        for (px, pw, piece, _, bold, italic, scan, letters), ink in zip(pieces, inks):
             weight = ("\\bfseries " if bold else "") + ("\\itshape " if italic else "")
             style = f"{colour}{font}\\fontsize{{{size:.2f}}}{{{size * 1.2:.2f}}}\\selectfont {weight}{spread}"
             py = y_mm + skew * (px - x_mm)
+            placed = _set_letters(piece, letters, line["face"], bold, italic, size_bp, outline_mm) \
+                if letters and font and not scan else None
+            if placed:
+                # each letter where it printed, as wide as its ink
+                start, body = placed
+                out.append(
+                    f"  \\node[anchor=base west, inner sep=0pt, rotate={turn:.3f}] "
+                    f"at ({start - origin[0]:.2f}mm, {origin[1] - py:.2f}mm) {{{style}{body}}};\n"
+                )
+                continue
             if scan:
                 # its print's ink, its text over it unseen - for what reads it
                 out.append(_scan_ink(scan, page_w, page_h, origin, pen))
@@ -610,6 +622,109 @@ def _printed_nodes(block: Any, target_lang: str, page_w: float, page_h: float,
                 f"({bx1 * page_w - origin[0]:.2f}mm, {origin[1] - by * page_h - fall:.2f}mm);\n"
             )
     return out
+
+
+def _set_letters(text: str, letters: List[Tuple[float, float]], face: str, bold: bool, italic: bool,
+                 size_bp: float, outline_mm: float) -> Optional[Tuple[float, str]]:
+    """A word set letter by letter where its letters printed (letters: the
+    runs its ink falls apart into across, mm - _letter_spans matches its
+    letters to them): each boxed so that its ink, not its advance, spans
+    the print's, set off by its side bearing, the next moved to its own -
+    one run of text still, for what reads it. (left edge, body), or None
+    where a letter's ink in the face is unknown or the runs fit no
+    letters."""
+    chars = [ch for ch in text if not ch.isspace()]
+    inks = [_ink_in_face(face, bold, italic, ch) for ch in chars]
+    if not chars or any(ink is None or ink[1] <= 0 for ink in inks):
+        return None
+    spans = _letter_spans(inks, letters)
+    if spans is None:
+        return None
+    # a letter drawn far wider or narrower than its word's others was
+    # matched to another's ink: the word is set whole
+    size_mm = size_bp / _BP_PER_MM
+    scales = sorted((g1 - g0) / (ink[1] * size_mm) for ink, (g0, g1) in zip(inks, spans))
+    usual = scales[len(scales) // 2]
+    if usual <= 0 or scales[0] < usual / _LETTER_SCALE_SPREAD or scales[-1] > usual * _LETTER_SCALE_SPREAD:
+        return None
+    parts: List[str] = []
+    start = pos = None
+    for ch, ink, (g0, g1) in zip(chars, inks, spans):
+        lead, inked, advance = ink[:3]
+        size_mm = size_bp / _BP_PER_MM
+        scale = max(0.2, (g1 - g0 - 2 * outline_mm) / (inked * size_mm))
+        left, width = g0 + outline_mm - lead * size_mm * scale, max(0.01, advance * size_mm * scale)
+        if start is None:
+            start = pos = left
+        parts.append(f"\\hspace{{{left - pos:.3f}mm}}\\resizebox{{{width:.3f}mm}}{{\\height}}{{{_esc(ch)}}}")
+        pos = left + width
+    return start, "".join(parts)
+
+
+_RUN_LETTERS = 4   # the most letters one run of ink is taken to hold, run together
+_LETTER_SCALE_SPREAD = 1.6   # how much wider or narrower than its word's others a letter may be drawn
+_LETTER_RUNS = 3   # the most runs one letter is taken to fall into ("m" broken, a quote's two marks)
+
+
+def _letter_spans(inks: List[Any], runs: List[Tuple[float, float]]) -> Optional[List[Tuple[float, float]]]:
+    """Each letter's ink [x0, x1] (mm) in a word whose ink falls apart into
+    runs: letters and runs matched in order - one to one, several letters
+    run together into one run, or one letter in several runs - so that each
+    run is as wide as its letters' ink in the face, scaled to the word's;
+    letters run together share their run as the face spaces them. inks:
+    each letter's ink in the face (_ink_in_face). None where nothing fits."""
+    import math
+    n, k = len(inks), len(runs)
+
+    def ink_em(i: int, j: int) -> Tuple[float, List[Tuple[float, float]]]:
+        """Letters i..j-1 set together: their ink's width (em) and each
+        one's ink from the first one's left ink edge."""
+        origin, out = 0.0, []
+        for lead, inked, advance in (ink[:3] for ink in inks[i:j]):
+            out.append((origin + lead, origin + lead + inked))
+            origin += advance
+        first = out[0][0]
+        return out[-1][1] - first, [(a - first, b - first) for a, b in out]
+
+    whole = ink_em(0, n)[0]
+    scale = (runs[-1][1] - runs[0][0]) / whole if whole > 0 else 0.0
+    if scale <= 0:
+        return None
+    inf = float("inf")
+    cost = [[inf] * (k + 1) for _ in range(n + 1)]
+    back: Dict[Tuple[int, int], Tuple[int, int]] = {}
+    cost[0][0] = 0.0
+    for i in range(n + 1):
+        for j in range(k + 1):
+            if cost[i][j] == inf:
+                continue
+            steps = [(m, 1) for m in range(1, _RUN_LETTERS + 1)] + [(1, r) for r in range(2, _LETTER_RUNS + 1)]
+            for m, r in steps:
+                if i + m > n or j + r > k:
+                    continue
+                seen = runs[j + r - 1][1] - runs[j][0]
+                width = ink_em(i, i + m)[0] * scale
+                if seen <= 0 or width <= 0:
+                    continue
+                c = cost[i][j] + abs(math.log(seen / width)) + 0.1 * (m - 1 + r - 1)
+                if c < cost[i + m][j + r]:
+                    cost[i + m][j + r] = c
+                    back[(i + m, j + r)] = (i, j)
+    if cost[n][k] == inf:
+        return None
+    spans: List[Tuple[float, float]] = []
+    i, j = n, k
+    while (i, j) != (0, 0):
+        pi, pj = back[(i, j)]
+        x0, x1 = runs[pj][0], runs[j - 1][1]
+        if i - pi == 1:
+            spans.append((x0, x1))
+        else:
+            width, inside = ink_em(pi, i)
+            fit = (x1 - x0) / width if width > 0 else 0.0
+            spans.extend(reversed([(x0 + a * fit, x0 + b * fit) for a, b in inside]))
+        i, j = pi, pj
+    return list(reversed(spans))
 
 
 def _scan_ink(scan: Dict[str, Any], page_w: float, page_h: float, origin: Tuple[float, float], pen: str) -> str:

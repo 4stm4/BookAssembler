@@ -75,6 +75,7 @@ _BASELINE_FALL = 0.6      # the row under the baseline holds less than this of i
 # of a line's box height: the widest gap between two letters of a word -
 # the paragraph fixture D's "c" and "h" of "each" stand 0.83pt apart at 8pt
 _LETTER_GAP = 0.15
+_BODY_TOP = 0.3           # of its capitals' height under their top, a line's lowercase body starts (x-height ~0.72)
 _HEAD_DENSITY = 0.08      # a row this dense against the line's densest is its capitals', not a stray descender
 _COLOUR_SPREAD = 80       # channels this far apart: printed in a colour, not black
 _MISREAD = 0.5            # of a word's and its set text's ink, the most one misses of the other
@@ -330,15 +331,24 @@ def _weight_of(np, ink) -> float:
     return 2.0 * float(ink.sum()) / outline if outline else 0.0
 
 
+def _glyph_spans(np, ink) -> List[Any]:
+    """A word's ink falling apart across: the runs of columns it inks, a
+    clear column between two."""
+    cols = np.concatenate(([False], ink.any(axis=0), [False])).astype(np.int8)
+    edges = np.flatnonzero(np.diff(cols))
+    return [(int(a), int(b)) for a, b in zip(edges[::2], edges[1::2])]
+
+
 def _word_inks(np, region, body, words, x_of, gap: int) -> List[List[Any]]:
     """Where each word of a line prints: its ink's left and right column in
     region (x_of turns a page point into a region column). OCR boxes a word
     by its own guess - short of a glyph, or over a letter of the next - so
     the words are read off the ink: its lowercase body (body: those rows'
     ink by column, which no "f" hook or "y" tail overhangs a space through)
-    falls into runs of letters, apart where a gap is wider than gap columns,
-    and each run goes to the word whose box holds its middle. A run two
-    boxes hold is cut at its widest gap between them. A word's edges are its
+    falls into runs of letters, apart where a gap is wider than gap columns:
+    as many runs as words, each the next word's; else each run goes to the
+    word whose box holds its middle, and a run two boxes hold is cut at its
+    widest gap between them. A word's edges are its
     runs' ink in all its rows, short of the middle of the space to either
     neighbour; a word no run goes to is left out."""
     inked = region.any(axis=0)
@@ -364,6 +374,12 @@ def _word_inks(np, region, body, words, x_of, gap: int) -> List[List[Any]]:
         return near
 
     owned: Dict[int, List[int]] = {}
+    if len(runs) == len(boxes):
+        # as many runs as words: each the next one's, whatever OCR's boxes
+        # (the paragraph fixture D's "system" boxed over the next word's "f")
+        for k, (lo, hi) in enumerate(runs):
+            owned[k] = [lo, hi]
+        runs = []
     for lo, hi in runs:
         held = sorted({k for k, (a, b, _) in enumerate(boxes) if a < hi and lo < b and (a + b) / 2 >= lo - gap and (a + b) / 2 < hi + gap})
         if len(held) > 1:
@@ -372,8 +388,19 @@ def _word_inks(np, region, body, words, x_of, gap: int) -> List[List[Any]]:
             for k0, k1 in zip(held, held[1:]):
                 seam = (boxes[k0][1] + boxes[k1][0]) // 2
                 lo_s, hi_s = max(lo + 1, seam - 2 * gap), min(hi - 1, seam + 2 * gap)
-                empty = [c for c in range(lo_s, hi_s) if not body[c]]
-                cuts.append(min(empty, key=lambda c: abs(c - seam)) if empty else seam)
+                # the widest gap there - a word space, if narrow - at its middle
+                gaps, start = [], None
+                for c in range(lo_s, hi_s + 1):
+                    if c < hi_s and not body[c]:
+                        start = c if start is None else start
+                    elif start is not None:
+                        gaps.append((start, c))
+                        start = None
+                if gaps:
+                    a, b = max(gaps, key=lambda g: (g[1] - g[0], -abs((g[0] + g[1]) / 2 - seam)))
+                    cuts.append((a + b) // 2)
+                else:
+                    cuts.append(seam)
             edges = [lo] + cuts + [hi]
             for k, a, b in zip(held, edges, edges[1:]):
                 owned.setdefault(k, []).extend([a, b])
@@ -495,14 +522,22 @@ def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] 
         # Each word's own weight and lean, beside its line's: a bold or
         # italic word in a regular line ("refreshed", "algorithm"); and its
         # ink itself, for a word its text does not draw (read_printed_lines).
-        # the lowercase body: from its middle to the baseline, straightened
-        body = upright[head + (foot - head) // 2:foot + 1].any(axis=0)
+        # the lowercase body, straightened: from under the x-height - the
+        # arches of "m" and "n" in it, else an "m" falls apart into stems a
+        # word space apart - to the baseline
+        body = upright[head + int(_BODY_TOP * (foot - head)):foot + 1].any(axis=0)
         for a, b, t in _word_inks(np, region, body, words, lambda x: (x - clip.x0) * _ZOOM - left,
                                   max(1, int(rect.height * _ZOOM * _LETTER_GAP))):
             own = dark[top:bottom + 1, left + a:left + b]
-            placed.append([pt_x(left + a), pt_x(left + b), t, float(own.sum()) / _ZOOM ** 2,
-                           {"weight": _weight_of(np, own) / _ZOOM,
-                            "slant": slant(np, region[:, a:b]) if region[:, a:b].any() else 0.0}])
+            facts = {"weight": _weight_of(np, own) / _ZOOM,
+                     "slant": slant(np, region[:, a:b]) if region[:, a:b].any() else 0.0}
+            # where its ink falls apart across - a letter each, or letters
+            # run together, or a letter in pieces: the builder matches its
+            # letters to them
+            spans = _glyph_spans(np, own)
+            if len(spans) > 1:
+                facts["glyphs"] = [[pt_x(left + a + g0), pt_x(left + a + g1)] for g0, g1 in spans]
+            placed.append([pt_x(left + a), pt_x(left + b), t, float(own.sum()) / _ZOOM ** 2, facts])
             marks.append((own, pt_x(left + a), pt_y(top)))
 
     return {
@@ -611,6 +646,8 @@ def settle_page(lines: List[Dict[str, Any]]) -> None:
             italic = (own["slant"] >= ITALIC_SLANT if sum(ch in _STEMS for ch in word[2]) >= 2
                       else line["italic"])
             word[4] = before = {"bold": bold, "italic": italic}
+            if "glyphs" in own:
+                word[4]["glyphs"] = own["glyphs"]
     # A number alone ("5", "3.2") is too few glyphs to measure: it stands on
     # the baseline of, and is set at the size of, the longest line its
     # source box shares its row with.
@@ -720,6 +757,13 @@ def _mark_misread(np, pymupdf, lines: List[Dict[str, Any]]) -> None:
                                   "shape": list(ink.shape), "runs": _runs_of(np, ink)}
 
 
+def _normalised(facts: Dict[str, Any], pw: float) -> Dict[str, Any]:
+    """A word's facts with its letters' places (pt) as page shares."""
+    if "glyphs" not in facts:
+        return facts
+    return {**facts, "glyphs": [[a / pw, b / pw] for a, b in facts["glyphs"]]}
+
+
 def read_printed_lines(np, pymupdf, source, items: List[Any]) -> List[Any]:
     """How a set of lines was printed, as a page rebuilt where it was
     printed needs it: items are (owner, part, page index, page-normalised
@@ -728,7 +772,10 @@ def read_printed_lines(np, pymupdf, source, items: List[Any]) -> List[Any]:
     settled together (settle_page), and returned as (owner, line) - line a
     dict of the line's print: "part", "text", "page", its ink "box" and
     "baseline" (page-normalised), "skew", its "words" ([x0, x1, text,
-    area, {"bold", "italic"}], x page-normalised), "area", "cap", "size", "face", "bold",
+    area, {"bold", "italic", "glyphs" - the runs its ink falls apart into
+    across, [x0, x1] each, "ink" - a misread word's print}], x
+    page-normalised), "area",
+    "cap", "size", "face", "bold",
     "italic", "rgb", "underline" ([y page-normalised, thickness pt]),
     "overlines" ([x0, x1, y page-normalised, thickness pt] each)."""
     measured: List[Any] = []
@@ -758,7 +805,8 @@ def read_printed_lines(np, pymupdf, source, items: List[Any]) -> List[Any]:
             "part": m["part"], "text": m["text"], "page": m["page"],
             "box": [x0 / pw, y0 / ph, x1 / pw, y1 / ph], "baseline": m["baseline"] / ph,
             "skew": m["skew"],
-            "words": [[w[0] / pw, w[1] / pw] + list(w[2:]) for w in m["words"]],
+            "words": [[w[0] / pw, w[1] / pw] + list(w[2:4]) + [_normalised(w[4], pw)] if len(w) > 4
+                      else [w[0] / pw, w[1] / pw] + list(w[2:]) for w in m["words"]],
             "area": m["area"], "cap": m["cap"],
             "size": m["size"], "face": m["face"], "bold": m["bold"], "italic": m["italic"],
             "rgb": m["rgb"],
