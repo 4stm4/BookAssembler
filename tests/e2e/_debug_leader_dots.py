@@ -13,7 +13,8 @@ import fitz
 import numpy as np
 
 from tests.e2e.test_assembled_table_pdf import _extract_table
-from tests.e2e.test_visual_overlay import _build_single_table_pdf, _crop_rects, _ink_of
+from tests.e2e.test_toc_overlay import _ink_of
+from tests.e2e.test_visual_overlay import _build_single_table_pdf, _crop_rects
 
 
 def dots(page, crop, word):

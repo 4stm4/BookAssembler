@@ -12,7 +12,7 @@ sys.path.insert(0, "/app")
 import fitz
 
 from tests.e2e.test_toc_overlay import _build_toc_pdf, _extract_tocs
-from tests.e2e.test_visual_overlay import _ink_of
+from tests.e2e.test_toc_overlay import _ink_of
 
 fx, pg = Path(sys.argv[1]), int(sys.argv[2])
 tocs = _extract_tocs(fx)

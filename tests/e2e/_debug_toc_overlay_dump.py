@@ -16,7 +16,7 @@ sys.path.insert(0, "/app")
 from tests.e2e.test_toc_overlay import (
     TOC_A, TOC_B, TOC_C, _build_toc_pdf, _crop_rects, _extract_tocs, _page_texts,
 )
-from tests.e2e.test_visual_overlay import (
+from tests.e2e.test_toc_overlay import (
     _MASK_SIZE, _MATCH_REACH_PX, _ink_mask, _mask_mismatch, _near, _render_crop,
 )
 

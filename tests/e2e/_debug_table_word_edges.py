@@ -13,7 +13,8 @@ sys.path.insert(0, "/app")
 import fitz
 
 from tests.e2e.test_assembled_table_pdf import _extract_table
-from tests.e2e.test_visual_overlay import _build_single_table_pdf, _crop_rects, _ink_of
+from tests.e2e.test_toc_overlay import _ink_of
+from tests.e2e.test_visual_overlay import _build_single_table_pdf, _crop_rects
 
 fx = Path(sys.argv[1])
 t = _extract_table(fx)

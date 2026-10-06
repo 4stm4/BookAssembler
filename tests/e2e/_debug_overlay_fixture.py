@@ -14,7 +14,7 @@ import numpy as np
 from PIL import Image
 from tests.e2e.test_assembled_table_pdf import _extract_table
 from tests.e2e.test_visual_overlay import (
-    _MASK_SIZE, _MATCH_REACH_PX, _build_single_table_pdf, _crop_rects, _ink_mask, _mask_mismatch, _near,
+    _MASK_SIZE, _build_single_table_pdf, _crop_rects, _ink_mask, _mask_mismatch,
     _render_crop, _table_texts,
 )
 
@@ -29,9 +29,9 @@ with tempfile.TemporaryDirectory() as td:
           f"  mismatch {_mask_mismatch(a, b):.1%}")
     W, H = _MASK_SIZE
     img = np.full((H, W, 3), 255, dtype=np.uint8)
-    img[ma | mb] = (0, 0, 0)
-    img[ma & ~_near(mb, _MATCH_REACH_PX)] = (220, 0, 0)
-    img[mb & ~_near(ma, _MATCH_REACH_PX)] = (0, 0, 220)
+    img[ma & mb] = (0, 0, 0)
+    img[ma & ~mb] = (220, 0, 0)
+    img[mb & ~ma] = (0, 0, 220)
     out = Path("/app/debug_output")
     Image.fromarray(img).resize((W * 2, H * 2), Image.NEAREST).save(out / f"mask_{fx.stem}.png")
     a4, b4 = _render_crop(fitz, fx, 0, s, 3.0), _render_crop(fitz, pdf, 1, o, 3.0).resize(_render_crop(fitz, fx, 0, s, 3.0).size)

@@ -1,6 +1,6 @@
-"""Debug-only: where a table fixture's overlay misses lie - the misses of
-the test's mask, counted over a grid of zones of the crop (rows of zones
-top to bottom, columns left to right), as shares of all the ink.
+"""Debug-only: where a table fixture's overlay misses lie - the pixels the
+test's masks disagree on, counted over a grid of zones of the crop (rows
+of zones top to bottom, columns left to right), as shares of its area.
 
 python3 tests/e2e/_debug_miss_zones.py <pdf> [rows] [cols]
 """
@@ -13,7 +13,7 @@ import fitz
 
 from tests.e2e.test_assembled_table_pdf import _extract_table
 from tests.e2e.test_visual_overlay import (
-    _MATCH_REACH_PX, _build_single_table_pdf, _crop_rects, _ink_mask, _near, _render_crop,
+    _build_single_table_pdf, _crop_rects, _ink_mask, _render_crop,
 )
 
 fx = Path(sys.argv[1])
@@ -24,8 +24,8 @@ with tempfile.TemporaryDirectory() as td:
     pdf = Path(_build_single_table_pdf(t, td, "overlay_doc"))
     s, o = _crop_rects(fitz, fx, 0, pdf, t)
     ma, mb = _ink_mask(_render_crop(fitz, fx, 0, s)), _ink_mask(_render_crop(fitz, pdf, 1, o))
-    miss = (ma & ~_near(mb, _MATCH_REACH_PX)) | (mb & ~_near(ma, _MATCH_REACH_PX))
-    ink = float((ma | mb).sum())
+    miss = ma ^ mb
+    ink = float(ma.size)
     h, w = miss.shape
     print(f"total {miss.sum() / ink:.1%}  (rows of {h // nr}px, cols of {w // nc}px)")
     for r in range(nr):

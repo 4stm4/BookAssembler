@@ -11,9 +11,13 @@ the leaders run to the page numbers, the descriptions under their titles.
 Each source page is compared on its own: a contents list printed over three
 pages is three overlays. The source page and the rebuilt page holding most
 of its contents are cut the same way (_contents_rect), each to the
-contents' own extent, and one ink matrix is laid over the other. The limit is
-test_visual_overlay's MAX_MISMATCH: one rule for every rebuilt region, a
-table of contents gets no leniency a table does not.
+contents' own extent, and one ink matrix is laid over the other.
+
+Its measure is its own, not test_visual_overlay's: the misses are counted
+against the ink of either crop, not the crop's area (_mask_mismatch) - a
+contents page is mostly white, and over its area a rebuild that had lost
+every title disagreed on 9.3% - and a text is located by its ink, not by
+the box its source guessed (_ink_of). The limit is 7% (MAX_MISMATCH).
 """
 
 from pathlib import Path
@@ -22,12 +26,151 @@ import pytest
 
 from src.assembler.latex_builder import build_latex, compile_xelatex
 from src.krm.models import ContainerUnit, KnowledgeDocument, TocEntryBlock
-from tests.e2e.test_visual_overlay import MAX_MISMATCH, _ink_of, _mask_mismatch, _render_crop
+from tests.e2e.test_visual_overlay import _render_crop
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "toc"
 TOC_A = FIXTURES / "toc_a.pdf"   # Intel "Contents": numbered entries, linked titles
 TOC_B = FIXTURES / "toc_b.pdf"   # typewritten CONTENTS: sections, sub-entries, appendices
 TOC_C = FIXTURES / "toc_c.pdf"   # "TABLE OF CONTENTS" over 3 pages: chapters, pages, descriptions
+
+_GLYPH_CONTRAST = 120    # summed RGB difference from the paper or fill a glyph is set on
+# A row or column this full of ink is a rule crossing the word, pads and
+# all: a short word's own strokes fill most of its width ("PPI" at 0.6
+# lost the rows through its bowls and was read 0.5pt high).
+_TEXT_RULE_SPAN = 0.9
+_BOX_CORE = 0.2          # of a box's height in from each edge: surely its own line
+_LETTER_GAP = 0.12       # of a box's height: the widest gap between two letters of a word
+
+
+def _ink_of(fitz, page, rect):
+    """Where the ink of a text found at rect is.
+
+    A found text's box is its source's guess, not its print: tesseract
+    boxed the architecture fixture's "USER" 4.0pt above its ink, the
+    rebuild's font 0.8pt above its own - and a crop cut from boxes shifted
+    the rebuilt table 2-3pt against its source however exactly it was
+    set. A glyph is what stands out from what it is printed on (paper, or
+    a box's fill), darker; its line is the run of such rows through the
+    box's middle, rules left out, and across it reaches as far as its ink
+    runs on from the box.
+    """
+    import numpy as np
+    zoom = 4.0
+    clip = fitz.Rect(rect.x0 - rect.height / 2, rect.y0 - rect.height / 2,
+                     rect.x1 + rect.height / 2, rect.y1 + rect.height / 2) & page.rect
+    if clip.is_empty:
+        return rect
+    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
+    rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].astype(int)
+    ground = np.median(rgb.reshape(-1, 3), axis=0)
+    ink = (np.abs(rgb - ground).sum(axis=2) > _GLYPH_CONTRAST) & (rgb.sum(axis=2) < ground.sum())
+    ink[ink.mean(axis=1) > _TEXT_RULE_SPAN, :] = False
+    ink[:, ink.mean(axis=0) > _TEXT_RULE_SPAN] = False
+    rows = ink.any(axis=1)
+    middle = min(max(int(((rect.y0 + rect.y1) / 2 - clip.y0) * zoom), 0), len(rows) - 1)
+    if not rows[middle]:
+        near = np.flatnonzero(rows)
+        if not len(near):
+            return rect
+        middle = int(near[np.abs(near - middle).argmin()])
+    top, bottom = middle, middle
+    while top > 0 and rows[top - 1]:
+        top -= 1
+    while bottom < len(rows) - 1 and rows[bottom + 1]:
+        bottom += 1
+    # Lines set close touch, a descender on the ascender under it, and the
+    # run goes on into the next line. Where it runs out past the box, it is
+    # cut at its lightest row from the box's inner fifth on: where one line
+    # ends and the next begins.
+    density = ink.sum(axis=1)
+    box_lo, box_hi = int((rect.y0 - clip.y0) * zoom), int((rect.y1 - clip.y0) * zoom)
+    core_lo = int((rect.y0 + rect.height * _BOX_CORE - clip.y0) * zoom)
+    core_hi = int((rect.y1 - rect.height * _BOX_CORE - clip.y0) * zoom)
+    if bottom > box_hi:
+        bottom = core_hi + int(np.argmin(density[core_hi + 1:bottom + 1]))
+    if top < box_lo and core_lo > top:
+        top = top + int(np.argmin(density[top:core_lo])) + 1
+    # Across: the ink inside the box, run out to where it ends - a glyph
+    # boxed short ("CONTENTS" lost its S to its box) - up to the space
+    # before the next word.
+    inked = ink[top:bottom + 1].any(axis=0)
+    box_l = max(0, int((rect.x0 - clip.x0) * zoom))
+    box_r = min(len(inked), int((rect.x1 - clip.x0) * zoom))
+    cols = np.flatnonzero(inked[box_l:box_r])
+    if not len(cols):
+        return rect
+    left, right = box_l + int(cols[0]), box_l + int(cols[-1])
+    # over the gaps between letters, never a word space
+    gap = max(1, int(rect.height * _LETTER_GAP * zoom))
+    while left > 0 and inked[max(0, left - gap):left].any():
+        left -= 1
+    while right < len(inked) - 1 and inked[right + 1:right + 1 + gap].any():
+        right += 1
+    return fitz.Rect(clip.x0 + left / zoom, clip.y0 + top / zoom,
+                     clip.x0 + (right + 1) / zoom, clip.y0 + (bottom + 1) / zoom)
+
+
+_MASK_SIZE = (400, 600)  # both crops normalized to this before overlaying
+_INK_THRESHOLD = 160     # 0-255 grey level below which a pixel counts as ink
+# Ink within this many mask pixels of the other crop's ink lands on it. A
+# crop laid over itself one pixel to the side disagrees on 42-64% of its
+# ink: at 400x600 one pixel is a fraction of a stroke, and no rebuild can
+# be placed closer than that to a scan.
+_MATCH_REACH_PX = 1
+
+# Share of the ink allowed to miss the other crop's ink. One number for
+# every page on purpose: a rebuilt contents page either lands on top of the
+# page it came from or it does not. 7%, by the maintainer's decision
+# (2026-10-05).
+MAX_MISMATCH = 0.07
+
+
+def _ink_mask(img):
+    """Binary "there is ink here" mask, normalized to a common size.
+
+    Both crops are stretched to the same size first, so this compares WHERE
+    the ink lands within each table, independent of the two documents'
+    different page geometry and DPI.
+    """
+    import numpy as np
+    grey = np.array(img.convert("L").resize(_MASK_SIZE), dtype=np.uint8)
+    return grey < _INK_THRESHOLD
+
+
+def _near(mask, reach: int):
+    """Every pixel within reach pixels of the mask's ink."""
+    import numpy as np
+    h, w = mask.shape
+    padded = np.pad(mask, reach)
+    out = np.zeros_like(mask)
+    for dy in range(2 * reach + 1):
+        for dx in range(2 * reach + 1):
+            out |= padded[dy:dy + h, dx:dx + w]
+    return out
+
+
+def _mask_mismatch(img_a, img_b) -> float:
+    """Share of the ink that misses the other crop's ink (0.0 = every
+    stroke lands on one).
+
+    Both crops become a black/white matrix, laid one over the other; ink of
+    either with no ink of the other within _MATCH_REACH_PX counts as a
+    miss, and the misses are taken over the ink of either - not over the
+    crop's whole area, which on a sparse page (a typewritten contents list)
+    is mostly white the two crops share: there a rebuild that had lost
+    every title disagreed on only 9.3% of the area.
+
+    test_visual_overlay counts disagreeing pixels over the crop's area; on a
+    contents page that measure let the lost titles pass. Misplaced ink is
+    counted twice, once for being absent where the source
+    has it and once for being present where the source does not.
+    """
+    ma = _ink_mask(img_a)
+    mb = _ink_mask(img_b)
+    miss = (ma & ~_near(mb, _MATCH_REACH_PX)) | (mb & ~_near(ma, _MATCH_REACH_PX))
+    ink = (ma | mb).sum()
+    return float(miss.sum()) / float(ink) if ink else 0.0
+
 
 # Up to and including the analyzer that turns a contents page into entries;
 # what runs after it reorganizes the document, not the contents list.
