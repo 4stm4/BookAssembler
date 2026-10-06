@@ -60,6 +60,9 @@ _BOLD_GAIN = 0.6          # of the gap from regular to bold, over the page's lig
 # Of the page's usual weight, a word's in a bold run: on the paragraph
 # fixture D regular words weigh 0.61-0.80pt (usual 0.71), bold ones 0.90-1.07.
 _WORD_BOLD = 1.2
+_WEIGHT_MIN_WORDS = 5     # words of a kind it takes to say what the page's usual weight of it is
+_WORD_MIN_GLYPHS = 3      # letters and figures a word takes to be weighed on its own ("be" goes with its neighbour)
+_CAPITALS_WEIGHT = 1.2    # capitals' and figures' weight over lowercase's, where too few to say
 _STEMS = set("bdhiklmnpqrtuBDEFHIKLMNPRTU")  # letters with an upright stem to lean
 
 ITALIC_SLANT = 0.12       # tan of the lean; an italic leans 0.2 or so
@@ -266,20 +269,26 @@ def _straightened(np, region, skew: float):
     return out
 
 
-def _overlines(np, glyphs, top: int, bottom: int, left: int, right: int) -> List[Any]:
+def _overlines(np, glyphs, top: int, bottom: int, left: int, right: int, head: int, fall: int = 0) -> List[Any]:
     """Rules drawn over a line's letters - a signal active low, "RAS" with
     a bar over it - as (first row, last row, first column, end column): a
     few thin rows inked along in one run, all but clear over it, standing
     over the tops of the line's letters - those read beside the bars, a
     scan's blur joining a bar to the letters under it. A capital's own bar
-    ("T", "E") stands at their tops, its stem under it."""
+    ("T", "E") stands at their tops, its stem under it. They are looked
+    for about head, the row the line's capitals start at at its left edge
+    - the line's first inked row can be a descender's tip from the line
+    above - and as far further as the line falls (fall, rows) over its
+    width."""
     h = bottom - top + 1
     rows = glyphs.shape[0]
     thick = max(1, int(round(_OVERLINE_THICK * h)))
     min_len = max(3, int(_OVERLINE_MIN * h))
     bars: List[Any] = []
     taken = np.zeros(glyphs.shape, dtype=bool)
-    for r in range(max(0, top - int(_OVERLINE_REACH * h)), min(rows, top + int(_OVERLINE_DIP * h) + 1)):
+    lo_row = head - int(_OVERLINE_REACH * h) + min(0, fall)
+    hi_row = head + int(_OVERLINE_DIP * h) + max(0, fall)
+    for r in range(max(0, lo_row), min(rows, hi_row + 1)):
         line = np.concatenate(([False], glyphs[r, left:right], [False])).astype(np.int8)
         edges = np.flatnonzero(np.diff(line))
         for a, b in zip(edges[::2] + left, edges[1::2] + left):
@@ -303,8 +312,8 @@ def _overlines(np, glyphs, top: int, bottom: int, left: int, right: int) -> List
         rest[:, a - left:b - left] = False
     density = rest[top:bottom + 1].sum(axis=1)
     heads = np.flatnonzero(density >= _HEAD_DENSITY * max(1, density.max()))
-    head = top + int(heads[0]) if len(heads) else top
-    return [bar for bar in bars if bar[1] <= head]
+    tops = top + int(heads[0]) if len(heads) else top
+    return [bar for bar in bars if bar[1] <= tops]
 
 
 def _weight_of(np, ink) -> float:
@@ -440,10 +449,16 @@ def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] 
 
     # A rule over a word or two: an overline, drawn as its own ink - laid
     # by the face, it would weigh the word down.
-    bars = _overlines(np, glyphs, top, bottom, left, right)
+    bars = _overlines(np, glyphs, top, bottom, left, right, top + head - _lift(skew, right - left),
+                      int(round(skew * (right - left))))
+    # each as thick as it prints dark - a scan prints a thin bar grey, and
+    # most of what stands out of the paper is no ink to the eye
+    overlines = []
     for r0, r1, a, b in bars:
+        seen = [q for q in range(r0, r1 + 1) if dark[q, a:b].mean() >= 0.5]
+        if seen:
+            overlines.append([pt_x(a), pt_x(b), pt_y((seen[0] + seen[-1] + 1) / 2.0), len(seen) / _ZOOM])
         dark[r0:r1 + 1, a:b] = False
-    overlines = [[pt_x(a), pt_x(b), pt_y((r0 + r1 + 1) / 2.0), (r1 + 1 - r0) / _ZOOM] for r0, r1, a, b in bars]
 
     # A rule just under the line, across most of it, underlines it (a link).
     underline = None
@@ -559,20 +574,31 @@ def settle_page(lines: List[Dict[str, Any]]) -> None:
         size = size_in(face, line["height"], line["text"])
         line.update({"face": face, "bold": heavy(line["stroke"], size, line["italic"]), "cap": CAP_EM[face],
                      "size": size})
-    # Each word in its own weight, against the page's usual: a word in a
-    # bold run weighs a fifth again and more (_WORD_BOLD). A letter alone
-    # is too little to weigh; it goes with the word before it.
-    weights = sorted(w[4]["weight"] for l in lines for w in l["words"]
-                     if len(w) > 4 and _letters(w[2]) >= 3 and w[4]["weight"])
-    usual = weights[len(weights) // 2] if weights else 0.0
+    # Each word in its own weight, against the page's usual for its kind: a
+    # word in a bold run weighs a fifth again and more (_WORD_BOLD).
+    # Capitals and figures weigh more than lowercase set alike - straight
+    # stems, few curves: "RAM" 0.86 to the paragraph fixture D's lowercase
+    # 0.71 - and are weighed against their own. A shorter word is too
+    # little to weigh; it goes with the word before it.
+    def kind(text: str) -> bool:
+        return not any(ch.islower() for ch in text)
+
+    usual = {}
+    for capitals in (False, True):
+        weights = sorted(w[4]["weight"] for l in lines for w in l["words"]
+                         if len(w) > 4 and kind(w[2]) == capitals and len(w[2].strip()) >= 2 and w[4]["weight"])
+        usual[capitals] = weights[len(weights) // 2] if len(weights) >= _WEIGHT_MIN_WORDS else 0.0
+    if not usual[True] and usual[False]:
+        usual[True] = usual[False] * _CAPITALS_WEIGHT
     for line in lines:
         before = None
         for word in line["words"]:
             if len(word) < 5:
                 continue
             own = word[4]
-            if _letters(word[2]) >= 2 and usual:
-                bold = own["weight"] >= _WORD_BOLD * usual
+            typical = usual[kind(word[2])]
+            if _letters(word[2]) + sum(ch.isdigit() for ch in word[2]) >= _WORD_MIN_GLYPHS and typical:
+                bold = own["weight"] >= _WORD_BOLD * typical
             else:
                 bold = before["bold"] if before else line["bold"]
             # a lean is told by stems; a word of diagonals ("every") leans
