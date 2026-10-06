@@ -11,34 +11,44 @@ lines of a page together, the face and weight each is set in - one line
 alone is too short to tell a bold from a heavily printed regular, or a
 grotesque from a roman. A line is measured as the builder will set it:
 the faces compared with its print are the base-14 counterparts of the
-TeX Gyre faces the builder sets (Termes, Heros, Cursor), and its size is
+TeX Gyre faces the builder sets (Termes, Heros, Cursor) - and Schola, a
+Century Schoolbook with no base-14 counterpart, itself - and its size is
 its capitals' or ascenders' height over the share of the size they reach
 in that face.
 """
 
+import functools
+import subprocess
 from typing import Any, Dict, List, Optional
 
 from src.adapters.pdf_adapter import _measure_stroke_pt
 
 
-# Base-14 faces a line's text is set in to be compared with its print:
-# (regular, bold, italic, bold italic).
+# Faces a line's text is set in to be compared with its print - base-14
+# names, or a TeX Gyre file where base-14 has no counterpart: (regular,
+# bold, italic, bold italic). A book set in Century Schoolbook (the
+# paragraph fixture B) came back in Times, narrower, its x-height lower.
 FACES = {
     "serif": ("tiro", "tibo", "tiit", "tibi"),
     "sans": ("helv", "hebo", "heit", "hebi"),
     "mono": ("cour", "cobo", "coit", "cobi"),
+    "schoolbook": ("texgyreschola-regular.otf", "texgyreschola-bold.otf",
+                   "texgyreschola-italic.otf", "texgyreschola-bolditalic.otf"),
 }
 # What the builder's faces reach over their size, measured on the TeX Gyre
 # files: capitals ("H") and lowercase ascenders ("d").
-CAP_EM = {"serif": 0.662, "sans": 0.728, "mono": 0.562}
-ASCENDER_EM = {"serif": 0.682, "sans": 0.728, "mono": 0.602}
+CAP_EM = {"serif": 0.662, "sans": 0.728, "mono": 0.562, "schoolbook": 0.722}
+ASCENDER_EM = {"serif": 0.682, "sans": 0.728, "mono": 0.602, "schoolbook": 0.738}
 _ASCENDERS = set("bdfhklt")
 # Their strokes over their size, as pdf_adapter._measure_stroke_pt measures
-# a print: (regular, bold) upright and (regular, bold) italic.
+# a print: (regular, bold) upright and (regular, bold) italic. Schola's read
+# at 20pt (0.100, 0.163) and (0.087, 0.156), scaled as Termes' read there
+# (0.087, 0.144), (0.075, 0.119) stand to its own.
 STROKE_EM = {
     "serif": ((0.094, 0.144), (0.081, 0.125)),
     "sans": ((0.094, 0.150), (0.094, 0.150)),
     "mono": ((0.044, 0.119), (0.044, 0.119)),
+    "schoolbook": ((0.108, 0.163), (0.094, 0.164)),
 }
 _FACE_MIN_LETTERS = 6     # a line this long votes for its page's face
 _WEIGHT_MIN_LETTERS = 4   # a line this long says what the page's regular weight is
@@ -91,11 +101,29 @@ def ink_mask(np, pix):
     return ink[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
 
 
+@functools.lru_cache(maxsize=None)
+def _font_file(name: str) -> Optional[str]:
+    """A TeX Gyre file's path, where TeX is installed (kpsewhich)."""
+    try:
+        path = subprocess.run(["kpsewhich", name], capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return path or None
+
+
 def likeness(np, pymupdf, print_mask, text: str, fontname: str) -> float:
-    """How well text set in fontname covers the print: the overlap of
-    their ink, each cut to its own extent and scaled onto the print's."""
+    """How well text set in fontname - a base-14 name or a font file
+    (FACES) - covers the print: the overlap of their ink, each cut to its
+    own extent and scaled onto the print's. 0 where the file is missing."""
     doc = pymupdf.open()
     page = doc.new_page(width=40 * len(text) + 40, height=80)
+    if fontname.endswith(".otf"):
+        path = _font_file(fontname)
+        if not path:
+            doc.close()
+            return 0.0
+        page.insert_font(fontname="F", fontfile=path)
+        fontname = "F"
     page.insert_text((10, 50), text, fontsize=30, fontname=fontname)
     mask = ink_mask(np, page.get_pixmap())
     doc.close()

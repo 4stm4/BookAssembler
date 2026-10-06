@@ -93,6 +93,8 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 \newfontfamily\latinsans{TeX Gyre Heros}
 % And its typewriter one, for a page printed on a typewriter.
 \newfontfamily\latinmono{TeX Gyre Cursor}
+% And a Century Schoolbook, for a page printed in one.
+\newfontfamily\latinschola{TeX Gyre Schola}
 % A line of words each where it was printed, its text kept whole:
 % \printedwords{words}{gap/width,gap/width,...} (pt, one pair per word).
 \ExplSyntaxOn
@@ -474,7 +476,8 @@ _FAKEBOLD_EDGE_EM = 0.005
 _FAKEBOLD_MAX = 12.0
 _FAKEBOLD_MIN = 0.5
 
-_FACE_CMD = {"serif": "\\latinfont ", "sans": "\\latinsans ", "mono": "\\latinmono "}
+_FACE_CMD = {"serif": "\\latinfont ", "sans": "\\latinsans ", "mono": "\\latinmono ",
+             "schoolbook": "\\latinschola "}
 def _printed_lines(block: Any) -> List[Dict[str, Any]]:
     """The lines of a block as its print was read (TocAnalyzer,
     PrintedLinesAnalyzer): a contents entry's or a paragraph's
@@ -1037,7 +1040,8 @@ _A4_HEIGHT_PT = 29.7 * _PT_PER_CM
 _TEX_PT_PER_BP = 72.27 / 72.0
 _FACE_INK_LEVEL = 160  # 0-255 grey below which a pixel is ink, as the analyzer reads a print
 # The TeX Gyre files those families are set from.
-_FACE_FILE = {"serif": "texgyretermes", "sans": "texgyreheros", "mono": "texgyrecursor"}
+_FACE_FILE = {"serif": "texgyretermes", "sans": "texgyreheros", "mono": "texgyrecursor",
+              "schoolbook": "texgyreschola"}
 
 
 @functools.lru_cache(maxsize=None)
