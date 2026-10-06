@@ -45,3 +45,15 @@ _NOTE_PREFIX_RE = re.compile(r"^\s*NOTES?\s*:", re.IGNORECASE)
 # more non-alphanumeric characters running up to the end of the line is not
 # how a heading ends.
 _TRAILING_JUNK_RE = re.compile(r"[^A-Za-z0-9\s]{3,}\s*$")
+
+# A heading in body size, told by its weight alone (rules._is_printed_heading):
+# a run of bold words longer than this is a paragraph's bold line, not a
+# title. The paragraph fixtures' longest is "CAS BEFORE RAS REFRESH COUNTER
+# TEST", six.
+MAX_PRINTED_HEADING_WORDS = 10
+# How far under it, in its own line's heights, the paragraph a heading heads
+# begins.
+MAX_HEADING_GAP_LINES = 3.0
+# How far left of the paragraph under it, in its own line's heights, a
+# heading hangs to stand apart by place alone: "PUSH IX" hangs 3.5.
+HANGING_INDENT_LINES = 2.0

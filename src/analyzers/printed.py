@@ -47,6 +47,10 @@ _SAME_SIZE = 0.3          # within this of its kind's usual size, a line is set 
 _SHORT_TOKEN = 3          # characters in a token too short to measure its size by
 _SAME_ROW = 0.5           # of the lower box's height two source boxes share on one row
 _BOLD_GAIN = 0.6          # of the gap from regular to bold, over the page's lightest
+# Of the page's usual weight, a word's in a bold run: on the paragraph
+# fixture D regular words weigh 0.61-0.80pt (usual 0.71), bold ones 0.90-1.07.
+_WORD_BOLD = 1.2
+_STEMS = set("bdhiklmnpqrtuBDEFHIKLMNPRTU")  # letters with an upright stem to lean
 
 ITALIC_SLANT = 0.12       # tan of the lean; an italic leans 0.2 or so
 _INK_LEVEL = 160          # 0-255 grey below which a pixel is ink, for face likeness
@@ -55,9 +59,15 @@ _RULE_SPAN = 0.9          # a row this full of ink is a rule crossing the line
 _UNDERLINE_SPAN = 0.8     # a rule under the line covering this much of it underlines it
 _BASELINE_DENSITY = 0.3   # a row this dense against the line's densest is above the baseline
 _BASELINE_FALL = 0.6      # the row under the baseline holds less than this of its ink
-_LETTER_GAP = 0.12        # of a line's box height: the widest gap between two letters of a word
+# of a line's box height: the widest gap between two letters of a word -
+# the paragraph fixture D's "c" and "h" of "each" stand 0.83pt apart at 8pt
+_LETTER_GAP = 0.15
 _HEAD_DENSITY = 0.08      # a row this dense against the line's densest is its capitals', not a stray descender
 _COLOUR_SPREAD = 80       # channels this far apart: printed in a colour, not black
+_OVERLINE_REACH = 0.35    # of a line's ink height: how far over its top an overline stands
+_OVERLINE_DIP = 0.1       # of it: how far under its top - an overline is its topmost ink, a hyphen is not
+_OVERLINE_MIN = 0.4       # of a line's ink height: the shortest overline, over one capital
+_OVERLINE_THICK = 0.15    # of a line's ink height: the thickest
 _ZOOM = 6.0
 
 
@@ -226,6 +236,49 @@ def _straightened(np, region, skew: float):
     return out
 
 
+def _overlines(np, glyphs, top: int, bottom: int, left: int, right: int) -> List[Any]:
+    """Rules drawn over a line's letters - a signal active low, "RAS" with
+    a bar over it - as (first row, last row, first column, end column): a
+    few thin rows inked along in one run, a row clear of ink under the
+    whole of it and over it. A capital's own bar ("T", "E") has its stem
+    under it."""
+    h = bottom - top + 1
+    rows = glyphs.shape[0]
+    thick = max(1, int(round(_OVERLINE_THICK * h)))
+    min_len = max(3, int(_OVERLINE_MIN * h))
+
+    def clear(a: int, b: int, lo: int, hi: int) -> bool:
+        return any(not glyphs[q, a:b].any() for q in range(max(0, lo), min(rows, hi)))
+
+    found: List[Any] = []
+    taken = np.zeros(glyphs.shape, dtype=bool)
+    for r in range(max(0, top - int(_OVERLINE_REACH * h)), min(rows, top + int(_OVERLINE_DIP * h) + 1)):
+        line = np.concatenate(([False], glyphs[r, left:right], [False])).astype(np.int8)
+        edges = np.flatnonzero(np.diff(line))
+        for a, b in zip(edges[::2] + left, edges[1::2] + left):
+            if b - a < min_len or taken[r, a:b].any():
+                continue
+            end = r
+            while end + 1 < rows and glyphs[end + 1, a:b].mean() >= 0.8:
+                end += 1
+            if end + 1 - r > thick:
+                continue
+            if clear(a, b, end + 1, end + 2 + thick) and clear(a, b, r - 1 - thick, r):
+                found.append((r, end, int(a), int(b)))
+                # its fainter rows under it are the same bar
+                taken[r:end + 2 + thick, a:b] = True
+    return found
+
+
+def _weight_of(np, ink) -> float:
+    """How thick ink's strokes are, in pixels: twice its area over its
+    outline. Unlike a median run across the strokes it does not step by
+    whole pixels - a scan's strokes are three of them wide."""
+    padded = np.pad(ink, 1)
+    outline = int((padded[1:, :] != padded[:-1, :]).sum() + (padded[:, 1:] != padded[:, :-1]).sum())
+    return 2.0 * float(ink.sum()) / outline if outline else 0.0
+
+
 def _word_inks(np, region, words, x_of, gap: int) -> List[List[Any]]:
     """Where each word of a line prints: its ink's left and right column in
     region (x_of turns a page point into a region column), from the ink
@@ -265,7 +318,8 @@ def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] 
     "stroke" - its strokes' median width; "italic" (and "slant", the lean
     it was judged by); "scores" - how well each face covers it, regular
     and bold, upright or italic as it leans; "rgb" - its colour where it
-    is not black; "underline" [y, thickness] where a rule runs under it.
+    is not black; "underline" [y, thickness] where a rule runs under it;
+    "overlines" [[x0, x1, y, thickness]] where rules stand over its words.
     None where the box holds no ink.
     """
     pad_y = rect.height / 2.0
@@ -312,6 +366,13 @@ def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] 
     def pt_y(px: float) -> float:
         return clip.y0 + px / _ZOOM
 
+    # A rule over a word or two: an overline, drawn as its own ink - laid
+    # by the face, it would weigh the word down.
+    bars = _overlines(np, glyphs, top, bottom, left, right)
+    for r0, r1, a, b in bars:
+        dark[r0:r1 + 1, a:b] = False
+    overlines = [[pt_x(a), pt_x(b), pt_y((r0 + r1 + 1) / 2.0), (r1 + 1 - r0) / _ZOOM] for r0, r1, a, b in bars]
+
     # A rule just under the line, across most of it, underlines it (a link).
     underline = None
     for r in range(bottom + 1, min(pix.height, bottom + 1 + int(rect.height * _ZOOM / 2))):
@@ -338,15 +399,19 @@ def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] 
 
     placed = []
     if words:
-        placed = [[pt_x(left + a), pt_x(left + b), t,
-                   float(dark[top:bottom + 1, left + a:left + b].sum()) / _ZOOM ** 2] for a, b, t in
-                  _word_inks(np, region, words, lambda x: (x - clip.x0) * _ZOOM - left,
-                             max(1, int(rect.height * _ZOOM * _LETTER_GAP)))]
+        # Each word's own weight and lean, beside its line's: a bold or
+        # italic word in a regular line ("refreshed", "algorithm").
+        for a, b, t in _word_inks(np, region, words, lambda x: (x - clip.x0) * _ZOOM - left,
+                                  max(1, int(rect.height * _ZOOM * _LETTER_GAP))):
+            own = dark[top:bottom + 1, left + a:left + b]
+            placed.append([pt_x(left + a), pt_x(left + b), t, float(own.sum()) / _ZOOM ** 2,
+                           {"weight": _weight_of(np, own) / _ZOOM,
+                            "slant": slant(np, region[:, a:b]) if region[:, a:b].any() else 0.0}])
 
     return {
         "source": [rect.x0, rect.y0, rect.x1, rect.y1],
         "words": placed,
-        "box": [pt_x(left), pt_y(top), pt_x(right), pt_y(bottom + 1)],
+        "box": [pt_x(left), pt_y(min([top] + [bar[0] for bar in bars])), pt_x(right), pt_y(bottom + 1)],
         "baseline": pt_y(base),
         "skew": skew,
         "height": height / _ZOOM,
@@ -357,6 +422,7 @@ def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] 
         "scores": scores,
         "rgb": colour,
         "underline": underline,
+        "overlines": overlines,
     }
 
 
@@ -406,11 +472,36 @@ def settle_page(lines: List[Dict[str, Any]]) -> None:
 
     weighed = sorted(excess(l) for l in lines if _letters(l["text"]) >= _WEIGHT_MIN_LETTERS and l["stroke"])
     lightest = weighed[len(weighed) // 5] if weighed else 0.0
+
+    def heavy(stroke: float, size: float, italic: bool) -> bool:
+        stems = STROKE_EM[face][1 if italic else 0]
+        return bool(stroke) and size > 0 and stroke / size - stems[0] - lightest > _BOLD_GAIN * (stems[1] - stems[0])
+
     for line in lines:
-        stems = STROKE_EM[face][1 if line["italic"] else 0]
-        bold = bool(line["stroke"]) and excess(line) - lightest > _BOLD_GAIN * (stems[1] - stems[0])
-        line.update({"face": face, "bold": bold, "cap": CAP_EM[face],
-                     "size": size_in(face, line["height"], line["text"])})
+        size = size_in(face, line["height"], line["text"])
+        line.update({"face": face, "bold": heavy(line["stroke"], size, line["italic"]), "cap": CAP_EM[face],
+                     "size": size})
+    # Each word in its own weight, against the page's usual: a word in a
+    # bold run weighs a fifth again and more (_WORD_BOLD). A letter alone
+    # is too little to weigh; it goes with the word before it.
+    weights = sorted(w[4]["weight"] for l in lines for w in l["words"]
+                     if len(w) > 4 and _letters(w[2]) >= 3 and w[4]["weight"])
+    usual = weights[len(weights) // 2] if weights else 0.0
+    for line in lines:
+        before = None
+        for word in line["words"]:
+            if len(word) < 5:
+                continue
+            own = word[4]
+            if _letters(word[2]) >= 2 and usual:
+                bold = own["weight"] >= _WORD_BOLD * usual
+            else:
+                bold = before["bold"] if before else line["bold"]
+            # a lean is told by stems; a word of diagonals ("every") leans
+            # as it is drawn
+            italic = (own["slant"] >= ITALIC_SLANT if sum(ch in _STEMS for ch in word[2]) >= 2
+                      else line["italic"])
+            word[4] = before = {"bold": bold, "italic": italic}
     # A number alone ("5", "3.2") is too few glyphs to measure: it stands on
     # the baseline of, and is set at the size of, the longest line its
     # source box shares its row with.
@@ -439,3 +530,50 @@ def settle_page(lines: List[Dict[str, Any]]) -> None:
         for line in same:
             if abs(line["size"] / usual - 1.0) < _SAME_SIZE:
                 line["size"] = usual
+
+
+def read_printed_lines(np, pymupdf, source, items: List[Any]) -> List[Any]:
+    """How a set of lines was printed, as a page rebuilt where it was
+    printed needs it: items are (owner, part, page index, page-normalised
+    box, text) for each line, source the opened PDF. Each line is measured
+    (measure_line, with the page's words inside its box), each page's lines
+    settled together (settle_page), and returned as (owner, line) - line a
+    dict of the line's print: "part", "text", "page", its ink "box" and
+    "baseline" (page-normalised), "skew", its "words" ([x0, x1, text,
+    area, {"bold", "italic"}], x page-normalised), "area", "cap", "size", "face", "bold",
+    "italic", "rgb", "underline" ([y page-normalised, thickness pt]),
+    "overlines" ([x0, x1, y page-normalised, thickness pt] each)."""
+    measured: List[Any] = []
+    words: Dict[int, List[Any]] = {}
+    for owner, part, page_index, box, text in items:
+        if page_index is None or page_index >= source.page_count:
+            continue
+        page = source[page_index]
+        pw, ph = page.rect.width, page.rect.height
+        rect = pymupdf.Rect(box[0] * pw, box[1] * ph, box[2] * pw, box[3] * ph)
+        if page_index not in words:
+            words[page_index] = page.get_text("words")
+        own = [w for w in words[page_index]
+               if rect.x0 <= (w[0] + w[2]) / 2 <= rect.x1 and rect.y0 <= (w[1] + w[3]) / 2 <= rect.y1]
+        m = measure_line(np, pymupdf, page, rect, text, own)
+        if m is not None:
+            m.update({"part": part, "text": text, "page": page_index, "pw": pw, "ph": ph})
+            measured.append((owner, m))
+    for page_index in sorted({m["page"] for _, m in measured}):
+        settle_page([m for _, m in measured if m["page"] == page_index])
+    out = []
+    for owner, m in measured:
+        pw, ph = m["pw"], m["ph"]
+        x0, y0, x1, y1 = m["box"]
+        out.append((owner, {
+            "part": m["part"], "text": m["text"], "page": m["page"],
+            "box": [x0 / pw, y0 / ph, x1 / pw, y1 / ph], "baseline": m["baseline"] / ph,
+            "skew": m["skew"],
+            "words": [[w[0] / pw, w[1] / pw] + list(w[2:]) for w in m["words"]],
+            "area": m["area"], "cap": m["cap"],
+            "size": m["size"], "face": m["face"], "bold": m["bold"], "italic": m["italic"],
+            "rgb": m["rgb"],
+            "underline": [m["underline"][0] / ph, m["underline"][1]] if m["underline"] else None,
+            "overlines": [[a / pw, b / pw, y / ph, t] for a, b, y, t in m["overlines"]],
+        }))
+    return out

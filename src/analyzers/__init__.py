@@ -35,6 +35,8 @@ from src.analyzers.normalization import NormalizationAnalyzer
 from src.analyzers.notebook_outputs import NotebookOutputAnalyzer
 from src.analyzers.ocr import OCRAnalyzer
 from src.analyzers.page_agent import PageAgentAnalyzer
+from src.analyzers.paragraph import ParagraphAnalyzer
+from src.analyzers.printed_lines import PrintedLinesAnalyzer
 from src.analyzers.pipeline import PipelineRunner
 from src.analyzers.proper_noun import ProperNounExtractorAnalyzer
 from src.analyzers.reading_order import ReadingOrderAnalyzer
@@ -57,6 +59,10 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         OCRAnalyzer(),
         # No-op unless the document came from a notebook (RFC 0008 §3.4).
         NotebookOutputAnalyzer(),
+        # How each line of a scanned page was printed - its weight, size,
+        # face - read once, before anything judges by it (a heading's
+        # weight), for the builder to set the page by.
+        PrintedLinesAnalyzer(),
         FontStatsAnalyzer(),
         EphemeraDetectorAnalyzer(),
         # Before headings: a contents line in a chapter-heading size was
@@ -94,6 +100,8 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         # Must run before ReadingOrderAnalyzer and the assemblers, which
         # only understand ParagraphBlock.
         UnknownResolverAnalyzer(),
+        # A paragraph OCR cut into pieces, whole again.
+        ParagraphAnalyzer(),
         # Last: reading order is built over the final tree. Running it early
         # (it used to be step 3) linked the pre-restructure leaves, and every
         # detector that then wrapped a paragraph into a list / callout / table
@@ -128,6 +136,8 @@ __all__ = [
     "KRMPermission",
     "NormalizationAnalyzer",
     "NotebookOutputAnalyzer",
+    "ParagraphAnalyzer",
+    "PrintedLinesAnalyzer",
     "PipelineRunner",
     "ProperNounExtractorAnalyzer",
     "RGPermission",

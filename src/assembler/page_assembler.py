@@ -15,15 +15,15 @@ and StyleDescriptor to reconstruct layout.
 """
 
 import logging
-import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.assembler.latex_builder import (
     _esc,
-    _ink_in_face,
-    _is_latin_only,
     _para_text,
+    _printed_extent,
+    _printed_lines,
+    _printed_nodes,
     _translated,
     render_node,
 )
@@ -52,14 +52,6 @@ log = logging.getLogger(__name__)
 # escaping would collapse their whitespace and destroy the markup. On a positional
 # page they are emitted in normal flow, below the overlay.
 _ATOMIC = (CodeBlock, TableBlock, FormulaBlock)
-
-_MM_PER_PT = 25.4 / 72.27
-_BP_PER_MM = 72.0 / 25.4
-# How far each unit of fontspec's FakeBold moves each edge of a glyph's
-# ink out, over the size - measured on XeTeX's output.
-_FAKEBOLD_EDGE_EM = 0.005
-_FAKEBOLD_MAX = 12.0
-_FAKEBOLD_MIN = 0.5
 
 POSITIONAL_ROLES = {"title", "cover", "half_title", "series", "copyright", "toc", "diagram"}
 @dataclass
@@ -135,7 +127,7 @@ def group_by_page(doc: KnowledgeDocument) -> Dict[int, PageSlot]:
         walk(c, [])
 
     for slot in pages.values():
-        slot.blocks.sort(key=_sort_key)
+        slot.blocks = _reading_order(slot.blocks, slot.page_index)
 
     headings = sum(
         1 for s in pages.values() for b in s.blocks
@@ -146,19 +138,70 @@ def group_by_page(doc: KnowledgeDocument) -> Dict[int, PageSlot]:
     return pages
 
 
-def _sort_key(block: Any) -> Tuple[float, float]:
-    """Reading order within a page: top-to-bottom, then left-to-right.
+# A block wider than this share of its page's text spans its columns: a
+# title over both, a single column's paragraph.
+_SPAN_SHARE = 0.6
 
-    Container headings carry no bbox of their own and must stay above the
-    content they introduce, so they sort to the top of their page.
-    """
-    if isinstance(block, ContainerUnit):
-        return (-1.0, -1.0)
+
+def _box(block: Any, page: Optional[int] = None) -> Optional[NormalizedRect]:
+    """Where a block stands on page - none for a heading printed on another
+    page than the content it is placed with."""
     vl = getattr(block, "visual_layout", None)
-    bb = getattr(vl, "bounding_box", None) if vl else None
-    if bb:
-        return (bb.y0, bb.x0)
-    return (999.0, 999.0)
+    if vl is None or (page is not None and vl.page_or_screen_index != page):
+        return None
+    return vl.bounding_box
+
+
+def _reading_order(blocks: List[Any], page: Optional[int] = None) -> List[Any]:
+    """A page's blocks in reading order: top to bottom, a column at a time.
+
+    Sorted by height alone, a two-column page read across both columns at
+    once - the paragraph fixture D's right column fell between its left
+    column's paragraphs. Blocks standing side by side are columns, read
+    left to right, each top to bottom; a block across them (wider than
+    _SPAN_SHARE of the page's text) closes the band of columns above it.
+    A heading stands where it was printed; a container heading with no box
+    of its own stays above its page's content, a block with none at the
+    end.
+    """
+    def placed(b: Any) -> bool:
+        return _box(b, page if isinstance(b, ContainerUnit) else None) is not None
+
+    boxed = sorted((b for b in blocks if placed(b)), key=lambda b: (_box(b).y0, _box(b).x0))
+    head = [b for b in blocks if not placed(b) and isinstance(b, ContainerUnit)]
+    tail = [b for b in blocks if not placed(b) and not isinstance(b, ContainerUnit)]
+    if not boxed:
+        return head + tail
+    left = min(_box(b).x0 for b in boxed)
+    width = max(_box(b).x1 for b in boxed) - left
+    out: List[Any] = []
+    band: List[Any] = []
+    for block in boxed:
+        bb = _box(block)
+        if bb.x1 - bb.x0 > _SPAN_SHARE * width:
+            out.extend(_by_column(band))
+            band = []
+            out.append(block)
+        else:
+            band.append(block)
+    out.extend(_by_column(band))
+    return head + out + tail
+
+
+def _by_column(band: List[Any]) -> List[Any]:
+    """Blocks side by side read a column at a time: those whose spans across
+    overlap, chained, are one column."""
+    columns: List[List[Any]] = []
+    spans: List[List[float]] = []
+    for block in sorted(band, key=lambda b: _box(b).x0):
+        bb = _box(block)
+        if spans and bb.x0 < spans[-1][1]:
+            columns[-1].append(block)
+            spans[-1][1] = max(spans[-1][1], bb.x1)
+        else:
+            columns.append([block])
+            spans.append([bb.x0, bb.x1])
+    return [b for column in columns for b in sorted(column, key=lambda b: (_box(b).y0, _box(b).x0))]
 
 
 def _update_role(slot: PageSlot, node: Any) -> None:
@@ -246,8 +289,16 @@ def _render_reflow(slot: PageSlot, target_lang: str) -> str:
     grouped onto their own pages by `group_by_page`.
     """
     body: List[str] = []
+    above: Optional[Tuple[float, float, float, float]] = None
     for block in slot.blocks:
+        here = _printed_extent(block)
+        if here and above and here[0] < above[2] and above[0] < here[2] and here[1] > above[3]:
+            # Two blocks set as printed, one under the other in a column,
+            # stand as far apart as the print left them - not TeX's line
+            # skip, which set a paragraph against the heading over it.
+            body.append("\\par\\nointerlineskip\\vspace{%.2fmm}\n" % (here[1] - above[3]))
         render_node(body, block, target_lang, recurse=False)
+        above = here
     return "".join(body)
 
 
@@ -338,118 +389,6 @@ def _render_positional(slot: PageSlot, target_lang: str) -> str:
         render_node(lines, block, target_lang, recurse=False)
     lines.append("\\clearpage\n")
     return "".join(lines)
-
-
-_FACE_CMD = {"serif": "\\latinfont ", "sans": "\\latinsans ", "mono": "\\latinmono "}
-def _printed_lines(block: Any) -> List[Dict[str, Any]]:
-    """The lines of a block as its print was read (TocAnalyzer): an
-    entry's metadata["printed_lines"], a contents heading's
-    metadata["printed_title"]."""
-    md = getattr(block, "metadata", None) or {}
-    if isinstance(block, ContainerUnit):
-        return [md["printed_title"]] if md.get("printed_title") else []
-    return list(md.get("printed_lines") or [])
-
-
-def _printed_nodes(block: Any, target_lang: str, page_w: float, page_h: float) -> List[str]:
-    """Each printed line of a block as tikz nodes: its baseline and left
-    ink edge where the print's are, at the skew it was scanned at, set in
-    the face, weight, slant, size and colour read off it, as heavy as the
-    print (FakeBold); each word boxed to where and how wide it printed -
-    its face's advances and spaces are not the print's. An underline is
-    drawn where the print's runs. A translated title is set once, where
-    the title starts, at its own width."""
-    source = block.title if isinstance(block, ContainerUnit) else getattr(block, "entry_text", "")
-    translated = _translated(block, source or "", target_lang) if target_lang else source
-    title_done = False
-    out: List[str] = []
-    for line in _printed_lines(block):
-        text = line["text"]
-        fit = True
-        if line["part"] in ("title", "heading") and translated != source:
-            if title_done:
-                continue
-            text, fit, title_done = translated, False, True
-        if not text.strip():
-            continue
-        x0, _, x1, _ = line["box"]
-        x_mm, y_mm, w_mm = x0 * page_w, line["baseline"] * page_h, (x1 - x0) * page_w
-        font = _FACE_CMD.get(line["face"], "") if _is_latin_only(text) else ""
-        pieces = (
-            [(w[0] * page_w, (w[1] - w[0]) * page_w, w[2], w[3] if len(w) > 3 else None) for w in line["words"]]
-            if fit and line.get("words") else [(x_mm, w_mm if fit else None, text, line.get("area"))]
-        )
-        inks = [_ink_in_face(line["face"], line["bold"], line["italic"], t) if pw and font else None
-                for _, pw, t, _ in pieces]
-        size_bp, outline_bp = _weighed(line, pieces, inks)
-        size = size_bp * 72.27 / 72.0
-        weight = ("\\bfseries " if line["bold"] else "") + ("\\itshape " if line["italic"] else "")
-        if outline_bp:
-            # the scan's spread of ink, which the face as cut does not have
-            weight += "\\addfontfeatures{FakeBold=%.1f}" % (outline_bp / (_FAKEBOLD_EDGE_EM * size_bp))
-        colour = "\\color[RGB]{%d,%d,%d}" % tuple(line["rgb"]) if line.get("rgb") else ""
-        skew = line.get("skew") or 0.0
-        # at the skew it was scanned at: over a long line a point or more
-        turn = -math.degrees(math.atan(skew))
-        style = f"{colour}{font}\\fontsize{{{size:.2f}}}{{{size * 1.2:.2f}}}\\selectfont {weight}"
-        outline_mm = outline_bp / _BP_PER_MM
-        # Word by word where the print's words were placed (their own
-        # widths and spaces are the print's, not the face's), else the
-        # line boxed to its printed width.
-        for (px, pw, piece, _), ink in zip(pieces, inks):
-            py = y_mm + skew * (px - x_mm)
-            if ink is not None and pw > 2 * outline_mm:
-                # the box widened so that its ink, not its advance, spans
-                # the print's, and set off by its first glyph's bearing
-                lead, inked, advance = ink[:3]
-                scale = (pw - 2 * outline_mm) / (inked * size_bp / _BP_PER_MM)
-                px, pw = px + outline_mm - lead * size_bp / _BP_PER_MM * scale, advance * size_bp / _BP_PER_MM * scale
-            body = f"\\resizebox{{{pw:.2f}mm}}{{\\height}}{{{_esc(piece)}}}" if pw else _esc(piece)
-            out.append(
-                f"  \\node[anchor=base west, inner sep=0pt, rotate={turn:.3f}] at ({px:.2f}mm, -{py:.2f}mm) "
-                f"{{{style}{body}}};\n"
-            )
-        if line.get("underline"):
-            uy, thick = line["underline"]
-            pen = "color={rgb,255:red,%d;green,%d;blue,%d}, " % tuple(line["rgb"]) if line.get("rgb") else ""
-            fall = (line.get("skew") or 0.0) * w_mm
-            out.append(
-                f"  \\draw[{pen}line width={thick:.2f}pt] ({x_mm:.2f}mm, -{uy * page_h:.2f}mm) -- "
-                f"({x_mm + w_mm:.2f}mm, -{uy * page_h + fall:.2f}mm);\n"
-            )
-    return out
-
-
-def _weighed(line: Dict[str, Any], pieces: List[Any], inks: List[Any]) -> Tuple[float, float]:
-    """The size (pt) a printed line is set at and how far FakeBold is to
-    move its ink's edges out (pt): as far as makes its words lay as much
-    ink as the print's - a scan prints heavier than any face is cut, by
-    its spread of ink, which FakeBold reproduces all round as the spread
-    does. A glyph's ink then gains its outline times the edge's move; the
-    type is set smaller by the move, so its capitals stand as tall as the
-    print's."""
-    raw = line["size"]
-    cap = line.get("cap") or 0.7
-    known = [(pw, area, ink) for (_, pw, _, area), ink in zip(pieces, inks)
-             if ink is not None and area and pw]
-    if not known or raw <= 0:
-        return raw, 0.0
-    outline = 0.0
-    for _ in range(3):
-        size = raw - 2.0 * outline / cap
-        laid = edge = 0.0
-        for w_mm, _, ink in known:
-            _, inked, _, area_em, outline_em = ink
-            k = max(0.1, (w_mm * _BP_PER_MM - 2.0 * outline) / (inked * size))
-            laid += area_em * size * size * k
-            edge += outline_em * size * (1.0 + k) / 2.0
-        wanted = sum(area for _, area, _ in known)
-        outline = max(0.0, (wanted - laid) / edge) if edge else 0.0
-        outline = min(outline, _FAKEBOLD_MAX * _FAKEBOLD_EDGE_EM * size)
-    size = raw - 2.0 * outline / cap
-    if outline < _FAKEBOLD_MIN * _FAKEBOLD_EDGE_EM * size:
-        return raw, 0.0
-    return size, outline
 
 
 def _positioned_lines(block: Any) -> List[Any]:

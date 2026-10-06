@@ -10,6 +10,7 @@ via fontspec + polyglossia). Tombstoned nodes are skipped (RFC 0001 §2.4).
 import bisect
 import functools
 import logging
+import math
 import os
 import re
 import statistics
@@ -286,7 +287,11 @@ def render_node(
                     body.append(f"\\bibitem{{{key}}} {raw}\n")
                 body.append("\\end{thebibliography}\n")
                 return
-        if node.title:
+        if node.title and _printed_lines(node):
+            # A heading read off a scanned page's print (HeadingAnalyzer)
+            # is set as printed, as its paragraphs are.
+            body.append(_printed_block(node, target_lang))
+        elif node.title:
             cmd = _heading_cmd(node.level)
             body.append(f"\\{cmd}{{{_esc(_translated(node, node.title, target_lang))}}}\n")
         if recurse:
@@ -426,8 +431,15 @@ def render_node(
         body.append(f"\\noindent {_esc(node.term)}\\dotfill {refs}\\\\\n")
     elif isinstance(node, ParagraphBlock):
         txt = _esc(_translated(node, _para_text(node), target_lang))
+        printed = _printed_lines(node)
         if not txt:
             pass
+        elif printed and _translated(node, _para_text(node), target_lang) == _para_text(node):
+            # A paragraph of a scanned page is set by its printed lines
+            # (PrintedLinesAnalyzer): broken anew, its lines came back
+            # broken elsewhere, in house type. Translated, it flows as text
+            # does.
+            body.append(_printed_block(node, target_lang))
         elif (node.metadata or {}).get("semantic_decorator") in (
             "theorem", "proof", "example", "remark", "definition",
         ):
@@ -452,6 +464,169 @@ def render_node(
             body.append(f"\\begin{{{env}}}\n{txt}\n\\end{{{env}}}\n")
         else:
             body.append(_wrap_align(txt, _alignment(node)) + "\n")
+
+
+_MM_PER_PT = 25.4 / 72.27
+_BP_PER_MM = 72.0 / 25.4
+# How far each unit of fontspec's FakeBold moves each edge of a glyph's
+# ink out, over the size - measured on XeTeX's output.
+_FAKEBOLD_EDGE_EM = 0.005
+_FAKEBOLD_MAX = 12.0
+_FAKEBOLD_MIN = 0.5
+
+_FACE_CMD = {"serif": "\\latinfont ", "sans": "\\latinsans ", "mono": "\\latinmono "}
+def _printed_lines(block: Any) -> List[Dict[str, Any]]:
+    """The lines of a block as its print was read (TocAnalyzer,
+    PrintedLinesAnalyzer): a contents entry's or a paragraph's
+    metadata["printed_lines"], a heading's metadata["printed_title"]."""
+    md = getattr(block, "metadata", None) or {}
+    if isinstance(block, ContainerUnit):
+        return [md["printed_title"]] if md.get("printed_title") else []
+    return list(md.get("printed_lines") or [])
+
+
+_PAGE_W_MM, _PAGE_H_MM = 210.0, 297.0
+
+
+def _printed_extent(block: Any) -> Optional[Tuple[float, float, float, float]]:
+    """Where a block's printed lines' ink stands on its page (mm): x0, top,
+    x1, bottom - None where its print was not read."""
+    printed = _printed_lines(block)
+    if not printed:
+        return None
+    return (min(l["box"][0] for l in printed) * _PAGE_W_MM, min(l["box"][1] for l in printed) * _PAGE_H_MM,
+            max(l["box"][2] for l in printed) * _PAGE_W_MM, max(l["box"][3] for l in printed) * _PAGE_H_MM)
+
+
+def _printed_block(block: Any, target_lang: str) -> str:
+    """A block set by its printed lines (_printed_nodes) as a block in the
+    flow: as wide and tall as its ink printed, its lines where they stand
+    in it."""
+    page_w, page_h = _PAGE_W_MM, _PAGE_H_MM
+    x0, top, x1, bottom = _printed_extent(block)
+    return (
+        "\\par\\noindent\\begin{tikzpicture}\n"
+        f"\\useasboundingbox (0,0) rectangle ({x1 - x0:.2f}mm,{top - bottom:.2f}mm);\n"
+        + "".join(_printed_nodes(block, target_lang, page_w, page_h, origin=(x0, top)))
+        + "\\end{tikzpicture}\\par\n"
+    )
+
+
+def _printed_nodes(block: Any, target_lang: str, page_w: float, page_h: float,
+                   origin: Tuple[float, float] = (0.0, 0.0)) -> List[str]:
+    """Each printed line of a block as tikz nodes: its baseline and left
+    ink edge where the print's are, at the skew it was scanned at, set in
+    the face, weight, slant, size and colour read off it, as heavy as the
+    print (FakeBold); each word boxed to where and how wide it printed -
+    its face's advances and spaces are not the print's. An underline is
+    drawn where the print's runs. A translated title is set once, where
+    the title starts, at its own width. Coordinates are in mm from origin
+    (x, y down) - the page's corner on a page rebuilt where it was printed,
+    a block's own corner where the block stands in the flow."""
+    source = block.title if isinstance(block, ContainerUnit) else getattr(block, "entry_text", "")
+    translated = _translated(block, source or "", target_lang) if target_lang else source
+    title_done = False
+    out: List[str] = []
+    for line in _printed_lines(block):
+        text = line["text"]
+        fit = True
+        if line["part"] in ("title", "heading") and translated != source:
+            if title_done:
+                continue
+            text, fit, title_done = translated, False, True
+        if not text.strip():
+            continue
+        x0, _, x1, _ = line["box"]
+        x_mm, y_mm, w_mm = x0 * page_w, line["baseline"] * page_h, (x1 - x0) * page_w
+        font = _FACE_CMD.get(line["face"], "") if _is_latin_only(text) else ""
+        # each word in its own weight and slant where they were read (a
+        # bold or italic word in a regular line), else in its line's
+        pieces = (
+            [(w[0] * page_w, (w[1] - w[0]) * page_w, w[2], w[3] if len(w) > 3 else None,
+              (w[4] if len(w) > 4 else {}).get("bold", line["bold"]),
+              (w[4] if len(w) > 4 else {}).get("italic", line["italic"])) for w in line["words"]]
+            if fit and line.get("words")
+            else [(x_mm, w_mm if fit else None, text, line.get("area"), line["bold"], line["italic"])]
+        )
+        inks = [_ink_in_face(line["face"], bold, italic, t) if pw and font else None
+                for _, pw, t, _, bold, italic in pieces]
+        size_bp, outline_bp = _weighed(line, pieces, inks)
+        size = size_bp * 72.27 / 72.0
+        spread = ""
+        if outline_bp:
+            # the scan's spread of ink, which the face as cut does not have
+            spread = "\\addfontfeatures{FakeBold=%.1f}" % (outline_bp / (_FAKEBOLD_EDGE_EM * size_bp))
+        colour = "\\color[RGB]{%d,%d,%d}" % tuple(line["rgb"]) if line.get("rgb") else ""
+        skew = line.get("skew") or 0.0
+        # at the skew it was scanned at: over a long line a point or more
+        turn = -math.degrees(math.atan(skew))
+        outline_mm = outline_bp / _BP_PER_MM
+        # Word by word where the print's words were placed (their own
+        # widths and spaces are the print's, not the face's), else the
+        # line boxed to its printed width.
+        for (px, pw, piece, _, bold, italic), ink in zip(pieces, inks):
+            weight = ("\\bfseries " if bold else "") + ("\\itshape " if italic else "")
+            style = f"{colour}{font}\\fontsize{{{size:.2f}}}{{{size * 1.2:.2f}}}\\selectfont {weight}{spread}"
+            py = y_mm + skew * (px - x_mm)
+            if ink is not None and pw > 2 * outline_mm:
+                # the box widened so that its ink, not its advance, spans
+                # the print's, and set off by its first glyph's bearing
+                lead, inked, advance = ink[:3]
+                scale = (pw - 2 * outline_mm) / (inked * size_bp / _BP_PER_MM)
+                px, pw = px + outline_mm - lead * size_bp / _BP_PER_MM * scale, advance * size_bp / _BP_PER_MM * scale
+            body = f"\\resizebox{{{pw:.2f}mm}}{{\\height}}{{{_esc(piece)}}}" if pw else _esc(piece)
+            out.append(
+                f"  \\node[anchor=base west, inner sep=0pt, rotate={turn:.3f}] "
+                f"at ({px - origin[0]:.2f}mm, {origin[1] - py:.2f}mm) {{{style}{body}}};\n"
+            )
+        pen = "color={rgb,255:red,%d;green,%d;blue,%d}, " % tuple(line["rgb"]) if line.get("rgb") else ""
+        if line.get("underline"):
+            uy, thick = line["underline"]
+            fall = skew * w_mm
+            out.append(
+                f"  \\draw[{pen}line width={thick:.2f}pt] ({x_mm - origin[0]:.2f}mm, {origin[1] - uy * page_h:.2f}mm) -- "
+                f"({x_mm + w_mm - origin[0]:.2f}mm, {origin[1] - uy * page_h - fall:.2f}mm);\n"
+            )
+        # the bars over its words, where they stand (an active-low signal)
+        for bx0, bx1, by, thick in line.get("overlines") or []:
+            fall = skew * (bx1 - bx0) * page_w
+            out.append(
+                f"  \\draw[{pen}line width={thick:.2f}pt] ({bx0 * page_w - origin[0]:.2f}mm, {origin[1] - by * page_h:.2f}mm) -- "
+                f"({bx1 * page_w - origin[0]:.2f}mm, {origin[1] - by * page_h - fall:.2f}mm);\n"
+            )
+    return out
+
+
+def _weighed(line: Dict[str, Any], pieces: List[Any], inks: List[Any]) -> Tuple[float, float]:
+    """The size (pt) a printed line is set at and how far FakeBold is to
+    move its ink's edges out (pt): as far as makes its words lay as much
+    ink as the print's - a scan prints heavier than any face is cut, by
+    its spread of ink, which FakeBold reproduces all round as the spread
+    does. A glyph's ink then gains its outline times the edge's move; the
+    type is set smaller by the move, so its capitals stand as tall as the
+    print's."""
+    raw = line["size"]
+    cap = line.get("cap") or 0.7
+    known = [(piece[1], piece[3], ink) for piece, ink in zip(pieces, inks)
+             if ink is not None and piece[3] and piece[1]]
+    if not known or raw <= 0:
+        return raw, 0.0
+    outline = 0.0
+    for _ in range(3):
+        size = raw - 2.0 * outline / cap
+        laid = edge = 0.0
+        for w_mm, _, ink in known:
+            _, inked, _, area_em, outline_em = ink
+            k = max(0.1, (w_mm * _BP_PER_MM - 2.0 * outline) / (inked * size))
+            laid += area_em * size * size * k
+            edge += outline_em * size * (1.0 + k) / 2.0
+        wanted = sum(area for _, area, _ in known)
+        outline = max(0.0, (wanted - laid) / edge) if edge else 0.0
+        outline = min(outline, _FAKEBOLD_MAX * _FAKEBOLD_EDGE_EM * size)
+    size = raw - 2.0 * outline / cap
+    if outline < _FAKEBOLD_MIN * _FAKEBOLD_EDGE_EM * size:
+        return raw, 0.0
+    return size, outline
 
 
 _COLUMN_X_TOLERANCE = 0.03

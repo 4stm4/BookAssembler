@@ -13,7 +13,7 @@ the headings they name needs the heading tree: TocLinkAnalyzer (linker.py).
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
-from src.analyzers.printed import measure_line, settle_page
+from src.analyzers.printed import read_printed_lines
 from src.analyzers.source_io import resolve_source_path
 from src.analyzers.toc.layout import Entry, Line, TocRead, read_toc
 from src.analyzers.toc.rules import is_number_token
@@ -257,45 +257,12 @@ def _mark_print(
     except Exception:
         return
     try:
-        measured: List[Tuple[Any, Dict[str, Any]]] = []
-        words: Dict[int, List[Any]] = {}
-
-        def measure(owner: Any, part: str, line: Line) -> None:
-            if line.page >= source.page_count:
-                return
-            page = source[line.page]
-            pw, ph = page.rect.width, page.rect.height
-            rect = pymupdf.Rect(line.x0 * pw, line.y0 * ph, line.x1 * pw, line.y1 * ph)
-            if line.page not in words:
-                words[line.page] = page.get_text("words")
-            own = [w for w in words[line.page]
-                   if rect.x0 <= (w[0] + w[2]) / 2 <= rect.x1 and rect.y0 <= (w[1] + w[3]) / 2 <= rect.y1]
-            m = measure_line(np, pymupdf, page, rect, line.text, own)
-            if m is not None:
-                m.update({"part": part, "text": line.text, "page": line.page, "pw": pw, "ph": ph})
-                measured.append((owner, m))
-
-        for entry, e in entries:
-            for part, line in _parts(e):
-                measure(entry, part, line)
+        items = [(entry, part, line.page, (line.x0, line.y0, line.x1, line.y1), line.text)
+                 for entry, e in entries for part, line in _parts(e)]
         if toc.heading is not None:
-            measure(container, "heading", toc.heading)
-        for page_index in sorted({m["page"] for _, m in measured}):
-            settle_page([m for _, m in measured if m["page"] == page_index])
-
-        for owner, m in measured:
-            pw, ph = m["pw"], m["ph"]
-            x0, y0, x1, y1 = m["box"]
-            line = {
-                "part": m["part"], "text": m["text"], "page": m["page"],
-                "box": [x0 / pw, y0 / ph, x1 / pw, y1 / ph], "baseline": m["baseline"] / ph,
-                "skew": m["skew"],
-                "words": [[a / pw, b / pw, t, area] for a, b, t, area in m["words"]],
-                "area": m["area"], "cap": m["cap"],
-                "size": m["size"], "face": m["face"], "bold": m["bold"], "italic": m["italic"],
-                "rgb": m["rgb"],
-                "underline": [m["underline"][0] / ph, m["underline"][1]] if m["underline"] else None,
-            }
+            h = toc.heading
+            items.append((container, "heading", h.page, (h.x0, h.y0, h.x1, h.y1), h.text))
+        for owner, line in read_printed_lines(np, pymupdf, source, items):
             md = dict(owner.metadata or {})
             if owner is container:
                 md["printed_title"] = line

@@ -13,7 +13,7 @@ from src.graph.reading_graph import ReadingGraph
 from src.krm.models import ContainerUnit, KnowledgeDocument, ParagraphBlock, UnknownBlock
 from src.graph.knowledge_graph import EntityType
 
-from src.analyzers.heading.rules import _collect_containers, _detect_heading_threshold, _heading_level, _is_heading, _is_monospace
+from src.analyzers.heading.rules import _collect_containers, _detect_heading_threshold, _heading_level, _is_heading, _is_monospace, _is_printed_heading, _printed, _printed_under
 
 class HeadingAnalyzer(BaseAnalyzer):
     """
@@ -106,6 +106,8 @@ class HeadingAnalyzer(BaseAnalyzer):
 
         root.children = []
         stack: List[ContainerUnit] = [root]
+        live = [b for b in flat if not b.is_tombstoned]
+        position = {id(b): k for k, b in enumerate(live)}
 
         for block in flat:
             if block.is_tombstoned:
@@ -115,7 +117,9 @@ class HeadingAnalyzer(BaseAnalyzer):
                 # ContainerUnit at the same id — resurrecting the node and
                 # tripping the No Silent Deletions guard (RFC 0001 §2.4).
                 stack[-1].children.append(block)
-            elif _is_heading(block, threshold):
+            elif _is_heading(block, threshold) or (
+                _printed(block) and _is_printed_heading(block, _printed_under(live, position[id(block)] + 1))
+            ):
                 text = block_text(block)
                 level = _heading_level(font_size(block, default=12.0), threshold)
                 while len(stack) > 1 and stack[-1].level >= level:
@@ -131,6 +135,10 @@ class HeadingAnalyzer(BaseAnalyzer):
                 )
                 heading.id = block.id  # RFC 0001 §2.3: identity preserved
                 heading.provenance_info = block.provenance_info
+                printed = (block.metadata or {}).get("printed_lines") or []
+                if len(printed) == 1:
+                    # set as printed, like a contents heading
+                    heading.metadata["printed_title"] = {**printed[0], "part": "heading"}
                 stack[-1].children.append(heading)
                 stack.append(heading)
             else:
