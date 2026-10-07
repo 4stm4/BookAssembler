@@ -742,7 +742,7 @@ def _settled_skews(lines: List[Dict[str, Any]]) -> List[float]:
     its nearest neighbours' in its column (_SKEW_NEAR) - read alone, from a
     few stretches of it, one came out level where all its column fell
     0.004. A short line's skew is its few glyphs' own: it takes the skew of
-    the nearest long line, scanned with it."""
+    the nearest long line in its column, scanned with it."""
     long_lines = [l for l in lines if l["box"][2] - l["box"][0] >= _SKEW_MIN_PT]
 
     def column_of(line) -> List[Dict[str, Any]]:
@@ -752,13 +752,18 @@ def _settled_skews(lines: List[Dict[str, Any]]) -> List[float]:
                                                                  l["box"][2] - l["box"][0])]
         return sorted(mates, key=lambda l: abs(l["baseline"] - line["baseline"]))[:_SKEW_NEAR]
 
+    def apart(line, other) -> Tuple[bool, float]:
+        beside = other["box"][2] <= line["box"][0] or line["box"][2] <= other["box"][0]
+        return beside, abs(other["baseline"] - line["baseline"])
+
     settled = {id(l): statistics.median(m["skew"] for m in column_of(l)) for l in long_lines}
     skews = []
     for line in lines:
         if line["box"][2] - line["box"][0] >= _SKEW_MIN_PT:
             skews.append(settled[id(line)])
             continue
-        near = min(long_lines, key=lambda l: abs(l["baseline"] - line["baseline"]), default=None)
+        # the nearest long line in its own column
+        near = min(long_lines, key=lambda l: apart(line, l), default=None)
         skews.append(settled[id(near)] if near is not None else 0.0)
     return skews
 
