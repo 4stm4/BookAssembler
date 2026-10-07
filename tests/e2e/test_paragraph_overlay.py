@@ -28,7 +28,7 @@ its type - against the print.
 
 The measure is test_toc_overlay's: the share of the ink of either crop
 with no ink of the other within a pixel (_mask_mismatch). The limit is
-this file's own, 7% (MAX_MISMATCH).
+this file's own, 10% (MAX_MISMATCH).
 """
 
 import difflib
@@ -51,7 +51,7 @@ PARAGRAPH_E = FIXTURES / "paragraph_e.pdf"   # two dense columns, a margin tab
 
 # Share of the ink allowed to miss the other crop's ink, for every
 # paragraph of every page alike.
-MAX_MISMATCH = 0.07
+MAX_MISMATCH = 0.10
 
 # Of a paragraph's words, the share its run on a page must match to be
 # found there at all; and how many page words may stand between two

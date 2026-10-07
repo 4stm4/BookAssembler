@@ -72,16 +72,18 @@ class DiagramDetectorAnalyzer(BaseAnalyzer):
             return 0
 
         caption_text = ""
+        caption_box: Optional[Tuple[float, float, float, float]] = None
         labels: List[Tuple[ParagraphBlock, ContainerUnit, str, Tuple[float, float, float, float]]] = []
+        prose: List[Tuple[float, float, float, float]] = []
         for block, parent in items:
             txt = _text_of(block)
             if not txt:
                 continue
+            bb = _bbox_of(block)
             # A real caption is short ("Figure 2-11 Data-related addressing modes"),
             # not an in-text reference ("Figure 2-5 shows how a program's code …").
             if not caption_text and _RE_FIGURE_CAPTION.match(txt) and len(txt.split()) <= 10:
-                caption_text = txt
-            bb = _bbox_of(block)
+                caption_text, caption_box = txt, bb
             if not bb:
                 continue
             width = bb[2] - bb[0]
@@ -91,10 +93,21 @@ class DiagramDetectorAnalyzer(BaseAnalyzer):
             is_label = (len(txt.split()) <= MAX_LABEL_WORDS and width <= MAX_LABEL_WIDTH) or is_sublabel
             if is_label:
                 labels.append((block, parent, txt, bb))
+            elif txt != caption_text:
+                prose.append(bb)
 
         # A diagram region needs a real Figure caption and a cluster of narrow labels.
         if not caption_text or len(labels) < MIN_LABELS:
             return 0
+        # Its labels stand by its caption: over it up to the body text over
+        # it, or under it down to the body text under it - not every short
+        # line of the page. Taken from the whole page, a book's worked
+        # examples ("or \"377\" in octal.", "010 001 001") went into the
+        # figure over them and out of the text.
+        if caption_box is not None:
+            labels = _by_caption(labels, prose, caption_box)
+            if len(labels) < MIN_LABELS:
+                return 0
 
         # Region = bbox of all clustered labels, padded (extra on the right for
         # arrows/boxes that extend beyond the text labels).
@@ -136,3 +149,15 @@ class DiagramDetectorAnalyzer(BaseAnalyzer):
             block.metadata["tombstone_reason"] = f"absorbed_into_diagram:{diagram.id}"
 
         return 1
+
+
+def _by_caption(labels: List[Any], prose: List[Tuple[float, float, float, float]],
+                caption: Tuple[float, float, float, float]) -> List[Any]:
+    """The labels a figure's caption has by it: those over the caption and
+    under the body text nearest over it, or else those under the caption
+    and over the body text nearest under it - the side with more."""
+    top = max((b[3] for b in prose if b[3] <= caption[1]), default=0.0)
+    bottom = min((b[1] for b in prose if b[1] >= caption[3]), default=1.0)
+    over = [l for l in labels if l[3][1] >= top and l[3][3] <= caption[3]]
+    under = [l for l in labels if l[3][1] >= caption[1] and l[3][3] <= bottom]
+    return over if len(over) >= len(under) else under

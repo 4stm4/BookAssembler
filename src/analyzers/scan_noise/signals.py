@@ -27,6 +27,11 @@ _LATIN_VOWELS = frozenset("aeiouy")
 _CYRILLIC_VOWELS = frozenset("аеёиоуыэюяіїєў")
 _JUDGEABLE_RE = re.compile(r"^(?:[A-Za-z]+|[Ѐ-ӿ]+)$")
 
+# A formula's operators and brackets are not debris punctuation: the
+# signetics8080 equation "T - (I K) - 1 + CI." (its arrow read as a dash)
+# has more of them than letters, and was dropped from its page as a smudge.
+OPERATORS = frozenset("+-=<>()[]*/←→×÷±≤≥")
+
 # Too little to judge: a part number ("UM008011-0816"), a folio, a
 # unit. Debris is recognised by what its letters fail to form; with fewer
 # letters than this there is nothing to go on.

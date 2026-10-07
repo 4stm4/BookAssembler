@@ -89,6 +89,9 @@ class CaptionAnalyzer(BaseAnalyzer):
                 visual_layout=child.visual_layout,
                 extraction_confidence=child.extraction_confidence,
                 classification_confidence=0.90,
+                # what was read of it before - its lines as printed on a
+                # scanned page (PrintedLinesAnalyzer) - is still its own
+                metadata=dict(child.metadata or {}),
             )
             caption.id = child.id  # RFC 0001 §2.3: reclassification keeps identity
             caption.update_confidence()

@@ -252,7 +252,7 @@ def build_latex(
 
 def render_node(
     body: List[str], node: Any, target_lang: str = "",
-    depth: int = 0, recurse: bool = True,
+    depth: int = 0, recurse: bool = True, column_left: Optional[float] = None,
 ) -> None:
     """Render one KRM node into `body` as LaTeX fragments.
 
@@ -264,6 +264,10 @@ def render_node(
     into children — the page-aware assembler places those children itself, on
     the pages their bbox says they belong to. Bibliography containers are always
     rendered whole: `thebibliography` is one atomic environment.
+
+    `column_left` is where (mm) the column a block set as printed stands in
+    starts on its page: the block stands in from the flow's edge as far as
+    it printed in from it.
     """
     def render(n: Any, d: int = 0) -> None:
         render_node(body, n, target_lang, d, recurse=True)
@@ -292,7 +296,7 @@ def render_node(
         if node.title and _printed_lines(node):
             # A heading read off a scanned page's print (HeadingAnalyzer)
             # is set as printed, as its paragraphs are.
-            body.append(_printed_block(node, target_lang))
+            body.append(_printed_block(node, target_lang, column_left))
         elif node.title:
             cmd = _heading_cmd(node.level)
             body.append(f"\\{cmd}{{{_esc(_translated(node, node.title, target_lang))}}}\n")
@@ -312,7 +316,11 @@ def render_node(
         body.append("\\begin{verbatim}\n" + code + "\n\\end{verbatim}\n")
     elif isinstance(node, CaptionBlock):
         cap = _esc(_translated(node, node.caption_text or "", target_lang))
-        if cap:
+        if cap and _printed_lines(node) and _translated(node, node.caption_text, target_lang) == node.caption_text:
+            # A caption of a scanned page is set by its printed lines, as
+            # its paragraphs are: where, how large, in what type it printed
+            body.append(_printed_block(node, target_lang, column_left))
+        elif cap:
             # Position and typography, not just the words: a caption sits
             # centered under its table/figure in the source, in whatever
             # font the source actually printed it in (kept on
@@ -350,7 +358,7 @@ def render_node(
     elif isinstance(node, FormulaBlock) and (node.metadata or {}).get("needs_vision_ocr") and _printed_lines(node):
         # A formula of a scanned page OCR misread, set as printed - its
         # print's own ink - until a vision agent reads it
-        body.append(_printed_block(node, target_lang))
+        body.append(_printed_block(node, target_lang, column_left))
     elif isinstance(node, FormulaBlock):
         # Prefer real LaTeX if a vision agent replaced the fallback. Model
         # output goes in unescaped, so filter file/IO primitives first.
@@ -391,7 +399,7 @@ def render_node(
     ):
         # A list of a scanned page is set by its items' printed lines, as
         # its paragraphs are; translated, it is set as a list
-        body.append(_printed_block(node, target_lang))
+        body.append(_printed_block(node, target_lang, column_left))
     elif isinstance(node, ListBlock):
         env = "enumerate" if node.list_style in ("ordered", "alpha", "roman") else "itemize"
         opts = ""
@@ -452,7 +460,7 @@ def render_node(
             # (PrintedLinesAnalyzer): broken anew, its lines came back
             # broken elsewhere, in house type. Translated, it flows as text
             # does.
-            body.append(_printed_block(node, target_lang))
+            body.append(_printed_block(node, target_lang, column_left))
         elif (node.metadata or {}).get("semantic_decorator") in (
             "theorem", "proof", "example", "remark", "definition",
         ):
@@ -508,26 +516,41 @@ def _printed_lines(block: Any) -> List[Dict[str, Any]]:
 _PAGE_W_MM, _PAGE_H_MM = 210.0, 297.0
 
 
+def _printed_page_mm(printed: List[Dict[str, Any]]) -> Tuple[float, float]:
+    """The size (mm) of the page printed lines were read off: a scan is
+    rarely A4, and drawn on A4's measure a 403pt-wide book's words stood
+    half as far apart again as they printed, its type as it was."""
+    size = next((l["page_pt"] for l in printed if l.get("page_pt")), None)
+    if not size:
+        return _PAGE_W_MM, _PAGE_H_MM
+    return size[0] * 25.4 / 72.0, size[1] * 25.4 / 72.0
+
+
 def _printed_extent(block: Any) -> Optional[Tuple[float, float, float, float]]:
     """Where a block's printed lines' ink stands on its page (mm): x0, top,
     x1, bottom - None where its print was not read."""
     printed = _printed_lines(block)
     if not printed:
         return None
-    return (min(l["box"][0] for l in printed) * _PAGE_W_MM, min(l["box"][1] for l in printed) * _PAGE_H_MM,
-            max(l["box"][2] for l in printed) * _PAGE_W_MM, max(l["box"][3] for l in printed) * _PAGE_H_MM)
+    page_w, page_h = _printed_page_mm(printed)
+    return (min(l["box"][0] for l in printed) * page_w, min(l["box"][1] for l in printed) * page_h,
+            max(l["box"][2] for l in printed) * page_w, max(l["box"][3] for l in printed) * page_h)
 
 
-def _printed_block(block: Any, target_lang: str) -> str:
+def _printed_block(block: Any, target_lang: str, column_left: Optional[float] = None) -> str:
     """A block set by its printed lines (_printed_nodes) as a block in the
     flow: as wide and tall as its ink printed, its lines where they stand
-    in it."""
-    page_w, page_h = _PAGE_W_MM, _PAGE_H_MM
+    in it, on its own page's measure - and as far in from the flow's edge
+    as it printed in from its column's (column_left, mm): a paragraph of a
+    line alone keeps its first line's indent, a number set under its
+    example stands under it."""
+    page_w, page_h = _printed_page_mm(_printed_lines(block))
     x0, top, x1, bottom = _printed_extent(block)
+    left = x0 if column_left is None else min(column_left, x0)
     return (
         "\\par\\noindent\\begin{tikzpicture}\n"
-        f"\\useasboundingbox (0,0) rectangle ({x1 - x0:.2f}mm,{top - bottom:.2f}mm);\n"
-        + "".join(_printed_nodes(block, target_lang, page_w, page_h, origin=(x0, top)))
+        f"\\useasboundingbox (0,0) rectangle ({x1 - left:.2f}mm,{top - bottom:.2f}mm);\n"
+        + "".join(_printed_nodes(block, target_lang, page_w, page_h, origin=(left, top)))
         + "\\end{tikzpicture}\\par\n"
     )
 
@@ -632,7 +655,11 @@ def _printed_nodes(block: Any, target_lang: str, page_w: float, page_h: float,
                 f"({x_mm + w_mm - origin[0]:.2f}mm, {origin[1] - uy * page_h - fall:.2f}mm);\n"
             )
         # the bars over its words, where they stand (an active-low signal)
+        # - over a word drawn from its print's ink, in that ink already
+        scans = [(px, px + pw) for px, pw, _, _, _, _, scan, _ in pieces if scan]
         for bx0, bx1, by, thick in line.get("overlines") or []:
+            if any(a < bx1 * page_w and bx0 * page_w < b for a, b in scans):
+                continue
             fall = skew * (bx1 - bx0) * page_w
             out.append(
                 f"  \\draw[{pen}line width={thick:.2f}pt] ({bx0 * page_w - origin[0]:.2f}mm, {origin[1] - by * page_h:.2f}mm) -- "
@@ -2340,13 +2367,16 @@ def _render_table(table: TableBlock) -> str:
     if col_width_cm is None and col_min_x0 is not None and col_max_x1 is not None:
         _gap = 2 * _tabcolsep_pt / (_A4_FULL_WIDTH_CM * _PT_PER_CM)
         _starts = [_text_start(i) for i in range(ncols)]
-        fractions = [
-            (col_max_x1[i] - _starts[i]) if i == ncols - 1
-            else (_starts[i + 1] - _starts[i] - (0.0 if i + 1 in _leader_joins else _gap))
-            if all(v is not None for v in (_starts[i], col_max_x1[i], _starts[min(i + 1, ncols - 1)]))
-            else None
-            for i in range(ncols)
-        ]
+
+        def _fraction(i: int) -> Optional[float]:
+            # a column with no text measured has no width to take
+            if any(v is None for v in (_starts[i], col_max_x1[i], _starts[min(i + 1, ncols - 1)])):
+                return None
+            if i == ncols - 1:
+                return col_max_x1[i] - _starts[i]
+            return _starts[i + 1] - _starts[i] - (0.0 if i + 1 in _leader_joins else _gap)
+
+        fractions = [_fraction(i) for i in range(ncols)]
         if all(f is not None and f > 0 for f in fractions):
             col_width_cm = [f * _A4_FULL_WIDTH_CM for f in fractions]
             # A right-set column's values end at their usual right edge,

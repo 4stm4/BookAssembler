@@ -188,9 +188,17 @@ def _reading_order(blocks: List[Any], page: Optional[int] = None) -> List[Any]:
     return head + out + tail
 
 
+# A page's columns start together, at the top of their band, within this
+# share of the page's height.
+_COLUMN_TOP = 0.02
+
+
 def _by_column(band: List[Any]) -> List[Any]:
     """Blocks side by side read a column at a time: those whose spans across
-    overlap, chained, are one column."""
+    overlap, chained, are one column. Columns start together at the top of
+    their band; blocks side by side that do not are a figure's pieces -
+    the paragraph fixture C's label table beside the second of two
+    registers, a register over both - read top to bottom."""
     columns: List[List[Any]] = []
     spans: List[List[float]] = []
     for block in sorted(band, key=lambda b: _box(b).x0):
@@ -201,6 +209,9 @@ def _by_column(band: List[Any]) -> List[Any]:
         else:
             columns.append([block])
             spans.append([bb.x0, bb.x1])
+    tops = [min(_box(b).y0 for b in column) for column in columns]
+    if len(columns) > 1 and max(tops) - min(tops) > _COLUMN_TOP:
+        return sorted(band, key=lambda b: (_box(b).y0, _box(b).x0))
     return [b for column in columns for b in sorted(column, key=lambda b: (_box(b).y0, _box(b).x0))]
 
 
@@ -290,16 +301,45 @@ def _render_reflow(slot: PageSlot, target_lang: str) -> str:
     """
     body: List[str] = []
     above: Optional[Tuple[float, float, float, float]] = None
-    for block in slot.blocks:
-        here = _printed_extent(block)
+    extents = [_printed_extent(block) for block in slot.blocks]
+    lefts = _column_lefts(extents)
+    for block, here, left in zip(slot.blocks, extents, lefts):
         if here and above and here[0] < above[2] and above[0] < here[2] and here[1] > above[3]:
             # Two blocks set as printed, one under the other in a column,
             # stand as far apart as the print left them - not TeX's line
             # skip, which set a paragraph against the heading over it.
             body.append("\\par\\nointerlineskip\\vspace{%.2fmm}\n" % (here[1] - above[3]))
-        render_node(body, block, target_lang, recurse=False)
+        render_node(body, block, target_lang, recurse=False, column_left=left)
         above = here
     return "".join(body)
+
+
+def _column_lefts(extents: List[Optional[Tuple[float, float, float, float]]]) -> List[Optional[float]]:
+    """Where (mm) the column each block set as printed stands in starts -
+    extents are their inks' x0, top, x1, bottom, None for a block not set
+    as printed: the leftmost ink of the blocks over and under it, those
+    whose spans across overlap its own. A block reaching across into a
+    column beside them - a heading over both columns - has no say in where
+    theirs starts; its own starts where the leftmost it reaches over does.
+    Set from the flow's edge, a paragraph of a line alone lost its first
+    line's indent, a number set under its example stood under the margin."""
+    def across(a: Tuple[float, ...], b: Tuple[float, ...]) -> bool:
+        return a[0] < b[2] and b[0] < a[2]
+
+    def beside(a: Tuple[float, ...], b: Tuple[float, ...]) -> bool:
+        return not across(a, b) and a[1] < b[3] and b[1] < a[3]
+
+    placed = [e for e in extents if e]
+    lefts: List[Optional[float]] = []
+    for e in extents:
+        if not e:
+            lefts.append(None)
+            continue
+        column = [f for f in placed if across(e, f)]
+        aside = [g for f in column for g in placed if beside(f, g)]
+        own = [f for f in column if not any(across(f, g) for g in aside)]
+        lefts.append(min(f[0] for f in (own if e in own else column)))
+    return lefts
 
 
 def _font_size_cmd(style: Any) -> str:

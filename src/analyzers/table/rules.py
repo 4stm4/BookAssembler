@@ -1241,6 +1241,14 @@ def _header_row_for_block(block: Any) -> Optional[List["TableCell"]]:
         return None
     page_idx = _page_idx(block)
     row = sorted(sub_rows[0], key=lambda item: item[1].x0 if item[1] is not None else 0.0)
+    # A row's cells stand side by side - an OCR box may reach a little into
+    # the next. Two lines one over the other that touch - signetics8080's
+    # "The move is completed with the microin-" over "struction fields:",
+    # a sentence over a list - stand across one another: no row.
+    boxes = [b for _, b, _ in row if b is not None]
+    if any(min(a.x1, b.x1) - max(a.x0, b.x0) > 0.5 * min(a.x1 - a.x0, b.x1 - b.x0)
+           for k, a in enumerate(boxes) for b in boxes[k + 1:]):
+        return None
     return [_make_cell(t, b, s, page_idx) for t, b, s in row]
 
 

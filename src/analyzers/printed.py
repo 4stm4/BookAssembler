@@ -18,6 +18,8 @@ in that face.
 """
 
 import functools
+import re
+import statistics
 import subprocess
 from typing import Any, Dict, List, Optional
 
@@ -53,6 +55,9 @@ STROKE_EM = {
 _FACE_MIN_LETTERS = 6     # a line this long votes for its page's face
 _WEIGHT_MIN_LETTERS = 4   # a line this long says what the page's regular weight is
 _SKEW_MIN_PT = 80.0       # a line this wide says how its stretch of the page is skewed
+_SKEW_PART = 3.0          # of a line's ink height, how wide a stretch its skew is read from the baseline of
+_SKEW_INKED = 0.5         # of a line's ink across, the least a stretch holds to have a baseline
+_SKEW_NEAR = 11           # the lines of a column, itself among them, a line's skew is the middle of
 _SAME_SIZE = 0.3          # within this of its kind's usual size, a line is set at it
 _SHORT_TOKEN = 3          # characters in a token too short to measure its size by
 _SAME_ROW = 0.5           # of the lower box's height two source boxes share on one row
@@ -70,8 +75,7 @@ _INK_LEVEL = 160          # 0-255 grey below which a pixel is ink, for face like
 _GLYPH_CONTRAST = 120     # summed RGB difference from what a glyph is printed on
 _RULE_SPAN = 0.9          # a row this full of ink is a rule crossing the line
 _UNDERLINE_SPAN = 0.8     # a rule under the line covering this much of it underlines it
-_BASELINE_DENSITY = 0.3   # a row this dense against the line's densest is above the baseline
-_BASELINE_FALL = 0.6      # the row under the baseline holds less than this of its ink
+_BASELINE_BODY = 0.5      # a row this dense against the line's densest is in its body, over its baseline
 # of a line's box height: the widest gap between two letters of a word -
 # the paragraph fixture D's "c" and "h" of "each" stand 0.83pt apart at 8pt
 _LETTER_GAP = 0.15
@@ -79,6 +83,8 @@ _BODY_TOP = 0.3           # of its capitals' height under their top, a line's lo
 _HEAD_DENSITY = 0.08      # a row this dense against the line's densest is its capitals', not a stray descender
 _COLOUR_SPREAD = 80       # channels this far apart: printed in a colour, not black
 _MISREAD = 0.5            # of a word's and its set text's ink, the most one misses of the other
+_LOWERED = 0.15           # of a line's capitals' height, how far under its baseline a letter set lower reaches
+_DESCENDING = set("gjpqy()[]{},;|/_")  # what reaches as far under a baseline, set in the line
 # - and of a word of signs alone, no letter or figure in it: OCR takes one
 # sign for another most of all, an arrow for a dash ("(SP-2) <- IXL" read
 # "(SP—2) — IXz", the dash missing 0.46 of the arrow), and no reader reads
@@ -89,6 +95,9 @@ _OVERLINE_DIP = 0.1       # of it: how far under its top - an overline is its to
 _OVERLINE_MIN = 0.4       # of a line's ink height: the shortest overline, over one capital
 _OVERLINE_THICK = 0.15    # of a line's ink height: the thickest
 _OVERLINE_CLEAR = 0.2     # of its length, the most ink a row over an overline holds (a descender through it)
+_TALL = 0.1               # of a line's ink height, how far over most of its letters' tops its capitals' and ascenders' stand
+_OVER_TOPS = 0.05         # of it, how far over their tops a bar's middle stands, a capital's own top short of it
+_NAME_COVER = 0.34        # of a name's width, more than an overline over it reaches over
 _ZOOM = 6.0
 
 
@@ -203,21 +212,13 @@ def _own_rows(np, glyphs, run, rect, clip):
 
 
 def _foot(np, band) -> int:
-    """A line's baseline row: down from its densest row, the first its ink
-    falls away under by _BASELINE_FALL - from the body of the line to its
-    descenders. Neither the last row of some density nor the steepest fall:
-    a typewriter's heavy "pp" fill the rows under "Appendix"'s baseline as
-    densely, and their ends fall away as steeply."""
-    # down from its densest row, the first where the ink falls away sharply
-    # for good - nothing under it as dense again: figures narrow halfway
-    # down ("12, 13") and fill out again at their feet
-    for r in range(int(np.argmax(band)), len(band)):
-        rest = band[r + 1:].max() if r + 1 < len(band) else 0.0
-        if band[r] >= _BASELINE_DENSITY * band.max() and rest < _BASELINE_FALL * band[r]:
-            return r
-    below = np.append(band[1:], 0)
-    rows = np.flatnonzero(band >= _BASELINE_DENSITY * band.max())
-    return int(rows[np.argmax(band[rows] - below[rows])])
+    """A line's baseline row: the last its ink fills to _BASELINE_BODY of
+    its densest row or more - the bottom of its body, a scan's blur half
+    through its fall into the descenders. Down from its densest row to the
+    first the ink falls away under for good, a line of many "p"s and "y"s
+    - their tails as dense under it as a fraction of its body - set its
+    baseline a point into them."""
+    return int(np.flatnonzero(band >= _BASELINE_BODY * band.max())[-1])
 
 
 def _foot_and_head(np, band):
@@ -236,21 +237,33 @@ def _foot_and_head(np, band):
     return foot, head
 
 
-def _skew(np, region) -> float:
-    """How far a line's baseline falls over its width (dy/dx), from the
-    baseline of each of its thirds."""
+def _stretch_feet(np, region) -> List[Any]:
+    """The baseline row (_foot) of each stretch of a line, _SKEW_PART line
+    heights wide, as (its middle column, the row): a stretch of a word
+    space, a dash or a comma has none."""
     h, w = region.shape
+    part = max(2, int(_SKEW_PART * h))
+    density = region.mean(axis=0)
     feet = []
-    for k in range(3):
-        a, b = k * w // 3, (k + 1) * w // 3
-        if b - a < 2:
+    for a in range(0, w - part // 2, part):
+        if density[a:a + part].mean() < _SKEW_INKED * density.mean():
             continue
-        foot, _ = _foot_and_head(np, region[:, a:b].mean(axis=1))
-        if foot is not None:
-            feet.append(((a + b) / 2.0, float(foot)))
-    if len(feet) < 2:
-        return 0.0
-    return float(np.polyfit([f[0] for f in feet], [f[1] for f in feet], 1)[0])
+        feet.append((a + min(part, w - a) / 2.0, float(_foot(np, region[:, a:a + part].mean(axis=1)))))
+    return feet
+
+
+def _skew(np, region) -> float:
+    """How far a line's baseline falls over its width (dy/dx): the middle
+    of the falls between the baselines of its stretches (_stretch_feet) a
+    third of the line or more apart. A scan's pixel, a third of a point,
+    puts a stretch's foot a row or two off: read from the feet of its
+    thirds alone, a column's lines came out skewed from 0 to 0.006 where
+    all fell 0.004."""
+    feet = _stretch_feet(np, region)
+    w = region.shape[1]
+    falls = [(f1 - f0) / (x1 - x0) for k, (x0, f0) in enumerate(feet) for x1, f1 in feet[k + 1:]
+             if x1 - x0 >= w / 3.0]
+    return float(np.median(falls)) if falls else 0.0
 
 
 def _lift(skew: float, width: int) -> int:
@@ -275,30 +288,32 @@ def _straightened(np, region, skew: float):
     return out
 
 
-def _overlines(np, glyphs, top: int, bottom: int, left: int, right: int, head: int, fall: int = 0) -> List[Any]:
+def _overlines(np, glyphs, top: int, bottom: int, left: int, right: int, head: int,
+               fall: int = 0) -> List[Any]:
     """Rules drawn over a line's letters - a signal active low, "RAS" with
     a bar over it - as (first row, last row, first column, end column): a
-    few thin rows inked along in one run, all but clear over it, standing
-    over the tops of the line's letters - those read beside the bars, a
-    scan's blur joining a bar to the letters under it. A capital's own bar
-    ("T", "E") stands at their tops, its stem under it. They are looked
-    for about head, the row the line's capitals start at at its left edge
-    - the line's first inked row can be a descender's tip from the line
-    above - and as far further as the line falls (fall, rows) over its
-    width."""
+    few thin rows inked along in one run, all but clear over it and joined
+    to nothing over it (the bottom of a letter of the line above is),
+    standing clear of the letters under it, where a capital's own top runs
+    on down into its letter (_runs_on) - or, a scan's blur joining it to
+    them, standing above the tops of the line's letters read beside the
+    bars, the line stood straight. They are looked for about head, the row
+    the line's capitals start at at its left edge - the line's first inked
+    row can be a descender's tip from the line above - and as far further
+    as the line falls (fall, rows) over its width."""
     h = bottom - top + 1
     rows = glyphs.shape[0]
     thick = max(1, int(round(_OVERLINE_THICK * h)))
     min_len = max(3, int(_OVERLINE_MIN * h))
     bars: List[Any] = []
-    taken = np.zeros(glyphs.shape, dtype=bool)
+    seen = np.zeros(glyphs.shape, dtype=bool)
     lo_row = head - int(_OVERLINE_REACH * h) + min(0, fall)
     hi_row = head + int(_OVERLINE_DIP * h) + max(0, fall)
     for r in range(max(0, lo_row), min(rows, hi_row + 1)):
         line = np.concatenate(([False], glyphs[r, left:right], [False])).astype(np.int8)
         edges = np.flatnonzero(np.diff(line))
         for a, b in zip(edges[::2] + left, edges[1::2] + left):
-            if b - a < min_len or taken[r, a:b].any():
+            if b - a < min_len or seen[r, a:b].any():
                 continue
             end = r
             while end + 1 < rows and glyphs[end + 1, a:b].mean() >= 0.8:
@@ -307,19 +322,123 @@ def _overlines(np, glyphs, top: int, bottom: int, left: int, right: int, head: i
             # above's letters has their sides over it
             above = range(max(0, r - 1 - thick), r)
             if end + 1 - r <= thick and any(glyphs[q, a:b].mean() <= _OVERLINE_CLEAR for q in above):
-                bars.append((r, end, int(a), int(b)))
+                band = glyphs[:, left:right]
+                # the bottom of a letter of the line above runs on up
+                if _runs_on(np, band[::-1], rows - 1 - end, rows - 1 - r, a - left, b - left, thick):
+                    continue
+                apart = not _runs_on(np, band, r, end, a - left, b - left, thick)
+                bars.append((r, end, int(a), int(b), apart))
                 # its fainter rows under it are the same bar
-                taken[r:end + 2 + thick, a:b] = True
+                seen[r:end + 2 + thick, a:b] = True
     if not bars:
         return []
-    # the tops of the line's letters, read where no bar stands
-    rest = glyphs[:, left:right].copy()
-    for _, _, a, b in bars:
+    # the tops of the line's letters, read where no bar stands, the line
+    # stood straight - askew, a falling line's letters at its left stand
+    # over a bar at its right: where its capitals and ascenders stand, the
+    # middle of the tops of its columns standing over most (_TALL) - most
+    # stand only as high as its lowercase; with none, where most stand
+    rest = glyphs[top:bottom + 1, left:right].copy()
+    for _, _, a, b, _ in bars:
         rest[:, a - left:b - left] = False
-    density = rest[top:bottom + 1].sum(axis=1)
-    heads = np.flatnonzero(density >= _HEAD_DENSITY * max(1, density.max()))
-    tops = top + int(heads[0]) if len(heads) else top
-    return [bar for bar in bars if bar[1] <= tops]
+    width = max(1, right - left)
+    skew = fall / width
+    straight = _straightened(np, rest, skew)
+    heads = np.argmax(straight[:, straight.any(axis=0)], axis=0)
+    tops: Optional[float] = None
+    if len(heads):
+        most = float(np.median(heads))
+        tall = heads[heads < most - _TALL * h]
+        tops = float(np.median(tall)) if len(tall) >= thick else most
+
+    def over_tops(r: int, end: int, a: int, b: int) -> bool:
+        # its middle row well over them (_OVER_TOPS) - a scan's blur
+        # thickens a bar down into them, and a capital's own top hangs
+        # from them; nothing beside - barred words alone, or figures alone
+        # ("3 7 7") - and only a bar clear of what is under it stands over
+        upright = (r + end) / 2.0 - top + _lift(skew, width) - int(round(skew * ((a + b) / 2 - left)))
+        return tops is not None and upright < tops - _OVER_TOPS * h
+
+    accepted = sorted(((r, end, a, b) for r, end, a, b, apart in bars if apart or over_tops(r, end, a, b)),
+                      key=lambda bar: bar[2])
+    # a bar the scan broke - its pieces on the same rows (a falling line's
+    # bar falls along it), a gap of a stroke or two between - is one bar
+    joined: List[Any] = []
+    for r, end, a, b in accepted:
+        if joined and a - joined[-1][3] <= 2 * thick and abs(r - joined[-1][0]) <= thick:
+            r0, e0, a0, b0 = joined[-1]
+            joined[-1] = (min(r0, r), max(e0, end), a0, max(b0, b))
+        else:
+            joined.append((r, end, a, b))
+    return joined
+
+
+def _over_names(a: int, b: int, words: List[Any]) -> Optional[Any]:
+    """The names a bar from column a to b stands over - words (first
+    column, end column, text) under it - and so the columns it spans: a
+    bar negates a signal's name, all of it ("RAS", "W", the "RAS" of
+    "RAS-only"), and where a faint scan kept only part of it, it reaches
+    over more than a part of the name (_NAME_COVER) and is drawn over all
+    of it. None where it stands over no name: a capital's top a faint scan
+    tore off its letter stands over a letter of a word (the "R" of
+    "Repeat"), or over a figure ("6.")."""
+    span = None
+    for x0, x1, text in words:
+        if not text or x1 <= a or x0 >= b:
+            continue
+        for run in re.finditer(r"[^\W_]+", text):
+            # its letters taken as wide as one another
+            s = x0 + (x1 - x0) * run.start() / len(text)
+            e = x0 + (x1 - x0) * run.end() / len(text)
+            if min(e, b) - max(s, a) > _NAME_COVER * (e - s) and any(ch.isalpha() for ch in run.group()):
+                span = (min(a, s, span[0] if span else a), max(b, e, span[1] if span else b))
+    return span
+
+
+def _joined(np, ink, row: int):
+    """The ink joined, a pixel to the next, to the ink of one of its rows,
+    as a mask of ink's shape."""
+    grown = np.zeros_like(ink)
+    if row >= ink.shape[0]:
+        return grown
+    grown[row] = ink[row]
+    while True:
+        spread = grown.copy()
+        spread[1:] |= grown[:-1]
+        spread[:-1] |= grown[1:]
+        wide = spread.copy()
+        wide[:, 1:] |= spread[:, :-1]
+        wide[:, :-1] |= spread[:, 1:]
+        wide &= ink
+        if (wide == grown).all():
+            return grown
+        grown = wide
+
+
+def _runs_on(np, glyphs, r: int, end: int, a: int, b: int, thick: int) -> bool:
+    """Whether the ink of a run (rows r to end, columns a to b) runs on down
+    into a letter - joined, a pixel to the next, to ink more than thick
+    rows under it, within twice thick columns to either side: a capital's
+    own top ("T"'s stem, an "O"'s or a "3"'s curve on down), or a bar the
+    blur joins to the letters under it. Turned upside down (glyphs[::-1]),
+    whether it runs on up: the bottom of a letter of the line above."""
+    rows, cols = glyphs.shape
+    lo, hi, last = max(0, a - 2 * thick), min(cols, b + 2 * thick), min(rows - 1, end + 1 + thick)
+    window = glyphs[r:last + 1, lo:hi]
+    seen = np.zeros_like(window)
+    seen[:end + 1 - r, a - lo:b - lo] = window[:end + 1 - r, a - lo:b - lo]
+    while True:
+        grown = seen.copy()
+        grown[1:] |= seen[:-1]
+        grown[:-1] |= seen[1:]
+        spread = grown.copy()
+        spread[:, 1:] |= grown[:, :-1]
+        spread[:, :-1] |= grown[:, 1:]
+        spread &= window
+        if spread[-1].any():
+            return True
+        if (spread == seen).all():
+            return False
+        seen = spread
 
 
 def _weight_of(np, ink) -> float:
@@ -348,9 +467,11 @@ def _word_inks(np, region, body, words, x_of, gap: int) -> List[List[Any]]:
     falls into runs of letters, apart where a gap is wider than gap columns:
     as many runs as words, each the next word's; else each run goes to the
     word whose box holds its middle, and a run two boxes hold is cut at its
-    widest gap between them. A word's edges are its
-    runs' ink in all its rows, short of the middle of the space to either
-    neighbour; a word no run goes to is left out."""
+    widest gap between them. A word's edges are its runs' ink in all its
+    rows, short of the space to either neighbour - cut at its widest column
+    clear in all rows (a closing quote over the body runs on past the
+    space's middle), at its middle where none is (an "f" hook over it); a
+    word no run goes to is left out."""
     inked = region.any(axis=0)
     w = len(inked)
     cols = np.flatnonzero(body)
@@ -409,10 +530,22 @@ def _word_inks(np, region, body, words, x_of, gap: int) -> List[List[Any]]:
         if k is not None:
             owned.setdefault(k, []).extend([lo, hi])
     spans = [[min(owned[k]), max(owned[k]), boxes[k][2]] for k in sorted(owned)]
+
+    def space(a: int, b: int) -> int:
+        """Where the space between a word's body ending at a and the next's
+        starting at b is cut."""
+        clear = np.concatenate(([False], ~inked[a:b], [False])).astype(np.int8)
+        edges = np.flatnonzero(np.diff(clear))
+        gaps = list(zip(edges[::2], edges[1::2]))
+        if not gaps:
+            return (a + b) // 2
+        g0, g1 = max(gaps, key=lambda g: g[1] - g[0])
+        return a + int(g0 + g1) // 2
+
     out = []
     for k, (lo, hi, text) in enumerate(spans):
-        left = (spans[k - 1][1] + lo) // 2 if k > 0 else 0
-        right = (hi + spans[k + 1][0]) // 2 if k + 1 < len(spans) else w
+        left = space(spans[k - 1][1], lo) if k > 0 else 0
+        right = space(hi, spans[k + 1][0]) if k + 1 < len(spans) else w
         full = np.flatnonzero(inked[left:right])
         if len(full):
             lo, hi = min(lo, left + int(full[0])), max(hi, left + int(full[-1]) + 1)
@@ -420,9 +553,11 @@ def _word_inks(np, region, body, words, x_of, gap: int) -> List[List[Any]]:
     return out
 
 
-def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] = None) -> Optional[Dict[str, Any]]:
+def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] = None,
+                 skew: Optional[float] = None) -> Optional[Dict[str, Any]]:
 
-    """The print of one line, boxed (in points) at rect by its source.
+    """The print of one line, boxed (in points) at rect by its source - at
+    the skew given, else at its own (_skew).
 
     Returns, in points on the page: "box" [x0, y0, x1, y1] - the line's
     ink; "baseline" - at its left ink edge, and "skew" - how far it falls
@@ -464,7 +599,8 @@ def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] 
     # is stood straight by it, and its baseline and capitals' top are read
     # off the straightened ink - askew, they smear over the fall.
     region = glyphs[top:bottom + 1, left:right]
-    skew = _skew(np, region)
+    if skew is None:
+        skew = _skew(np, region)
     upright = _straightened(np, region, skew)
     foot, head = _foot_and_head(np, upright.mean(axis=1))
     if foot is None:
@@ -483,13 +619,39 @@ def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] 
     # by the face, it would weigh the word down.
     bars = _overlines(np, glyphs, top, bottom, left, right, top + head - _lift(skew, right - left),
                       int(round(skew * (right - left))))
+
+    # where each word prints (region columns), its bars' ink no part of it -
+    # a bar over "RAS" reaches over the space before it: from the lowercase
+    # body, straightened - from under the x-height, the arches of "m" and
+    # "n" in it, else an "m" falls apart into stems a word space apart - to
+    # the baseline
+    lettered = region.copy()
+    fainter = max(1, int(round(_OVERLINE_THICK * (bottom - top + 1))))
+    for r0, r1, a, b in bars:
+        # with its fainter rows under it and its fainter ends
+        lettered[max(0, r0 - top):max(0, r1 + 1 + fainter - top),
+                 max(0, a - fainter - left):b + fainter - left] = False
+    # stood straight, and none of the line above's descenders over its
+    # capitals - a "g" of it hung over the space before "RAS"
+    lettered = _straightened(np, lettered, skew)
+    cut = max(0, head - int(_TALL * (foot - head)))
+    lettered[:cut] = False
+    # what hangs on down past the cut is the line above's too
+    lettered &= ~_joined(np, lettered, cut)
+    inks = _word_inks(np, lettered, upright[head + int(_BODY_TOP * (foot - head)):foot + 1].any(axis=0),
+                      words, lambda x: (x - clip.x0) * _ZOOM - left,
+                      max(1, int(rect.height * _ZOOM * _LETTER_GAP))) if words else []
+
+    # each bar over the names it stands over (_over_names)
+    spans = [_over_names(a - left, b - left, inks) if words else (a - left, b - left) for _, _, a, b in bars]
+    bars, spans = [bar for bar, span in zip(bars, spans) if span], [span for span in spans if span]
     # each as thick as it prints dark - a scan prints a thin bar grey, and
     # most of what stands out of the paper is no ink to the eye
     overlines = []
-    for r0, r1, a, b in bars:
+    for (r0, r1, a, b), (x0, x1) in zip(bars, spans):
         seen = [q for q in range(r0, r1 + 1) if dark[q, a:b].mean() >= 0.5]
         if seen:
-            overlines.append([pt_x(a), pt_x(b), pt_y((seen[0] + seen[-1] + 1) / 2.0), len(seen) / _ZOOM])
+            overlines.append([pt_x(left + x0), pt_x(left + x1), pt_y((seen[0] + seen[-1] + 1) / 2.0), len(seen) / _ZOOM])
         dark[r0:r1 + 1, a:b] = False
 
     # A rule just under the line, across most of it, underlines it (a link).
@@ -518,27 +680,21 @@ def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] 
 
     placed = []
     marks = []
-    if words:
-        # Each word's own weight and lean, beside its line's: a bold or
-        # italic word in a regular line ("refreshed", "algorithm"); and its
-        # ink itself, for a word its text does not draw (read_printed_lines).
-        # the lowercase body, straightened: from under the x-height - the
-        # arches of "m" and "n" in it, else an "m" falls apart into stems a
-        # word space apart - to the baseline
-        body = upright[head + int(_BODY_TOP * (foot - head)):foot + 1].any(axis=0)
-        for a, b, t in _word_inks(np, region, body, words, lambda x: (x - clip.x0) * _ZOOM - left,
-                                  max(1, int(rect.height * _ZOOM * _LETTER_GAP))):
-            own = dark[top:bottom + 1, left + a:left + b]
-            facts = {"weight": _weight_of(np, own) / _ZOOM,
-                     "slant": slant(np, region[:, a:b]) if region[:, a:b].any() else 0.0}
-            # where its ink falls apart across - a letter each, or letters
-            # run together, or a letter in pieces: the builder matches its
-            # letters to them
-            spans = _glyph_spans(np, own)
-            if len(spans) > 1:
-                facts["glyphs"] = [[pt_x(left + a + g0), pt_x(left + a + g1)] for g0, g1 in spans]
-            placed.append([pt_x(left + a), pt_x(left + b), t, float(own.sum()) / _ZOOM ** 2, facts])
-            marks.append((own, pt_x(left + a), pt_y(top)))
+    # Each word's own weight and lean, beside its line's: a bold or italic
+    # word in a regular line ("refreshed", "algorithm"); and its ink itself,
+    # for a word its text does not draw (read_printed_lines).
+    for a, b, t in inks:
+        own = dark[top:bottom + 1, left + a:left + b]
+        facts = {"weight": _weight_of(np, own) / _ZOOM,
+                 "slant": slant(np, region[:, a:b]) if region[:, a:b].any() else 0.0}
+        # where its ink falls apart across - a letter each, or letters
+        # run together, or a letter in pieces: the builder matches its
+        # letters to them
+        spans = _glyph_spans(np, own)
+        if len(spans) > 1:
+            facts["glyphs"] = [[pt_x(left + a + g0), pt_x(left + a + g1)] for g0, g1 in spans]
+        placed.append([pt_x(left + a), pt_x(left + b), t, float(own.sum()) / _ZOOM ** 2, facts])
+        marks.append((own, pt_x(left + a), pt_y(top)))
 
     return {
         "source": [rect.x0, rect.y0, rect.x1, rect.y1],
@@ -571,11 +727,38 @@ def _letters(text: str) -> int:
     return sum(ch.isalpha() for ch in text)
 
 
+def _settled_skews(lines: List[Dict[str, Any]]) -> List[float]:
+    """The skew each of a page's measured lines is set at. A column's lines
+    were scanned together: a long line's skew is the middle of its own and
+    its nearest neighbours' in its column (_SKEW_NEAR) - read alone, from a
+    few stretches of it, one came out level where all its column fell
+    0.004. A short line's skew is its few glyphs' own: it takes the skew of
+    the nearest long line, scanned with it."""
+    long_lines = [l for l in lines if l["box"][2] - l["box"][0] >= _SKEW_MIN_PT]
+
+    def column_of(line) -> List[Dict[str, Any]]:
+        def shared(other) -> float:
+            return min(line["box"][2], other["box"][2]) - max(line["box"][0], other["box"][0])
+        mates = [l for l in long_lines if shared(l) > 0.5 * min(line["box"][2] - line["box"][0],
+                                                                 l["box"][2] - l["box"][0])]
+        return sorted(mates, key=lambda l: abs(l["baseline"] - line["baseline"]))[:_SKEW_NEAR]
+
+    settled = {id(l): statistics.median(m["skew"] for m in column_of(l)) for l in long_lines}
+    skews = []
+    for line in lines:
+        if line["box"][2] - line["box"][0] >= _SKEW_MIN_PT:
+            skews.append(settled[id(line)])
+            continue
+        near = min(long_lines, key=lambda l: abs(l["baseline"] - line["baseline"]), default=None)
+        skews.append(settled[id(near)] if near is not None else 0.0)
+    return skews
+
+
 def settle_page(lines: List[Dict[str, Any]]) -> None:
     """Decide, for the measured lines of one page (measure_line, each with
     its "text"), the type each is set in: "face", "size" (its capitals as
     tall as the print's; "cap" is what share of the size they reach) and
-    "bold" are added to each, and a short line's "skew" is its neighbours'.
+    "bold" are added to each.
 
     The face is the page's: each line long enough votes for the face that
     covers its print best, one line alone being too short to tell. A line
@@ -594,14 +777,6 @@ def settle_page(lines: List[Dict[str, Any]]) -> None:
         size = size_in(face, line["height"], line["text"])
         regular = STROKE_EM[face][1 if line["italic"] else 0][0]
         return line["stroke"] / size - regular if size > 0 else 0.0
-
-    # A short line's skew is its few glyphs' own: it takes the skew of the
-    # nearest long line, scanned with it.
-    long_lines = [l for l in lines if l["box"][2] - l["box"][0] >= _SKEW_MIN_PT]
-    for line in lines:
-        if line["box"][2] - line["box"][0] < _SKEW_MIN_PT:
-            near = min(long_lines, key=lambda l: abs(l["baseline"] - line["baseline"]), default=None)
-            line["skew"] = near["skew"] if near is not None else 0.0
 
     weighed = sorted(excess(l) for l in lines if _letters(l["text"]) >= _WEIGHT_MIN_LETTERS and l["stroke"])
     lightest = weighed[len(weighed) // 5] if weighed else 0.0
@@ -730,9 +905,10 @@ def _mark_misread(np, pymupdf, lines: List[Dict[str, Any]]) -> None:
     """Keep the ink of each word of a page's lines its text does not draw:
     OCR read a subscript as letters of the line ("tRCD" for t-sub-RCD),
     an arrow as a dash. A word whose text, set as the builder sets it,
-    misses more than _MISREAD of the ink (_set_miss) is drawn from its
-    print - its ink as runs of pixels ("ink": "box" page-normalised,
-    "shape", "runs") - its text kept for what reads it."""
+    misses more than _MISREAD of the ink (_set_miss), or with letters set
+    lower than its text has (_lowered), is drawn from its print - its ink
+    as runs of pixels ("ink": "box" page-normalised, "shape", "runs") -
+    its text kept for what reads it."""
     for line in lines:
         judged = []
         for word, (mask, x0, y0) in zip(line["words"], line.get("marks") or []):
@@ -743,7 +919,8 @@ def _mark_misread(np, pymupdf, lines: List[Dict[str, Any]]) -> None:
                 continue
             word[4]["miss"] = miss
             sign = not any(ch.isalnum() for ch in word[2])
-            judged.append((word, mask, x0, y0, miss > (_MISREAD_SIGN if sign else _MISREAD)))
+            misread = miss > (_MISREAD_SIGN if sign else _MISREAD) or _lowered(np, mask, x0, y0, word[2], line)
+            judged.append((word, mask, x0, y0, misread))
         # a line OCR misread half of is misread whole: a formula's line,
         # its arrows read as dashes, its subscripts as letters
         whole = len(judged) >= 2 and 2 * sum(m for *_, m in judged) >= len(judged)
@@ -757,6 +934,23 @@ def _mark_misread(np, pymupdf, lines: List[Dict[str, Any]]) -> None:
                                   "shape": list(ink.shape), "runs": _runs_of(np, ink)}
 
 
+def _lowered(np, mask, x0: float, y0: float, text: str, line: Dict[str, Any]) -> bool:
+    """Whether a word prints letters set lower than its text has them - a
+    subscript, "RCD" of t-sub-RCD that OCR read as letters of the line:
+    more runs of its ink (mask, its top left corner at x0, y0 pt) reach
+    under the line's baseline by _LOWERED of its capitals' height than
+    its text has letters that do ("gjpqy", brackets). A subscript's
+    capitals stand as tall as the line's lowercase, a descender's "p"
+    alike - only its text tells them apart."""
+    deep = 0
+    for a, b in _glyph_spans(np, mask):
+        rows = np.flatnonzero(mask[:, a:b].any(axis=1))
+        x = x0 + (a + b) / 2.0 / _ZOOM
+        base = line["baseline"] + (line.get("skew") or 0.0) * (x - line["box"][0])
+        deep += y0 + (rows[-1] + 1) / _ZOOM - base > _LOWERED * line["height"]
+    return deep > sum(ch in _DESCENDING for ch in text)
+
+
 def _normalised(facts: Dict[str, Any], pw: float) -> Dict[str, Any]:
     """A word's facts with its letters' places (pt) as page shares."""
     if "glyphs" not in facts:
@@ -768,8 +962,9 @@ def read_printed_lines(np, pymupdf, source, items: List[Any]) -> List[Any]:
     """How a set of lines was printed, as a page rebuilt where it was
     printed needs it: items are (owner, part, page index, page-normalised
     box, text) for each line, source the opened PDF. Each line is measured
-    (measure_line, with the page's words inside its box), each page's lines
-    settled together (settle_page), and returned as (owner, line) - line a
+    (measure_line, with the page's words inside its box) - at its column's
+    skew (_settled_skews) - each page's lines settled together
+    (settle_page), and returned as (owner, line) - line a
     dict of the line's print: "part", "text", "page", its ink "box" and
     "baseline" (page-normalised), "skew", its "words" ([x0, x1, text,
     area, {"bold", "italic", "glyphs" - the runs its ink falls apart into
@@ -777,7 +972,8 @@ def read_printed_lines(np, pymupdf, source, items: List[Any]) -> List[Any]:
     page-normalised), "area",
     "cap", "size", "face", "bold",
     "italic", "rgb", "underline" ([y page-normalised, thickness pt]),
-    "overlines" ([x0, x1, y page-normalised, thickness pt] each)."""
+    "overlines" ([x0, x1, y page-normalised, thickness pt] each), "page_pt"
+    - its page's width and height."""
     measured: List[Any] = []
     words: Dict[int, List[Any]] = {}
     for owner, part, page_index, box, text in items:
@@ -792,9 +988,20 @@ def read_printed_lines(np, pymupdf, source, items: List[Any]) -> List[Any]:
                if rect.x0 <= (w[0] + w[2]) / 2 <= rect.x1 and rect.y0 <= (w[1] + w[3]) / 2 <= rect.y1]
         m = measure_line(np, pymupdf, page, rect, text, own)
         if m is not None:
-            m.update({"part": part, "text": text, "page": page_index, "pw": pw, "ph": ph})
+            m.update({"part": part, "text": text, "page": page_index, "pw": pw, "ph": ph,
+                      "rect": rect, "own": own})
             measured.append((owner, m))
     for page_index in sorted({m["page"] for _, m in measured}):
+        # each line measured anew at its column's skew (_settled_skews) -
+        # its baseline and capitals read off it stood straight by it
+        here = [k for k, (_, m) in enumerate(measured) if m["page"] == page_index]
+        for k, skew in zip(here, _settled_skews([measured[k][1] for k in here])):
+            owner, m = measured[k]
+            if skew != m["skew"]:
+                again = measure_line(np, pymupdf, source[page_index], m["rect"], m["text"], m["own"], skew)
+                if again is not None:
+                    again.update({key: m[key] for key in ("part", "text", "page", "pw", "ph")})
+                    measured[k] = (owner, again)
         settle_page([m for _, m in measured if m["page"] == page_index])
         _mark_misread(np, pymupdf, [m for _, m in measured if m["page"] == page_index])
     out = []
@@ -812,5 +1019,6 @@ def read_printed_lines(np, pymupdf, source, items: List[Any]) -> List[Any]:
             "rgb": m["rgb"],
             "underline": [m["underline"][0] / ph, m["underline"][1]] if m["underline"] else None,
             "overlines": [[a / pw, b / pw, y / ph, t] for a, b, y, t in m["overlines"]],
+            "page_pt": [pw, ph],
         }))
     return out
