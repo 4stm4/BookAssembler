@@ -16,12 +16,14 @@ from src.krm.models import (
     KnowledgeDocument,
     ListBlock,
     ListItemBlock,
+    NormalizedRect,
     ParagraphBlock,
     StructuralUnit,
     UnknownBlock,
+    VisualLayout,
 )
 
-from src.analyzers.list.rules import _classify_marker, _first_span_text, _strip_marker
+from src.analyzers.list.rules import _classify_marker, _first_span_text, _items_in_block, _line_text, _strip_marker
 
 class ListDetectorAnalyzer(BaseAnalyzer):
     """
@@ -42,6 +44,7 @@ class ListDetectorAnalyzer(BaseAnalyzer):
                     KRMPermission.TRANSFORM_NODE,
                     KRMPermission.INSERT,
                     KRMPermission.MUTATE_ATTRIBUTES,
+                    KRMPermission.TOMBSTONE,
                 },
                 rg_permissions=set(),
                 kg_permissions={KGPermission.READ},
@@ -65,6 +68,7 @@ class ListDetectorAnalyzer(BaseAnalyzer):
             if isinstance(child, ContainerUnit):
                 self._process_container(child)
 
+        container.children = self._split_lists(container.children)
         new_children: List[BaseKRMNode] = []
         buffer: List[Tuple[ParagraphBlock, str, str]] = []  # (block, marker, style)
 
@@ -88,6 +92,9 @@ class ListDetectorAnalyzer(BaseAnalyzer):
                             confidence_score=min(para.extraction_confidence, 0.85),
                         )
                     )
+                boxes = [p.visual_layout.bounding_box for p, _, _ in buffer
+                         if p.visual_layout is not None and p.visual_layout.bounding_box is not None]
+                pages = {p.visual_layout.page_or_screen_index for p, _, _ in buffer if p.visual_layout is not None}
                 new_children.append(
                     ListBlock(
                         id=derive_composite_id(
@@ -97,6 +104,13 @@ class ListDetectorAnalyzer(BaseAnalyzer):
                         items=items,
                         classification_confidence=0.85,
                         confidence_score=0.85,
+                        # where it printed, its items' boxes together: without
+                        # one, a page set it after all else on the page
+                        visual_layout=VisualLayout(
+                            bounding_box=NormalizedRect(min(b.x0 for b in boxes), min(b.y0 for b in boxes),
+                                                        max(b.x1 for b in boxes), max(b.y1 for b in boxes)),
+                            page_or_screen_index=pages.pop(),
+                        ) if boxes and len(pages) == 1 else None,
                     )
                 )
             else:
@@ -118,3 +132,44 @@ class ListDetectorAnalyzer(BaseAnalyzer):
 
         flush()
         container.children = new_children
+
+    @staticmethod
+    def _split_lists(children: List[BaseKRMNode]) -> List[BaseKRMNode]:
+        """A list OCR set in one block (rules._items_in_block) split into a
+        block per item, each with its lines and their print; the block
+        tombstoned (RFC 0001 SS2.4)."""
+        out: List[BaseKRMNode] = []
+        for child in children:
+            items = (_items_in_block(child) if isinstance(child, (ParagraphBlock, UnknownBlock))
+                     and not child.is_tombstoned else None)
+            if not items:
+                out.append(child)
+                continue
+            printed = list((child.metadata or {}).get("printed_lines") or [])
+            for k, lines in enumerate(items):
+                texts = [_line_text(il) for il in lines]
+                boxes = [il.visual_layout.bounding_box for il in lines
+                         if getattr(il, "visual_layout", None) is not None and il.visual_layout.bounding_box]
+                vl = child.visual_layout
+                piece = type(child)(
+                    id=derive_composite_id("list-item-text", child.id, str(k)),
+                    inlines=lines,
+                    parent_container_id=child.parent_container_id,
+                    provenance_info=child.provenance_info,
+                    visual_layout=VisualLayout(
+                        bounding_box=NormalizedRect(min(b.x0 for b in boxes), min(b.y0 for b in boxes),
+                                                    max(b.x1 for b in boxes), max(b.y1 for b in boxes)),
+                        page_or_screen_index=vl.page_or_screen_index, style=vl.style,
+                    ) if boxes and vl is not None else vl,
+                    extraction_confidence=child.extraction_confidence,
+                    classification_confidence=child.classification_confidence,
+                    confidence_score=child.confidence_score,
+                )
+                own = [pl for pl in printed if pl.get("text") in texts]
+                if own:
+                    piece.metadata["printed_lines"] = own
+                out.append(piece)
+            child.is_tombstoned = True
+            child.metadata = {**(child.metadata or {}), "tombstone_reason": "split_into_list_items"}
+            out.append(child)
+        return out

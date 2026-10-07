@@ -30,6 +30,8 @@ def walk(node, depth=0):
     box = f"{b.x0 * 595:5.0f}{b.y0 * 842:5.0f}{b.x1 * 595:5.0f}{b.y1 * 842:5.0f}" if b else "-"
     lines = [" ".join(s.text for s in il.spans if hasattr(s, "text")) for il in getattr(node, "inlines", []) or []]
     dead = f" (tombstoned: {(node.metadata or {}).get('tombstone_reason')})" if node.is_tombstoned else ""
+    if (node.metadata or {}).get("continues"):
+        dead += " (continues)"
     print("  " * depth + f"{type(node).__name__}{dead} {box}  {len(lines)} lines: {(lines[0] if lines else '')[:50]!r} .. {(lines[-1] if lines else '')[-30:]!r}")
     if "lines" in sys.argv[3:]:
         for il, text in zip(getattr(node, "inlines", []) or [], lines):

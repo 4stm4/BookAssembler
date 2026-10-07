@@ -8,15 +8,16 @@ import re
 
 _BULLET_CHARS = "•·‣∙◦▪▫■□●○*\\-–—"
 
+# A number set off by a dash, the item's first word right after it - "1—insert
+# key in the keyhole" (the paragraph fixture B) - is a marker as "1." is.
 _MARKER_RE = re.compile(
     r"""^\s*
     (?:
-        (?P<bullet>[""" + _BULLET_CHARS + r"""])
-      | (?P<num>\d{1,3})[.)]
-      | (?P<alpha>[a-zа-я])[.)]
-      | (?P<roman>[ivxlcdm]+)[.)]
+        (?P<bullet>[""" + _BULLET_CHARS + r"""])\s+
+      | (?P<num>\d{1,3})(?:[.)]\s+|\s*[—–]\s*(?=\w))
+      | (?P<alpha>[a-zа-я])[.)]\s+
+      | (?P<roman>[ivxlcdm]+)[.)]\s+
     )
-    \s+
     """,
     re.IGNORECASE | re.VERBOSE,
 )

@@ -49,3 +49,31 @@ def _strip_marker(block: ParagraphBlock, remainder: str) -> None:
             if getattr(span, "text", ""):
                 span.text = remainder
                 return
+
+
+def _line_text(inline: Any) -> str:
+    return "".join(getattr(s, "text", "") for s in getattr(inline, "spans", []) or []).strip()
+
+
+def _items_in_block(block: Any) -> Optional[List[List[Any]]]:
+    """A block's lines as list items, where OCR set a list in one block: its
+    first line and at least one more start with a marker, numbered on from
+    one another where numbered; a line with none goes on the item above.
+    None where the block is no list."""
+    lines = list(block.inlines or [])
+    if len(lines) < 2:
+        return None
+    marked = [_classify_marker(_line_text(il)) for il in lines]
+    if marked[0] is None or sum(m is not None for m in marked) < 2:
+        return None
+    numbers = [int(m[1].rstrip(".)—– ")) for m in marked if m is not None and m[0] == "ordered"
+               and m[1].rstrip(".)—– ").isdigit()]
+    if numbers and numbers != list(range(numbers[0], numbers[0] + len(numbers))):
+        return None
+    items: List[List[Any]] = []
+    for il, m in zip(lines, marked):
+        if m is not None or not items:
+            items.append([il])
+        else:
+            items[-1].append(il)
+    return items

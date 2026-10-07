@@ -1308,7 +1308,8 @@ def _label_table(blocks: List[Any]) -> Optional[TableBlock]:
     if max(labels) - min(labels) > _LABEL_ALIGN or max(values) - min(values) > _LABEL_ALIGN:
         return None
     page_idx = _page_idx(blocks[0])
-    grid = [[_make_cell(t, b, st, page_idx, source_block_id=blk.id) for t, b, st in row]
+    # set in the text's own type: OCR sized "3" at 5pt beside "15" at 10
+    grid = [[_make_cell(t, b, None, page_idx, source_block_id=blk.id) for t, b, _ in row]
             for blk in blocks for row in (_label_rows(blk) or [])]
     boxes = [c.visual_layout.bounding_box for r in grid for c in r if c.visual_layout]
     first = blocks[0]
@@ -1328,6 +1329,7 @@ def _label_table(blocks: List[Any]) -> Optional[TableBlock]:
         confidence_score=min(min(b.extraction_confidence for b in blocks), 0.7),
         span_map=_build_span_map(grid),
     )
+    table.metadata["label_table"] = True
     return table
 
 

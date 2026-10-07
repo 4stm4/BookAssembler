@@ -293,13 +293,18 @@ _ENDS_SENTENCE = re.compile(r"[.!?:;)\]\"'»”…]$")
 
 
 def _continues(prev: Unit, nxt: Unit) -> bool:
-    """The page break cut a sentence: the paragraph before it does not end
-    one, and the first paragraph after it goes on in lower case."""
+    """A break cut a sentence: a column's or a page's end the analysis
+    marked (metadata["continues"]), or a page break with the paragraph
+    before it ending no sentence and the first after it going on in lower
+    case."""
     if prev.kind != "paragraph" or nxt.kind != "paragraph":
         return False
     a, b = prev.blocks[-1], nxt.head
     if isinstance(a, TitlePageBlock) or isinstance(b, TitlePageBlock):
         return False
+    # a column's or a page's end the analysis found cut it (ParagraphAnalyzer)
+    if (getattr(b, "metadata", None) or {}).get("continues") == a.id:
+        return True
     pa, pb = _page(a), _page(b)
     if pa is None or pb != pa + 1:
         return False

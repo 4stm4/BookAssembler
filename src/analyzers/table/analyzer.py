@@ -636,7 +636,11 @@ class TableDetectorAnalyzer(BaseAnalyzer):
             for child in container.children:
                 if isinstance(child, ContainerUnit):
                     collect(child)
-                elif isinstance(child, TableBlock) and not child.is_tombstoned and not _is_box_table(child):
+                elif (isinstance(child, TableBlock) and not child.is_tombstoned and not _is_box_table(child)
+                      and not (child.metadata or {}).get("label_table")):
+                    # labels and values have no rules, and their cells are
+                    # OCR's boxes - a line's high on the fixture C - no place
+                    # to read a print off
                     tables.append(child)
 
         for root in doc.root_containers:

@@ -347,6 +347,10 @@ def render_node(
         for child in node.content:
             render(child, depth + 1)
         body.append("\\end{mdframed}\n")
+    elif isinstance(node, FormulaBlock) and (node.metadata or {}).get("needs_vision_ocr") and _printed_lines(node):
+        # A formula of a scanned page OCR misread, set as printed - its
+        # print's own ink - until a vision agent reads it
+        body.append(_printed_block(node, target_lang))
     elif isinstance(node, FormulaBlock):
         # Prefer real LaTeX if a vision agent replaced the fallback. Model
         # output goes in unescaped, so filter file/IO primitives first.
@@ -381,6 +385,13 @@ def render_node(
             )
         else:
             body.append(f"\\noindent {left}\\\\\n")
+    elif isinstance(node, ListBlock) and _printed_lines(node) and all(
+        _translated(p, _para_text(p), target_lang) == _para_text(p)
+        for it in node.items for p in it.content if isinstance(p, ParagraphBlock)
+    ):
+        # A list of a scanned page is set by its items' printed lines, as
+        # its paragraphs are; translated, it is set as a list
+        body.append(_printed_block(node, target_lang))
     elif isinstance(node, ListBlock):
         env = "enumerate" if node.list_style in ("ordered", "alpha", "roman") else "itemize"
         opts = ""
@@ -481,10 +492,16 @@ _FACE_CMD = {"serif": "\\latinfont ", "sans": "\\latinsans ", "mono": "\\latinmo
 def _printed_lines(block: Any) -> List[Dict[str, Any]]:
     """The lines of a block as its print was read (TocAnalyzer,
     PrintedLinesAnalyzer): a contents entry's or a paragraph's
-    metadata["printed_lines"], a heading's metadata["printed_title"]."""
+    metadata["printed_lines"], a heading's metadata["printed_title"], a
+    list's its items'."""
     md = getattr(block, "metadata", None) or {}
     if isinstance(block, ContainerUnit):
         return [md["printed_title"]] if md.get("printed_title") else []
+    if isinstance(block, ListBlock):
+        # a list's, its items' lines - all of them read, or none
+        items = [p for it in block.items if not getattr(it, "is_tombstoned", False) for p in it.content]
+        lines = [_printed_lines(p) for p in items]
+        return [l for ls in lines for l in ls] if items and all(lines) else []
     return list(md.get("printed_lines") or [])
 
 
@@ -1575,6 +1592,18 @@ def _render_box_table(table: TableBlock) -> str:
     return "\\begin{center}\n" + "\n".join(lines) + "\n\\end{center}\n"
 
 
+def _render_label_table(table: TableBlock) -> str:
+    """Labels and their values (TableDetector's label tables: "Cycles: 3")
+    as they print - two columns set left, no rules - one row each."""
+    def text(cell: Any) -> str:
+        return _esc(" ".join(_para_text(p) for p in getattr(cell, "content", []) or []
+                             if isinstance(p, ParagraphBlock)).strip())
+
+    rows = [" & ".join(text(c) for c in row) + " \\\\" for row in table.grid if row]
+    return ("\\par\\noindent\\begin{tabular}{@{}l@{\\hspace{1em}}l@{}}\n"
+            + "\n".join(rows) + "\n\\end{tabular}\\par\n")
+
+
 def _render_table(table: TableBlock) -> str:
     """Render a table atomically (RFC 0007 §5.2).
 
@@ -1584,6 +1613,8 @@ def _render_table(table: TableBlock) -> str:
     md = getattr(table, "metadata", None) or {}
     if md.get("box_grid"):
         return _render_box_table(table)
+    if md.get("label_table"):
+        return _render_label_table(table)
     recognized = md.get("latex")
     if recognized:
         safe = _sanitize_latex_fragment(recognized)
