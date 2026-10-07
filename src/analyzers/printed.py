@@ -21,7 +21,7 @@ import functools
 import re
 import statistics
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.adapters.pdf_adapter import _measure_stroke_pt
 
@@ -41,7 +41,7 @@ FACES = {
 # files: capitals ("H") and lowercase ascenders ("d").
 CAP_EM = {"serif": 0.662, "sans": 0.728, "mono": 0.562, "schoolbook": 0.722}
 ASCENDER_EM = {"serif": 0.682, "sans": 0.728, "mono": 0.602, "schoolbook": 0.738}
-_ASCENDERS = set("bdfhklt")
+_ASCENDERS = set("bdfhkl")  # a "t" stands short of them, an "i"'s dot prints faint
 # Their strokes over their size, as pdf_adapter._measure_stroke_pt measures
 # a print: (regular, bold) upright and (regular, bold) italic. Schola's read
 # at 20pt (0.100, 0.163) and (0.087, 0.156), scaled as Termes' read there
@@ -96,6 +96,8 @@ _OVERLINE_MIN = 0.4       # of a line's ink height: the shortest overline, over 
 _OVERLINE_THICK = 0.15    # of a line's ink height: the thickest
 _OVERLINE_CLEAR = 0.2     # of its length, the most ink a row over an overline holds (a descender through it)
 _TALL = 0.1               # of a line's ink height, how far over most of its letters' tops its capitals' and ascenders' stand
+_DARK_SHARE = 0.5         # of a line's ink, the least it prints dark to be measured by its dark ink
+_OVER_CAPS = 0.25         # of a line's capitals' height, how far over their tops only the line above's ink stands
 _OVER_TOPS = 0.05         # of it, how far over their tops a bar's middle stands, a capital's own top short of it
 _NAME_COVER = 0.34        # of a name's width, more than an overline over it reaches over
 _ZOOM = 6.0
@@ -394,13 +396,10 @@ def _over_names(a: int, b: int, words: List[Any]) -> Optional[Any]:
     return span
 
 
-def _joined(np, ink, row: int):
-    """The ink joined, a pixel to the next, to the ink of one of its rows,
+def _joined(np, ink, seed):
+    """The ink joined, a pixel to the next, to seed (a mask of ink's shape),
     as a mask of ink's shape."""
-    grown = np.zeros_like(ink)
-    if row >= ink.shape[0]:
-        return grown
-    grown[row] = ink[row]
+    grown = seed & ink
     while True:
         spread = grown.copy()
         spread[1:] |= grown[:-1]
@@ -595,14 +594,19 @@ def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] 
     left, right = int(cols[0]), int(cols[-1]) + 1
     mask = glyphs[top:bottom + 1, left:right]
     # A scan stands its lines askew, several points over a long one: the
-    # skew is read from the baseline of each third of the line, the line
-    # is stood straight by it, and its baseline and capitals' top are read
-    # off the straightened ink - askew, they smear over the fall.
+    # line is stood straight by its skew, and its baseline and capitals'
+    # top are read off the straightened ink - askew, they smear over the
+    # fall - where it prints dark: a scan's blur stands a faint fringe
+    # round each glyph, a row or two under its foot and over its top, and
+    # read off it, a line's baseline stood a fifth of a point low, its
+    # capitals as much too tall.
     region = glyphs[top:bottom + 1, left:right]
     if skew is None:
         skew = _skew(np, region)
     upright = _straightened(np, region, skew)
-    foot, head = _foot_and_head(np, upright.mean(axis=1))
+    deep = _straightened(np, dark[top:bottom + 1, left:right], skew)
+    # a line printed light - in colour, or grey - has little dark ink
+    foot, head = _foot_and_head(np, (deep if deep.sum() >= _DARK_SHARE * upright.sum() else upright).mean(axis=1))
     if foot is None:
         return None
     # the straightened rows are the line's at its left edge
@@ -634,10 +638,12 @@ def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] 
     # stood straight, and none of the line above's descenders over its
     # capitals - a "g" of it hung over the space before "RAS"
     lettered = _straightened(np, lettered, skew)
-    cut = max(0, head - int(_TALL * (foot - head)))
-    lettered[:cut] = False
-    # what hangs on down past the cut is the line above's too
-    lettered &= ~_joined(np, lettered, cut)
+    # what stands well over its capitals' tops (_OVER_CAPS) is the line
+    # above's, and what hangs on down from it too - not a capital whose
+    # blur reaches a row over its top
+    above = np.zeros_like(lettered)
+    above[:max(0, head - int(_OVER_CAPS * (foot - head)))] = True
+    lettered &= ~_joined(np, lettered, lettered & above)
     inks = _word_inks(np, lettered, upright[head + int(_BODY_TOP * (foot - head)):foot + 1].any(axis=0),
                       words, lambda x: (x - clip.x0) * _ZOOM - left,
                       max(1, int(rect.height * _ZOOM * _LETTER_GAP))) if words else []
@@ -717,9 +723,12 @@ def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] 
 
 def size_in(face: str, height: float, text: str) -> float:
     """The type size whose capitals - or, in a line of lowercase,
-    ascenders - stand height tall in face."""
+    ascenders - stand height tall in face; 0 for a line of neither, whose
+    height says nothing of its size."""
     tall = any(ch in _ASCENDERS for ch in text)
     capitals = any(ch.isupper() or ch.isdigit() for ch in text)
+    if not tall and not capitals:
+        return 0.0
     return height / (ASCENDER_EM[face] if tall and not capitals else CAP_EM[face])
 
 
@@ -778,15 +787,26 @@ def settle_page(lines: List[Dict[str, Any]]) -> None:
         regular = STROKE_EM[face][1 if line["italic"] else 0][0]
         return line["stroke"] / size - regular if size > 0 else 0.0
 
-    weighed = sorted(excess(l) for l in lines if _letters(l["text"]) >= _WEIGHT_MIN_LETTERS and l["stroke"])
+    weighed = sorted(excess(l) for l in lines if _letters(l["text"]) >= _WEIGHT_MIN_LETTERS and l["stroke"]
+                     and size_in(face, l["height"], l["text"]))
     lightest = weighed[len(weighed) // 5] if weighed else 0.0
 
     def heavy(stroke: float, size: float, italic: bool) -> bool:
         stems = STROKE_EM[face][1 if italic else 0]
         return bool(stroke) and size > 0 and stroke / size - stems[0] - lightest > _BOLD_GAIN * (stems[1] - stems[0])
 
-    for line in lines:
-        size = size_in(face, line["height"], line["text"])
+    sizes = [size_in(face, l["height"], l["text"]) for l in lines]
+    for line, size in zip(lines, sizes):
+        if not size:
+            # a line of neither capitals nor ascenders ("in separate
+            # sections.") is set in the size of the nearest line that has
+            # in its own column
+            def apart(k: int) -> Tuple[bool, float]:
+                other = lines[k]["box"]
+                beside = other[2] <= line["box"][0] or line["box"][2] <= other[0]
+                return beside, abs(lines[k]["baseline"] - line["baseline"])
+            near = min((k for k, other in enumerate(sizes) if other), key=apart, default=None)
+            size = sizes[near] if near is not None else 0.0
         line.update({"face": face, "bold": heavy(line["stroke"], size, line["italic"]), "cap": CAP_EM[face],
                      "size": size})
     # Each word in its own weight, against the page's usual for its kind: a
@@ -805,6 +825,17 @@ def settle_page(lines: List[Dict[str, Any]]) -> None:
         usual[capitals] = weights[len(weights) // 2] if len(weights) >= _WEIGHT_MIN_WORDS else 0.0
     if not usual[True] and usual[False]:
         usual[True] = usual[False] * _CAPITALS_WEIGHT
+    # A line is bold where most of its lowercase words weighed on their
+    # own are - its strokes' width, a pixel or two over a short line,
+    # called "in separate sections." bold. Capitals are weighed against a
+    # page's few capital words, its headings often most of them: a line of
+    # capitals alone is weighed by its strokes.
+    for line in lines:
+        weighed_words = [w[4]["weight"] >= _WORD_BOLD * usual[False] for w in line["words"]
+                         if len(w) > 4 and usual[False] and not kind(w[2])
+                         and _letters(w[2]) >= _WORD_MIN_GLYPHS]
+        if weighed_words:
+            line["bold"] = 2 * sum(weighed_words) > len(weighed_words)
     for line in lines:
         before = None
         for word in line["words"]:
