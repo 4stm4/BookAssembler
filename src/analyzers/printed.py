@@ -58,16 +58,34 @@ _SKEW_MIN_PT = 80.0       # a line this wide says how its stretch of the page is
 _SKEW_PART = 3.0          # of a line's ink height, how wide a stretch its skew is read from the baseline of
 _SKEW_INKED = 0.5         # of a line's ink across, the least a stretch holds to have a baseline
 _SKEW_NEAR = 11           # the lines of a column, itself among them, a line's skew is the middle of
-_SAME_SIZE = 0.3          # within this of its kind's usual size, a line is set at it
+_SAME_SIZE = 0.1          # within this of its kind's usual size, a line is set at it
 _SHORT_TOKEN = 3          # characters in a token too short to measure its size by
 _SAME_ROW = 0.5           # of the lower box's height two source boxes share on one row
 _BOLD_GAIN = 0.6          # of the gap from regular to bold, over the page's lightest
-# Of the page's usual weight, a word's in a bold run: on the paragraph
-# fixture D regular words weigh 0.61-0.80pt (usual 0.71), bold ones 0.90-1.07.
+# Of the text's around it, a word's weight in a bold run of a regular line:
+# on the paragraph fixture D regular words weigh 0.61-0.80pt (usual 0.71),
+# bold ones 0.90-1.07.
 _WORD_BOLD = 1.2
+# Of the lines' around it in its column, and of its page's usual, the
+# weight of a line's words, in the middle, where the line is bold - and a
+# word of a bold line is, where it weighs so much: on the heading and
+# paragraph fixtures regular lines stand within 1.07 of the lines around
+# them and 1.09 of their page, bold ones at 1.11 and over of both (the
+# MCS-40 manual's product lines, a bold lighter than most, 1.20-1.28 and
+# 1.13-1.22). Weighed against its page alone a line in a stretch a scan
+# printed heavier came out bold; against the lines around it alone, one
+# over a list set smaller and lighter (the Signetics 8080 manual's "The
+# move is completed with the microinstruction fields:", 1.18 and 1.07).
+_LINE_BOLD = 1.1
+_AROUND_LINES = 8.0       # its own heights up and down, the lines around a line stand within
+_AROUND_WORDS = 3         # words weighed a line takes to say what the text around another weighs
+_AROUND_MIN = 3           # lines around a line it takes to weigh it by them; fewer, by the page's usual
+_BODY_CHARS = 40          # a line this long is body text, its words the page's usual weights
 _WEIGHT_MIN_WORDS = 5     # words of a kind it takes to say what the page's usual weight of it is
 _WORD_MIN_GLYPHS = 3      # letters and figures a word takes to be weighed on its own ("be" goes with its neighbour)
-_CAPITALS_WEIGHT = 1.2    # capitals' and figures' weight over lowercase's, where too few to say
+# Capitals' and figures' weight over lowercase's, where the body has too
+# few to say: 1.04-1.10 in the fixtures' body lines.
+_CAPITALS_WEIGHT = 1.08
 _STEMS = set("bdhiklmnpqrtuBDEFHIKLMNPRTU")  # letters with an upright stem to lean
 
 ITALIC_SLANT = 0.12       # tan of the lean; an italic leans 0.2 or so
@@ -818,42 +836,64 @@ def settle_page(lines: List[Dict[str, Any]]) -> None:
             size = sizes[near] if near is not None else 0.0
         line.update({"face": face, "bold": heavy(line["stroke"], size, line["italic"]), "cap": CAP_EM[face],
                      "size": size})
-    # Each word in its own weight, against the page's usual for its kind: a
-    # word in a bold run weighs a fifth again and more (_WORD_BOLD).
-    # Capitals and figures weigh more than lowercase set alike - straight
-    # stems, few curves: "RAM" 0.86 to the paragraph fixture D's lowercase
-    # 0.71 - and are weighed against their own. A shorter word is too
-    # little to weigh; it goes with the word before it.
-    def kind(text: str) -> bool:
-        return not any(ch.islower() for ch in text)
+    # Each word in its own weight, against the page's usual for its kind,
+    # read off its body lines (_BODY_CHARS): lowercase; capitalized, its
+    # capital a little heavier; capitals and figures - straight stems, few
+    # curves - heavier still ("RAM" 0.86 to the paragraph fixture D's
+    # lowercase 0.71). A word too short to weigh goes with the word
+    # before it.
+    def kind(text: str) -> int:
+        if not any(ch.islower() for ch in text):
+            return 2
+        return 1 if next(ch for ch in text if ch.isalpha()).isupper() else 0
 
-    usual = {}
-    for capitals in (False, True):
-        weights = sorted(w[4]["weight"] for l in lines for w in l["words"]
-                         if len(w) > 4 and kind(w[2]) == capitals and len(w[2].strip()) >= 2 and w[4]["weight"])
-        usual[capitals] = weights[len(weights) // 2] if len(weights) >= _WEIGHT_MIN_WORDS else 0.0
-    if not usual[True] and usual[False]:
-        usual[True] = usual[False] * _CAPITALS_WEIGHT
-    # A line is bold where most of its lowercase words weighed on their
-    # own are - its strokes' width, a pixel or two over a short line,
-    # called "in separate sections." bold. Capitals are weighed against a
-    # page's few capital words, its headings often most of them: a line of
-    # capitals alone is weighed by its strokes.
-    for line in lines:
-        weighed_words = [w[4]["weight"] >= _WORD_BOLD * usual[False] for w in line["words"]
-                         if len(w) > 4 and usual[False] and not kind(w[2])
-                         and _letters(w[2]) >= _WORD_MIN_GLYPHS]
-        if weighed_words:
-            line["bold"] = 2 * sum(weighed_words) > len(weighed_words)
-    for line in lines:
+    def glyphs(text: str) -> int:
+        return sum(ch.isalnum() for ch in text)
+
+    def weighed(line) -> List[Any]:
+        return [w for w in line["words"] if len(w) > 4 and w[4].get("weight")
+                and glyphs(w[2]) >= _WORD_MIN_GLYPHS]
+
+    def middle(of: List[Dict[str, Any]], k: int) -> float:
+        found = sorted(w[4]["weight"] for l in of for w in weighed(l) if kind(w[2]) == k)
+        return found[len(found) // 2] if len(found) >= _WEIGHT_MIN_WORDS else 0.0
+
+    body = [l for l in lines if len(l["text"]) >= _BODY_CHARS]
+    usual = {0: middle(body, 0) or middle(lines, 0)}
+    usual[1] = middle(body, 1) or usual[0]
+    usual[2] = middle(body, 2) or usual[0] * _CAPITALS_WEIGHT
+    ratios = [[w[4]["weight"] / usual[kind(w[2])] for w in weighed(l) if usual[kind(w[2])]] for l in lines]
+    weights = [sorted(r)[len(r) // 2] if r else None for r in ratios]
+
+    # What the text around a line weighs: the middle of the lines' of its
+    # column within _AROUND_LINES of it.
+    def around(k: int) -> float:
+        box = lines[k]["box"]
+        reach = _AROUND_LINES * (box[3] - box[1])
+        near = sorted(weights[j] for j, other in enumerate(lines)
+                      if j != k and len(ratios[j]) >= _AROUND_WORDS
+                      and other["box"][0] < box[2] and box[0] < other["box"][2]
+                      and abs(other["box"][1] + other["box"][3] - box[1] - box[3]) / 2 <= reach)
+        return near[len(near) // 2] if len(near) >= _AROUND_MIN else 1.0
+
+    # A line is bold where its words weigh more than the text around it
+    # and than the page's usual (_LINE_BOLD) - its strokes' width, a pixel
+    # or two over a short line, called "in separate sections." bold. A
+    # word of a bold line is bold but where it weighs as the text around;
+    # one of a regular line, a bold run in it, where it weighs a fifth more
+    # (_WORD_BOLD).
+    for k, line in enumerate(lines):
+        level = max(1.0, around(k))
+        if weights[k] is not None:
+            line["bold"] = weights[k] >= _LINE_BOLD * level
         before = None
         for word in line["words"]:
             if len(word) < 5:
                 continue
             own = word[4]
             typical = usual[kind(word[2])]
-            if _letters(word[2]) + sum(ch.isdigit() for ch in word[2]) >= _WORD_MIN_GLYPHS and typical:
-                bold = own["weight"] >= _WORD_BOLD * typical
+            if glyphs(word[2]) >= _WORD_MIN_GLYPHS and typical and own.get("weight"):
+                bold = own["weight"] >= (_LINE_BOLD if line["bold"] else _WORD_BOLD) * typical * level
             else:
                 bold = before["bold"] if before else line["bold"]
             # a lean is told by stems; a word of diagonals ("every") leans
@@ -879,10 +919,10 @@ def settle_page(lines: List[Dict[str, Any]]) -> None:
                 line["baseline"] = mate["baseline"] + mate["skew"] * (line["box"][0] - mate["box"][0])
                 line["size"] = mate["size"]
     # One kind of line - its weight and slant - is set at one size on a
-    # page: a line measured off it by less than _SAME_SIZE is set at its
-    # kind's usual. On a page scanned askew a descender of the line above
-    # touches the next line's capitals, and read so "Introduction, Basic
-    # Programming Choices" came to 17.4pt among its neighbours' 13.8.
+    # page: a line measured off it by less than _SAME_SIZE - a row or two
+    # of its capitals - is set at its kind's usual. A line a fifth larger
+    # is set so: the MCS-40 manual's "THE FUNCTIONS OF A COMPUTER", 9.0pt
+    # to its body's 7.4, set at 7.4 came out its body text.
     for kind in {(l["bold"], l["italic"]) for l in lines}:
         same = [l for l in lines if (l["bold"], l["italic"]) == kind]
         if len(same) < 3:
