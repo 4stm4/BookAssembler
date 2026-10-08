@@ -500,10 +500,13 @@ _FACE_CMD = {"serif": "\\latinfont ", "sans": "\\latinsans ", "mono": "\\latinmo
 def _printed_lines(block: Any) -> List[Dict[str, Any]]:
     """The lines of a block as its print was read (TocAnalyzer,
     PrintedLinesAnalyzer): a contents entry's or a paragraph's
-    metadata["printed_lines"], a heading's metadata["printed_title"], a
+    metadata["printed_lines"], a heading's metadata["printed_title"] (its
+    "printed_title_lines", where it prints in more than one), a
     list's its items'."""
     md = getattr(block, "metadata", None) or {}
     if isinstance(block, ContainerUnit):
+        if md.get("printed_title_lines"):
+            return list(md["printed_title_lines"])
         return [md["printed_title"]] if md.get("printed_title") else []
     if isinstance(block, ListBlock):
         # a list's, its items' lines - all of them read, or none

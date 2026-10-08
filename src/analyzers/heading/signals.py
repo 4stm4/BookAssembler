@@ -12,6 +12,10 @@ import re
 # purposes at different blast radii (see rules.py).
 _WORD_RE = re.compile(r"[A-Za-z]{3,}")
 
+# The number a heading leads with - its part's ("4101 RAM" of the MCS-40
+# manual), its chapter's - is no noise: its figures count as a word's.
+_LEADING_NUMBER_RE = re.compile(r"^\d[\d/.]*")
+
 # A heading promoted from a scanned page can carry an embedded real word
 # ("FUNCTION", "NOTE") inside what is otherwise diagram-label or code-comment
 # noise ("FUNCTION;' FUM~g~N BUS ' I INPUTS F, DECOOER F,"). One real word is
@@ -57,3 +61,18 @@ MAX_HEADING_GAP_LINES = 3.0
 # How far left of the paragraph under it, in its own line's heights, a
 # heading hangs to stand apart by place alone: "PUSH IX" hangs 3.5.
 HANGING_INDENT_LINES = 2.0
+# A heading set larger than its page's body stands so much larger at the
+# least: the MCS-40 manual's "THE FUNCTIONS OF A COMPUTER" 1.22 of its
+# 7.4pt body, its noise between lines of one size 0.03-0.06.
+LARGER_THAN_BODY = 1.12
+# A line set smaller than this of the body is a diagram's label, a
+# footnote's - no heading (the Intel 3000 manual's block diagram labels
+# stand at 0.5-0.8 of its body).
+SMALLER_THAN_BODY = 0.9
+# The most lines a heading prints in: the MCS-40 manual's "PROGRAM COUNTER
+# (JUMPS, SUBROUTINES AND / THE STACK):" takes two.
+MAX_HEADING_LINES = 2
+# Headings whose sizes stand within this of each other are of one size
+# (their levels go by their case and slant): 7.39 to 7.85pt in the MCS-40
+# manual for one style read at different heights of a scan.
+SAME_HEADING_SIZE = 1.08
