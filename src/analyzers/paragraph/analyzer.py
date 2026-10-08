@@ -129,6 +129,13 @@ def _split_misread(container: ContainerUnit) -> None:
         foot = len(lines)
         while foot > head and bad[foot - 1]:
             foot -= 1
+        # a line on the row of a misread one is the same printed line, OCR
+        # cut apart - signetics8080's "T - (I" and "K) - 1 + CI.", a sign
+        # it did not read between them
+        while head and head < foot and _same_row(lines[head - 1], lines[head]):
+            head += 1
+        while foot < len(lines) and foot > head and _same_row(lines[foot - 1], lines[foot]):
+            foot -= 1
         if head == foot or (head == 0 and foot == len(lines)):
             out.append(child)
             continue
@@ -144,6 +151,13 @@ def _split_misread(container: ContainerUnit) -> None:
             min(b.x0 for b in boxes), min(b.y0 for b in boxes), max(b.x1 for b in boxes), max(b.y1 for b in boxes))
         out.extend(before + [child] + after)
     container.children = out
+
+
+def _same_row(a: Any, b: Any) -> bool:
+    """Whether two lines stand on one printed row: each over half the
+    other's height."""
+    p, q = a.visual_layout.bounding_box, b.visual_layout.bounding_box
+    return min(p.y1, q.y1) - max(p.y0, q.y0) > 0.5 * min(p.y1 - p.y0, q.y1 - q.y0)
 
 
 def _formula(paragraph: ParagraphBlock, lines: List[Any], printed: List[Dict[str, Any]], where: str) -> FormulaBlock:
