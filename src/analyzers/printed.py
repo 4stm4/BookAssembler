@@ -101,6 +101,10 @@ _OVER_CAPS = 0.25         # of a line's capitals' height, how far over their top
 _OVER_TOPS = 0.05         # of it, how far over their tops a bar's middle stands, a capital's own top short of it
 _NAME_COVER = 0.34        # of a name's width, more than an overline over it reaches over
 _ZOOM = 6.0
+_FIT_ZOOM = 12.0          # a line's set words are laid over its print at (_fit_baseline)
+_FIT_REACH = 0.4          # pt: the furthest its baseline is moved
+_FIT_MIN_WORDS = 3        # a line of fewer words is too little to lay over its print
+_FIT_MIN_LIKENESS = 0.3   # the least its set words' darkness correlates with the print's
 
 
 def _thickened(np, mask):
@@ -937,6 +941,72 @@ def _set_miss(np, pymupdf, mask, x0: float, y0: float, word: List[Any], line: Di
     return float((mask & ~near_set).sum() + (set_ & ~near_print).sum()) / total if total else None
 
 
+def _fit_baseline(np, pymupdf, page, line: Dict[str, Any]) -> None:
+    """Move a line's baseline to where its words, set in its face, weight,
+    lean and size - each as wide as its print, on its skew - lie best over
+    the print: the shift, within _FIT_REACH, whose set darkness correlates
+    best with the scan's (rendered at _FIT_ZOOM, between rows by a parabola
+    through the best three). Read off its rows' ink alone, a baseline is a
+    row of a sixth of a point, and a line set a row off its print showed
+    all along it - the paragraph fixture E's last line of three stood a
+    third of a point closer to its first than it printed. Darkness, not
+    ink past a threshold, and blur moves no peak. A line of fewer than
+    _FIT_MIN_WORDS words keeps its own."""
+    words = [w for w in line.get("words") or [] if len(w) > 4 and w[2].strip()]
+    if len(words) < _FIT_MIN_WORDS or not line.get("size"):
+        return
+    x0, y0, x1, y1 = line["box"]
+    clip = pymupdf.Rect(x0 - 1, y0 - 1, x1 + 1, y1 + 1) & page.rect
+    if clip.is_empty:
+        return
+    pix = page.get_pixmap(matrix=pymupdf.Matrix(_FIT_ZOOM, _FIT_ZOOM), clip=clip)
+    grey = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].mean(axis=2)
+    scan = np.clip(np.median(grey) - grey, 0, None)
+    reach = int(round(_FIT_REACH * _FIT_ZOOM))
+    doc = pymupdf.open()
+    sheet = doc.new_page(width=clip.width, height=clip.height + 2 * _FIT_REACH)
+    fonts: Dict[str, Any] = {}
+    for w in words:
+        facts = w[4]
+        variant = ("bold" if facts.get("bold") else "") + ("italic" if facts.get("italic") else "") or "regular"
+        if variant not in fonts:
+            path = _font_file(f"{_GYRE.get(line['face'], 'texgyreheros')}-{variant}.otf")
+            if not path:
+                doc.close()
+                return
+            sheet.insert_font(fontname=f"F{len(fonts)}", fontfile=path)
+            fonts[variant] = (f"F{len(fonts)}", pymupdf.Font(fontfile=path))
+        name, font = fonts[variant]
+        advance = font.text_length(w[2].strip(), fontsize=line["size"])
+        if advance <= 0:
+            continue
+        at = pymupdf.Point(w[0] - clip.x0, line["baseline"] + (line.get("skew") or 0.0) * (w[0] - x0)
+                           - clip.y0 + _FIT_REACH)
+        sheet.insert_text(at, w[2].strip(), fontsize=line["size"], fontname=name,
+                          morph=(at, pymupdf.Matrix(max(0.2, (w[1] - w[0]) / advance), 0, 0, 1, 0, 0)))
+    img = sheet.get_pixmap(matrix=pymupdf.Matrix(_FIT_ZOOM, _FIT_ZOOM))
+    doc.close()
+    set_grey = np.frombuffer(img.samples, dtype=np.uint8).reshape(img.height, img.width, img.n)[:, :, :3].mean(axis=2)
+    setd = 255.0 - set_grey
+    h, w_ = scan.shape[0], min(scan.shape[1], setd.shape[1])
+    a = scan[:, :w_]
+    scores = []
+    for k in range(-reach, reach + 1):
+        # the set text k rows lower over the print: its rows from reach - k
+        s = setd[reach - k:reach - k + h, :w_]
+        if s.shape != a.shape:
+            scores.append(-1.0)
+            continue
+        scores.append(float((a * s).sum() / max(1e-9, np.sqrt((a * a).sum() * (s * s).sum()))))
+    best = int(np.argmax(scores))
+    if scores[best] < _FIT_MIN_LIKENESS or best in (0, len(scores) - 1):
+        return
+    lo, mid, hi = scores[best - 1], scores[best], scores[best + 1]
+    curve = lo - 2.0 * mid + hi
+    between = 0.5 * (lo - hi) / curve if curve < 0 else 0.0
+    line["baseline"] += (best - reach + between) / _FIT_ZOOM
+
+
 def _mark_misread(np, pymupdf, lines: List[Dict[str, Any]]) -> None:
     """Keep the ink of each word of a page's lines its text does not draw:
     OCR read a subscript as letters of the line ("tRCD" for t-sub-RCD),
@@ -1039,6 +1109,8 @@ def read_printed_lines(np, pymupdf, source, items: List[Any]) -> List[Any]:
                     again.update({key: m[key] for key in ("part", "text", "page", "pw", "ph")})
                     measured[k] = (owner, again)
         settle_page([m for _, m in measured if m["page"] == page_index])
+        for m in (m for _, m in measured if m["page"] == page_index):
+            _fit_baseline(np, pymupdf, source[page_index], m)
         _mark_misread(np, pymupdf, [m for _, m in measured if m["page"] == page_index])
     out = []
     for owner, m in measured:
