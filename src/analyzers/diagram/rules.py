@@ -1,6 +1,6 @@
 """diagram: Pure decision logic — no KRM writes, no I/O."""
 
-from src.analyzers.diagram.signals import LEFT_PAD, MAX_LABEL_WIDTH, MAX_LABEL_WORDS, MIN_LABELS, PAD, RIGHT_PAD, _RE_FIGURE_CAPTION, _RE_SUBLABEL, log
+from src.analyzers.diagram.signals import LEFT_PAD, MAX_LABEL_WIDTH, MAX_LABEL_WORDS, MIN_LABELS, PAD, PROSE_LINE_CHARS, RIGHT_PAD, _RE_FIGURE_CAPTION, _RE_SUBLABEL, log
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -28,3 +28,10 @@ def _bbox_of(block: Any) -> Optional[Tuple[float, float, float, float]]:
         return None
     return (bb.x0, bb.y0, bb.x1, bb.y1)
 
+
+def _runs_on(block: Any, text: str) -> bool:
+    """Whether a block is body text: more words than a label's, in lines
+    of PROSE_LINE_CHARS on average - not a figure's labels run together, or
+    its wires read as letters."""
+    lines = max(1, len(getattr(block, "inlines", None) or []))
+    return len(text.split()) > MAX_LABEL_WORDS and len(text) / lines >= PROSE_LINE_CHARS

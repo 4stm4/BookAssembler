@@ -20,6 +20,12 @@ MAX_LABEL_WORDS = 4     # a "label" is a short text block
 
 MAX_LABEL_WIDTH = 0.30  # schematic labels are narrow; body text spans wider
 
+# Body text runs on in lines this many characters long on average and
+# more; a figure's labels OCR ran together into one block ("MEMORY EXT
+# DATA IN DEVICE IN" over four rows of the Intel 3000 manual's block
+# diagram), its wires read as letters ("CLX -I L,---.---"), in short ones.
+PROSE_LINE_CHARS = 20
+
 # Graphic boxes/arrows extend past the text labels, so pad generously — most on
 # the right where destination boxes (Memory/Datum) sit beyond the last label.
 RIGHT_PAD = 0.17

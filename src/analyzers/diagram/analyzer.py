@@ -17,7 +17,7 @@ from src.krm.models import (
 )
 
 from src.analyzers.diagram.signals import LEFT_PAD, MAX_LABEL_WIDTH, MAX_LABEL_WORDS, MIN_LABELS, PAD, RIGHT_PAD, _RE_FIGURE_CAPTION, _RE_SUBLABEL, log
-from src.analyzers.diagram.rules import _bbox_of, _text_of
+from src.analyzers.diagram.rules import _bbox_of, _runs_on, _text_of
 
 class DiagramDetectorAnalyzer(BaseAnalyzer):
     def __init__(self) -> None:
@@ -74,6 +74,9 @@ class DiagramDetectorAnalyzer(BaseAnalyzer):
         caption_text = ""
         caption_box: Optional[Tuple[float, float, float, float]] = None
         labels: List[Tuple[ParagraphBlock, ContainerUnit, str, Tuple[float, float, float, float]]] = []
+        # neither labels nor body text: labels OCR ran together, wires it
+        # read as letters - the figure's where they stand among its labels
+        drawn: List[Tuple[ParagraphBlock, ContainerUnit, str, Tuple[float, float, float, float]]] = []
         prose: List[Tuple[float, float, float, float]] = []
         for block, parent in items:
             txt = _text_of(block)
@@ -89,12 +92,14 @@ class DiagramDetectorAnalyzer(BaseAnalyzer):
             width = bb[2] - bb[0]
             is_sublabel = bool(_RE_SUBLABEL.match(txt))
             # A schematic label is a short AND narrow text block (or an (a)-(g)
-            # sub-caption). Wide blocks are body text and are excluded.
+            # sub-caption). Other blocks are body text where they run on.
             is_label = (len(txt.split()) <= MAX_LABEL_WORDS and width <= MAX_LABEL_WIDTH) or is_sublabel
             if is_label:
                 labels.append((block, parent, txt, bb))
-            elif txt != caption_text:
+            elif _runs_on(block, txt):
                 prose.append(bb)
+            elif txt != caption_text:
+                drawn.append((block, parent, txt, bb))
 
         # A diagram region needs a real Figure caption and a cluster of narrow labels.
         if not caption_text or len(labels) < MIN_LABELS:
@@ -115,6 +120,10 @@ class DiagramDetectorAnalyzer(BaseAnalyzer):
         y0 = min(b[3][1] for b in labels)
         x1 = max(b[3][2] for b in labels)
         y1 = max(b[3][3] for b in labels)
+        # what else OCR read among the labels is the figure's too - not a
+        # text column's running by it
+        labels += [d for d in drawn if x0 <= (d[3][0] + d[3][2]) / 2 <= x1 and y0 <= (d[3][1] + d[3][3]) / 2 <= y1
+                   and not _in_column(d[3], prose, y0, y1)]
         region = NormalizedRect(
             max(0.0, x0 - LEFT_PAD), max(0.0, y0 - PAD),
             min(1.0, x1 + RIGHT_PAD), min(1.0, y1 + PAD),
@@ -155,9 +164,28 @@ def _by_caption(labels: List[Any], prose: List[Tuple[float, float, float, float]
                 caption: Tuple[float, float, float, float]) -> List[Any]:
     """The labels a figure's caption has by it: those over the caption and
     under the body text nearest over it, or else those under the caption
-    and over the body text nearest under it - the side with more."""
-    top = max((b[3] for b in prose if b[3] <= caption[1]), default=0.0)
-    bottom = min((b[1] for b in prose if b[1] >= caption[3]), default=1.0)
-    over = [l for l in labels if l[3][1] >= top and l[3][3] <= caption[3]]
-    under = [l for l in labels if l[3][1] >= caption[1] and l[3][3] <= bottom]
+    and over the body text nearest under it - the side with more.
+
+    The body text that bounds the figure runs across from its caption. A
+    column of text running down beside the figure - the Intel 3000
+    manual's, by its block diagram - bounds nothing, and the short lines
+    standing in it, its headings ("ACCUMULATOR AND D-BUS"), are its own."""
+    across = [b for b in prose if b[0] < caption[2] and caption[0] < b[2]]
+    top = max((b[3] for b in across if b[3] <= caption[1]), default=0.0)
+    bottom = min((b[1] for b in across if b[1] >= caption[3]), default=1.0)
+    over = [l for l in labels if l[3][1] >= top and l[3][3] <= caption[3]
+            and not _in_column(l[3], prose, top, caption[1])]
+    under = [l for l in labels if l[3][1] >= caption[1] and l[3][3] <= bottom
+             and not _in_column(l[3], prose, caption[3], bottom)]
     return over if len(over) >= len(under) else under
+
+
+def _in_column(box: Tuple[float, float, float, float], prose: List[Tuple[float, float, float, float]],
+               top: float, bottom: float) -> bool:
+    """Whether a box stands in a column of body text: text of its column
+    over it and under it, both between top and bottom."""
+    middle = (box[0] + box[2]) / 2
+    height = box[3] - box[1]
+    column = [b for b in prose if b[0] <= middle <= b[2] and b[3] > top and b[1] < bottom]
+    return (any(b[3] <= box[1] + height for b in column)
+            and any(b[1] >= box[3] - height for b in column))
