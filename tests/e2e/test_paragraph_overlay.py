@@ -26,9 +26,11 @@ far as its lines' ink. What the crop then
 compares is how the paragraph lies - its lines, their breaks and spacing,
 its type - against the print.
 
-The measure is test_toc_overlay's: the share of the ink of either crop
-with no ink of the other within a pixel (_mask_mismatch). The limit is
-this file's own, 10% (MAX_MISMATCH).
+The measure is test_toc_overlay's - the share of the ink of either crop
+with no ink of the other within a pixel - taken at the paragraph's own
+proportions (_paragraph_mismatch): both crops at one scale, not each
+stretched to one fixed size whatever its shape. The limit is this file's
+own, 10% (MAX_MISMATCH).
 """
 
 import difflib
@@ -39,7 +41,9 @@ import pytest
 
 from src.assembler.latex_builder import build_latex, compile_xelatex
 from src.krm.models import ContainerUnit, KnowledgeDocument, ParagraphBlock
-from tests.e2e.test_toc_overlay import _GLYPH_CONTRAST, _LETTER_GAP, _TEXT_RULE_SPAN, _mask_mismatch
+from tests.e2e.test_toc_overlay import (
+    _GLYPH_CONTRAST, _INK_THRESHOLD, _LETTER_GAP, _MATCH_REACH_PX, _TEXT_RULE_SPAN, _near,
+)
 from tests.e2e.test_visual_overlay import _render_crop
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "paragraph"
@@ -70,6 +74,25 @@ _BODY_DENSITY = 0.5
 _BODY_CORE = 0.4
 _BODY_DIP = 0.15
 _ZOOM = 4.0
+
+
+def _paragraph_mismatch(img_a, img_b) -> float:
+    """test_toc_overlay's measure (_mask_mismatch) at a paragraph's own
+    proportions: the two crops, rendered at one scale, as black/white
+    matrices at the source crop's size, ink of either with no ink of the
+    other within _MATCH_REACH_PX a miss, over the ink of either.
+
+    _mask_mismatch stretches each crop to one fixed size whatever its
+    shape - right for a table's crops, both much alike, but a paragraph of
+    two lines, 186 by 12pt, came out 50 pixels to the point down and 2
+    across: its lines held to a fiftieth of a point, its words to half a
+    point, and a long paragraph the other way about."""
+    import numpy as np
+    a = np.array(img_a.convert("L"), dtype=np.uint8) < _INK_THRESHOLD
+    b = np.array(img_b.convert("L").resize(img_a.size), dtype=np.uint8) < _INK_THRESHOLD
+    miss = (a & ~_near(b, _MATCH_REACH_PX)) | (b & ~_near(a, _MATCH_REACH_PX))
+    ink = (a | b).sum()
+    return float(miss.sum()) / float(ink) if ink else 0.0
 
 
 def _extract(pdf_path: Path) -> KnowledgeDocument:
@@ -299,8 +322,8 @@ def test_paragraph_visual_overlay_matches_source(tmp_path, fixture_path):
         label = f"paragraph {k + 1} ({_paragraph_text(paragraph)[:40]!r})"
         assert src_rect is not None, f"{label}: not found on the source page by its own words"
         assert out_rect is not None, f"{label}: not found in the assembled page by its own words"
-        mismatch = _mask_mismatch(_render_crop(fitz, fixture_path, 0, src_rect),
-                                  _render_crop(fitz, pdf_path, out_page, out_rect))
+        mismatch = _paragraph_mismatch(_render_crop(fitz, fixture_path, 0, src_rect),
+                                       _render_crop(fitz, pdf_path, out_page, out_rect))
         if mismatch > MAX_MISMATCH:
             misses.append(f"{label}: {mismatch:.1%}")
     assert not misses, (
