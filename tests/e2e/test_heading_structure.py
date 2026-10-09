@@ -4,11 +4,11 @@ one another.
 
 Each fixture is one page cut out of a scanned technical book (MCS-40
 User's Manual, Zaks "Programming the Z80", Intel Series 3000 Reference
-Manual). Its headings were read off the printed page by eye: their text,
-and their rank on the page - 1 its highest, a larger rank a heading under
-it, equal ranks headings of one level. A running head, a page number, a
-figure's caption, a diagram's labels, a table's column heads are no
-headings.
+Manual, Signetics 8080 manual). Its headings were read off the printed
+page by eye: their text, and their rank on the page - 1 its highest, a
+larger rank a heading under it, equal ranks headings of one level. A
+page may have none. A running head, a page number, a figure's caption,
+a diagram's labels, a table's column heads are no headings.
 
 The page goes through the whole pipeline (PdfSourceAdapter, every
 analyzer), and its headings are the titled containers under the
@@ -77,10 +77,21 @@ EXPECTED = {
         ("INTRODUCTION", 2),
         ("SYSTEM ARCHITECTURE", 2),
     ],
+    "zaks_49.pdf": [
+        ("INSIDE A MICROPROCESSOR", 1),
+    ],
+    # its running head "PROGRAMMING THE Z80" over a paragraph, a figure's
+    # caption: no heading
+    "zaks_50.pdf": [],
     "zaks_66.pdf": [
         ("INSTRUCTION FORMATS", 1),
         ("A One-Word Instruction", 2),
     ],
+    "zaks_72.pdf": [
+        ("LD D, C", 1),
+    ],
+    # its foot "20 signetics" - the page's number and the maker's mark
+    "signetics8080_20.pdf": [],
     "intel3000_2-17.pdf": [
         ("LOGICAL DESCRIPTION", 1),
         ("MICRO-FUNCTION BUS AND DECODER", 2),

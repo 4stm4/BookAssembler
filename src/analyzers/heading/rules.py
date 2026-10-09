@@ -6,8 +6,10 @@ import re
 from typing import Any, Dict, List, Optional, Sequence
 from src.krm.models import ContainerUnit, KnowledgeDocument, ParagraphBlock, UnknownBlock
 
+from src.analyzers.caption.signals import _CAPTION_RE
 from src.analyzers.paragraph.rules import continues
 from src.analyzers.heading.signals import (
+    BODY_LINE_CHARS,
     COLUMN_LINES,
     COLUMN_WORDS,
     HANGING_INDENT_LINES,
@@ -27,6 +29,7 @@ from src.analyzers.heading.signals import (
     _NOTE_PREFIX_RE,
     _TRAILING_JUNK_RE,
     _LEADING_NUMBER_RE,
+    _MNEMONIC_RE,
     _WORD_RE,
 )
 
@@ -84,13 +87,24 @@ def _heading_level(font_size: float, threshold: float) -> int:
     return 3
 
 def _reads_as_title(text: str) -> bool:
-    """Whether text has a heading's shape: words, not noise."""
+    """Whether text has a heading's shape: words - or an instruction's
+    mnemonic (_MNEMONIC_RE) - not noise, nor a figure's or a table's
+    caption (Zaks' bold "Fig. 2.19: The Instruction Arrives from the Memory
+    into IR" over the paragraph after it)."""
     return (
         3 <= len(text) < 200
         and any(c.isalpha() for c in text)
-        and _word_char_ratio(text) >= MIN_WORD_CHAR_RATIO
+        and (_word_char_ratio(text) >= MIN_WORD_CHAR_RATIO or bool(_MNEMONIC_RE.match(text.strip())))
         and not _looks_like_non_heading_noise(text)
+        and not _is_caption(text)
     )
+
+
+def _is_caption(text: str) -> bool:
+    """Whether text is a figure's or a table's caption ("Fig. 2.19: ...",
+    "Table 3-1 ..."); an example's ("Example 2-1") heads its listing."""
+    match = _CAPTION_RE.match(text.strip())
+    return bool(match) and match.group(1).lower() not in ("example", "пример")
 
 
 def _is_heading(block: Any, threshold: float) -> bool:
@@ -141,7 +155,7 @@ def body_size(blocks: List[Any]) -> float:
     ...", set 11pt by its 7.1pt text, made its 8.9pt headings smaller
     than its body. 0 where none was read."""
     sizes = sorted(l["size"] for b in blocks for l in _printed(b)
-                   if l.get("size") and len(l.get("text") or "") >= 40
+                   if l.get("size") and len(l.get("text") or "") >= BODY_LINE_CHARS
                    and _word_char_ratio(l["text"]) >= MIN_WORD_CHAR_RATIO)
     return sizes[len(sizes) // 2] if sizes else 0.0
 
@@ -177,8 +191,9 @@ def _is_printed_heading(block: Any, under: List[Dict[str, Any]], body: float = 0
 
     One set in the body's size heads the paragraph under it (under, its
     printed lines): one beginning close under it (MAX_HEADING_GAP_LINES),
-    across from it, set as body text - a line that stands apart over
-    another that does is a table's or a figure's. One set larger may head
+    across from it, set as body text or running on (BODY_LINE_CHARS) - a
+    line that stands apart over a short one that does is a table's or a
+    figure's. One set larger may head
     a heading in its turn ("Z80 HARDWARE ORGANIZATION" over
     "INTRODUCTION"); one ending in a colon introduces whatever follows
     close under it - "TEST LOAD CIRCUIT:" its drawing - and one over a
@@ -209,7 +224,9 @@ def _is_printed_heading(block: Any, under: List[Dict[str, Any]], body: float = 0
     if not under or under[0]["page"] != lines[0]["page"]:
         return False
     introduces = bool(apart) and (text.rstrip().endswith(":") or _in_head_row(under[0], others, body))
-    if not introduces and (len(under) < 2 or _stands_apart([under[0]], under[0].get("text") or "", body)):
+    first = under[0].get("text") or ""
+    under_apart = len(first) < BODY_LINE_CHARS and bool(_stands_apart([under[0]], first, body))
+    if not introduces and (len(under) < 2 or under_apart):
         return False
     utop = under[0]["box"][1]
     left = min(l["box"][0] for l in under)

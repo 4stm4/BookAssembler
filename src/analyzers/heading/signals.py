@@ -16,6 +16,12 @@ _WORD_RE = re.compile(r"[A-Za-z]{3,}")
 # manual), its chapter's - is no noise: its figures count as a word's.
 _LEADING_NUMBER_RE = re.compile(r"^\d[\d/.]*")
 
+# An instruction's mnemonic and operands ("LD D, C" heading its worked
+# example in Zaks' "Programming the Z80"): no word of three letters, but
+# every token clean - letters and figures, a comma or a prime after - where
+# OCR noise breaks into stray signs ("MIP I I: D", "~:Y").
+_MNEMONIC_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*(?:\s+[A-Za-z0-9]+[,']?)+$")
+
 # A heading promoted from a scanned page can carry an embedded real word
 # ("FUNCTION", "NOTE") inside what is otherwise diagram-label or code-comment
 # noise ("FUNCTION;' FUM~g~N BUS ' I INPUTS F, DECOOER F,"). One real word is
@@ -103,3 +109,9 @@ COLUMN_WORDS = 5
 # Of a line of capitals' letters, how many OCR may read lowercase - a
 # capital misread now and then: "TEST lOAD CIRCUIT:", "2SoC" for "25°C".
 MISREAD_CAPITALS = 0.125
+# A line this long is running text: the body's, its size the body's
+# (rules.body_size), and a paragraph's under a heading however its print
+# was measured - Zaks' "This corresponds to MOV r1, r2 for the 8080.
+# Refer to line 1 of Fig. 2.27.", read 12.3pt on a 10.6pt page, under "LD
+# D, C".
+BODY_LINE_CHARS = 40
