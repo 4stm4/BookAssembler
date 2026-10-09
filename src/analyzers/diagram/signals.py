@@ -42,3 +42,13 @@ RIGHT_PAD = 0.17
 LEFT_PAD = 0.05
 
 PAD = 0.03
+
+# A figure of a scanned page is drawn from its own ink (metadata
+# "printed_ink"), read at this zoom (pixels to the point) - about the
+# scan's own resolution - where its pixels are darker than INK_LEVEL
+# (0-255 grey, as a print's words are read, printed._INK_LEVEL).
+FIGURE_ZOOM = 4.0
+INK_LEVEL = 160
+# Of its page, the pixels a block not of the figure is masked out by round
+# its box: a caption, a running head standing in the figure's band.
+MASK_PAD = 0.002

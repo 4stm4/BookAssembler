@@ -47,3 +47,23 @@ def _size_of(block: Any) -> float:
     if sizes:
         return sizes[(len(sizes) - 1) // 2]
     return font_size(block, default=0.0) or 0.0
+
+
+Box = Tuple[float, float, float, float]
+
+
+def figure_area(labels: List[Box], prose: List[Box], band: Tuple[float, float]) -> Box:
+    """Where a figure stands on its page (page-normalised): the band between
+    its caption and the body text across from it (band, top and bottom),
+    across the page but for the columns of body text running down beside
+    it, its labels between them."""
+    lo, hi = band
+    middle = (min(b[0] for b in labels) + max(b[2] for b in labels)) / 2
+    left, right = 0.0, 1.0
+    for b in prose:
+        if b[1] < hi and b[3] > lo:
+            if (b[0] + b[2]) / 2 < middle:
+                left = max(left, b[2])
+            else:
+                right = min(right, b[0])
+    return (left, lo, right, hi)
