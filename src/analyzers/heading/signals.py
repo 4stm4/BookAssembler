@@ -100,3 +100,6 @@ COLUMN_LINES = 2
 # Words of a line of running text, one of which each such column holds -
 # a table's columns of cells ("1,7,8,11", "Y0-Y7", "Active") none.
 COLUMN_WORDS = 5
+# Of a line of capitals' letters, how many OCR may read lowercase - a
+# capital misread now and then: "TEST lOAD CIRCUIT:", "2SoC" for "25°C".
+MISREAD_CAPITALS = 0.125

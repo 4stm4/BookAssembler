@@ -21,6 +21,7 @@ from src.analyzers.heading.signals import (
     SAME_ROW,
     SMALLER_THAN_BODY,
     MIN_WORD_CHAR_RATIO,
+    MISREAD_CAPITALS,
     _COMMENT_CLOSE_RE,
     _COMMENT_OPEN_RE,
     _NOTE_PREFIX_RE,
@@ -123,9 +124,9 @@ def _printed_under(blocks: List[Any], start: int) -> List[Dict[str, Any]]:
 
 def _capitals(text: str) -> bool:
     """Whether a line is set in capitals: four letters or more, none
-    lowercase."""
+    lowercase but what OCR misread (MISREAD_CAPITALS)."""
     letters = [ch for ch in text if ch.isalpha()]
-    return len(letters) >= 4 and not any(ch.islower() for ch in letters)
+    return len(letters) >= 4 and sum(ch.islower() for ch in letters) <= MISREAD_CAPITALS * len(letters)
 
 
 def _printed_size(lines: List[Dict[str, Any]]) -> float:
@@ -180,7 +181,9 @@ def _is_printed_heading(block: Any, under: List[Dict[str, Any]], body: float = 0
     another that does is a table's or a figure's. One set larger may head
     a heading in its turn ("Z80 HARDWARE ORGANIZATION" over
     "INTRODUCTION"); one ending in a colon introduces whatever follows
-    close under it - "TEST LOAD CIRCUIT:" its drawing. A line ending a
+    close under it - "TEST LOAD CIRCUIT:" its drawing - and one over a
+    table's column heads heads the table ("CAPACITANCE(2) TA = 25°C" over
+    "SYMBOL PARAMETER MIN TYP MAX UNIT"). A line ending a
     sentence ("in separate sections.") is none, nor one in a row of a
     table's column heads (_in_head_row; others, the page's other printed
     lines)."""
@@ -205,7 +208,7 @@ def _is_printed_heading(block: Any, under: List[Dict[str, Any]], body: float = 0
         return True
     if not under or under[0]["page"] != lines[0]["page"]:
         return False
-    introduces = bool(apart) and text.rstrip().endswith(":")
+    introduces = bool(apart) and (text.rstrip().endswith(":") or _in_head_row(under[0], others, body))
     if not introduces and (len(under) < 2 or _stands_apart([under[0]], under[0].get("text") or "", body)):
         return False
     utop = under[0]["box"][1]
@@ -230,7 +233,7 @@ def _in_head_row(line: Dict[str, Any], others: Sequence[Dict[str, Any]], body: f
         return (other.get("page") == line.get("page")
                 and shared >= SAME_ROW * min(bottom - top, other["box"][3] - other["box"][1]))
 
-    mates = [o for o in others if beside(o) and _stands_apart([o], o.get("text") or "", body)]
+    mates = [o for o in others if o is not line and beside(o) and _stands_apart([o], o.get("text") or "", body)]
     return len(mates) >= HEAD_ROW_CELLS - 1
 
 
