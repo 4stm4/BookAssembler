@@ -130,3 +130,64 @@ class TestMixed:
         original_id = p.id
         result = _run([p])
         assert result[0].id == original_id
+
+
+def _printed_para(text: str, y0: float, y1: float, lines: list, page: int = 0) -> ParagraphBlock:
+    """A scanned page's block, its lines' print read (PrintedLinesAnalyzer)."""
+    para = _make_para(text, y0, y1, page)
+    para.metadata["printed_lines"] = lines
+    return para
+
+
+def _line(text: str, y0: float, y1: float, size: float = 10.0, bold: bool = False,
+          italic: bool = False, words: list = None, page: int = 0) -> dict:
+    return {"text": text, "page": page, "box": [0.1, y0, 0.9, y1], "size": size, "bold": bold,
+            "italic": italic, "words": words or [], "page_pt": [612.0, 792.0]}
+
+
+_BODY = "The body of the page runs on in lines of many words like this one."
+
+
+class TestRunningHeadByPrint:
+    """On a scanned page alone nothing repeats: its running head is told by
+    its print - at the page's edge, set apart by its case or slant alone,
+    or led by the page's number set well apart."""
+
+    def _page(self, head):
+        body = []
+        for k in range(3):
+            y0, y1 = 0.3 + 0.05 * k, 0.33 + 0.05 * k
+            body.append(_printed_para(_BODY, y0, y1, [_line(_BODY, y0, y1)]))
+        return _run([head] + body)
+
+    def test_capitals_at_the_top_edge_are_a_running_head(self):
+        head = _printed_para("PROGRAMMING THE Z80", 0.04, 0.06, [_line("PROGRAMMING THE Z80", 0.04, 0.06)])
+        result = self._page(head)
+        assert isinstance(result[0], EphemeraBlock)
+        assert result[0].ephemera_type == "header"
+
+    def test_a_bold_heading_at_the_top_edge_stays(self):
+        head = _printed_para("A.C. CHARACTERISTICS", 0.04, 0.06,
+                             [_line("A.C. CHARACTERISTICS", 0.04, 0.06, bold=True)])
+        assert isinstance(self._page(head)[0], ParagraphBlock)
+
+    def test_a_larger_heading_at_the_top_edge_stays(self):
+        head = _printed_para("CONTENTS", 0.04, 0.06, [_line("CONTENTS", 0.04, 0.06, size=14.0)])
+        assert isinstance(self._page(head)[0], ParagraphBlock)
+
+    def test_body_text_at_the_top_edge_stays(self):
+        text = "The move is completed with the microin-"
+        head = _printed_para(text, 0.04, 0.06, [_line(text, 0.04, 0.06)])
+        assert isinstance(self._page(head)[0], ParagraphBlock)
+
+    def test_a_foot_led_by_the_page_number_set_apart(self):
+        words = [[0.09, 0.12, "20"], [0.48, 0.56, "signetics"]]
+        foot = _printed_para("20 signetics", 0.95, 0.97, [_line("20 signetics", 0.95, 0.97, words=words)])
+        result = self._page(foot)
+        assert isinstance(result[0], EphemeraBlock)
+        assert result[0].ephemera_type == "footer"
+
+    def test_a_number_a_word_space_off_is_no_folio(self):
+        words = [[0.40, 0.50, "Chapter"], [0.51, 0.52, "3"]]
+        foot = _printed_para("Chapter 3", 0.95, 0.97, [_line("Chapter 3", 0.95, 0.97, words=words, bold=True)])
+        assert isinstance(self._page(foot)[0], ParagraphBlock)

@@ -19,7 +19,7 @@ from src.krm.models import (
 )
 
 from src.analyzers.ephemera.signals import MIN_REPEAT_PAGES, _PAGENUM_RE
-from src.analyzers.ephemera.rules import _is_edge, _norm
+from src.analyzers.ephemera.rules import _is_edge, _norm, body_sizes, margin_line
 
 class EphemeraDetectorAnalyzer(BaseAnalyzer):
     def __init__(self) -> None:
@@ -54,8 +54,21 @@ class EphemeraDetectorAnalyzer(BaseAnalyzer):
             self._collect(root, seen)
         self._repeated = {t for t, pages in seen.items()
                           if len(pages) >= MIN_REPEAT_PAGES}
+        # A scanned page's running head is told by its print too - on a
+        # page alone, where nothing repeats (rules.margin_line).
+        printed: List[Dict[str, Any]] = []
+        for root in doc.root_containers:
+            self._collect_printed(root, printed)
+        self._body = body_sizes(printed)
         for root in doc.root_containers:
             self._process(root)
+
+    def _collect_printed(self, container: ContainerUnit, out: List[Dict[str, Any]]) -> None:
+        for child in container.children:
+            if isinstance(child, ContainerUnit):
+                self._collect_printed(child, out)
+            elif not child.is_tombstoned:
+                out.extend((child.metadata or {}).get("printed_lines") or [])
 
     def _collect(self, container: ContainerUnit, seen: Dict[str, set]) -> None:
         """Record which pages each candidate line appears on."""
@@ -110,6 +123,21 @@ class EphemeraDetectorAnalyzer(BaseAnalyzer):
                     extraction_confidence=child.extraction_confidence,
                     classification_confidence=0.9,
                     confidence_score=min(child.extraction_confidence, 0.9),
+                )
+                eph.id = child.id
+                new_children.append(eph)
+                continue
+
+            if _is_edge(vl.bounding_box) and len(text) < 80 and margin_line(
+                    (child.metadata or {}).get("printed_lines") or [], text,
+                    self._body.get(vl.page_or_screen_index, 0.0)):
+                eph = EphemeraBlock(
+                    ephemera_type="header" if y1 < 0.5 else "footer",
+                    repeated_text=text.strip(),
+                    visual_layout=child.visual_layout,
+                    extraction_confidence=child.extraction_confidence,
+                    classification_confidence=0.75,
+                    confidence_score=min(child.extraction_confidence, 0.75),
                 )
                 eph.id = child.id
                 new_children.append(eph)
