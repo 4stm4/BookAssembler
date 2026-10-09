@@ -417,6 +417,10 @@ def render_node(
         body.append(f"\\end{{{env}}}\n")
     elif isinstance(node, TableBlock):
         body.append(_render_table(node))
+    elif isinstance(node, FigureBlock) and _figure_ink(node):
+        # A figure of a scanned page, drawn from its own ink where it printed
+        # (DiagramDetectorAnalyzer) - its caption is a block of its own
+        body.append(_printed_figure(node, column_left))
     elif isinstance(node, FigureBlock):
         # The linear builder has no image pipeline — page-aware assembly renders
         # the source region. Emit a valid framed placeholder with whatever
@@ -529,9 +533,37 @@ def _printed_page_mm(printed: List[Dict[str, Any]]) -> Tuple[float, float]:
     return size[0] * 25.4 / 72.0, size[1] * 25.4 / 72.0
 
 
+def _figure_ink(block: Any) -> Optional[Dict[str, Any]]:
+    """A figure's own ink, as read off its scanned page
+    (metadata["printed_ink"]: "box", "shape", "runs", "page_pt")."""
+    return ((getattr(block, "metadata", None) or {}).get("printed_ink")
+            if isinstance(block, FigureBlock) else None)
+
+
+def _printed_figure(block: Any, column_left: Optional[float] = None) -> str:
+    """A figure drawn from its own ink (_scan_ink) as a block in the flow,
+    as _printed_block sets a paragraph: as wide and tall as it printed,
+    as far in from the flow's edge as it printed in from its column's."""
+    ink = _figure_ink(block)
+    x0, top, x1, bottom = _printed_extent(block)
+    page_w, page_h = _printed_page_mm([ink])
+    left = x0 if column_left is None else min(column_left, x0)
+    return (
+        "\\par\\noindent\\begin{tikzpicture}\n"
+        f"\\useasboundingbox (0,0) rectangle ({x1 - left:.2f}mm,{top - bottom:.2f}mm);\n"
+        + _scan_ink(ink, page_w, page_h, (left, top), "")
+        + "\\end{tikzpicture}\\par\n"
+    )
+
+
 def _printed_extent(block: Any) -> Optional[Tuple[float, float, float, float]]:
     """Where a block's printed lines' ink stands on its page (mm): x0, top,
-    x1, bottom - None where its print was not read."""
+    x1, bottom - a figure's, its own ink's (_figure_ink) - None where its
+    print was not read."""
+    ink = _figure_ink(block)
+    if ink:
+        page_w, page_h = _printed_page_mm([ink])
+        return (ink["box"][0] * page_w, ink["box"][1] * page_h, ink["box"][2] * page_w, ink["box"][3] * page_h)
     printed = _printed_lines(block)
     if not printed:
         return None
@@ -777,6 +809,9 @@ def _letter_spans(inks: List[Any], runs: List[Tuple[float, float]]) -> Optional[
     return list(reversed(spans))
 
 
+_FILL_RECTS = 200  # rectangles a path of a print's ink holds at most (_scan_ink)
+
+
 def _scan_ink(scan: Dict[str, Any], page_w: float, page_h: float, origin: Tuple[float, float], pen: str) -> str:
     """A word's print drawn from its own ink (printed._mark_misread): its
     runs of pixels as rectangles, a run under the same run of the row above
@@ -794,12 +829,17 @@ def _scan_ink(scan: Dict[str, Any], page_w: float, page_h: float, origin: Tuple[
             held = [r, r + 1, a, b]
             rects.append(held)
             spans[(a, b)] = held
-    path = " ".join(
+    pieces = [
         f"({x0 * page_w + a * pw - origin[0]:.3f}mm, {origin[1] - y0 * page_h - top * ph:.3f}mm) rectangle "
         f"({x0 * page_w + b * pw - origin[0]:.3f}mm, {origin[1] - y0 * page_h - end * ph:.3f}mm)"
         for top, end, a, b in rects
+    ]
+    # a path of a few hundred rectangles at most: a figure's thousands in
+    # one, TikZ's path grows the slower the longer, and XeLaTeX gave out
+    return "".join(
+        f"  \\fill[{pen.rstrip(', ')}] {' '.join(pieces[k:k + _FILL_RECTS])};\n"
+        for k in range(0, len(pieces), _FILL_RECTS)
     )
-    return f"  \\fill[{pen.rstrip(', ')}] {path};\n" if path else ""
 
 
 def _weighed(line: Dict[str, Any], pieces: List[Any], inks: List[Any]) -> Tuple[float, float]:

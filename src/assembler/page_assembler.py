@@ -20,10 +20,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from src.assembler.latex_builder import (
     _esc,
+    _figure_ink,
     _para_text,
     _printed_extent,
     _printed_lines,
     _printed_nodes,
+    _scan_ink,
     _translated,
     render_node,
 )
@@ -366,7 +368,11 @@ def _render_positional(slot: PageSlot, target_lang: str) -> str:
 
     printed: List[str] = []
     for block in slot.blocks:
-        if isinstance(block, _ATOMIC):
+        if _figure_ink(block):
+            # a figure of a scanned page, drawn from its own ink where it
+            # printed (DiagramDetectorAnalyzer)
+            printed.append(_scan_ink(_figure_ink(block), page_w, page_h, (0.0, 0.0), ""))
+        elif isinstance(block, _ATOMIC):
             atomic.append(block)
         elif _printed_lines(block):
             # Read off its print line by line (TocAnalyzer): each line is
