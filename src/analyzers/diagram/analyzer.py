@@ -16,8 +16,8 @@ from src.krm.models import (
     NormalizedRect,
 )
 
-from src.analyzers.diagram.signals import LEFT_PAD, MAX_LABEL_WIDTH, MAX_LABEL_WORDS, MIN_LABELS, PAD, RIGHT_PAD, _RE_FIGURE_CAPTION, _RE_SUBLABEL, log
-from src.analyzers.diagram.rules import _bbox_of, _runs_on, _text_of
+from src.analyzers.diagram.signals import LEFT_PAD, MAX_LABEL_WIDTH, MAX_LABEL_WORDS, MIN_LABELS, NOTE_SIZE, PAD, RIGHT_PAD, _RE_FIGURE_CAPTION, _RE_SUBLABEL, log
+from src.analyzers.diagram.rules import _bbox_of, _runs_on, _size_of, _text_of
 
 class DiagramDetectorAnalyzer(BaseAnalyzer):
     def __init__(self) -> None:
@@ -78,15 +78,19 @@ class DiagramDetectorAnalyzer(BaseAnalyzer):
         # read as letters - the figure's where they stand among its labels
         drawn: List[Tuple[ParagraphBlock, ContainerUnit, str, Tuple[float, float, float, float]]] = []
         prose: List[Tuple[float, float, float, float]] = []
+        caption_size = 0.0
+        # A real caption is short ("Figure 2-11 Data-related addressing modes"),
+        # not an in-text reference ("Figure 2-5 shows how a program's code …").
+        for block, _parent in items:
+            txt = _text_of(block)
+            if txt and _RE_FIGURE_CAPTION.match(txt) and len(txt.split()) <= 10:
+                caption_text, caption_box, caption_size = txt, _bbox_of(block), _size_of(block)
+                break
         for block, parent in items:
             txt = _text_of(block)
             if not txt:
                 continue
             bb = _bbox_of(block)
-            # A real caption is short ("Figure 2-11 Data-related addressing modes"),
-            # not an in-text reference ("Figure 2-5 shows how a program's code …").
-            if not caption_text and _RE_FIGURE_CAPTION.match(txt) and len(txt.split()) <= 10:
-                caption_text, caption_box = txt, bb
             if not bb:
                 continue
             width = bb[2] - bb[0]
@@ -96,9 +100,11 @@ class DiagramDetectorAnalyzer(BaseAnalyzer):
             is_label = (len(txt.split()) <= MAX_LABEL_WORDS and width <= MAX_LABEL_WIDTH) or is_sublabel
             if is_label:
                 labels.append((block, parent, txt, bb))
-            elif _runs_on(block, txt):
+            elif txt == caption_text:
+                continue
+            elif _runs_on(block, txt) and not 0 < _size_of(block) < NOTE_SIZE * caption_size:
                 prose.append(bb)
-            elif txt != caption_text:
+            else:
                 drawn.append((block, parent, txt, bb))
 
         # A diagram region needs a real Figure caption and a cluster of narrow labels.

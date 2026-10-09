@@ -1,5 +1,6 @@
 """diagram: Pure decision logic — no KRM writes, no I/O."""
 
+from src.analyzers.access import font_size
 from src.analyzers.diagram.signals import LEFT_PAD, MAX_LABEL_WIDTH, MAX_LABEL_WORDS, MIN_LABELS, PAD, PROSE_LINE_CHARS, RIGHT_PAD, _RE_FIGURE_CAPTION, _RE_SUBLABEL, log
 import logging
 import re
@@ -35,3 +36,14 @@ def _runs_on(block: Any, text: str) -> bool:
     its wires read as letters."""
     lines = max(1, len(getattr(block, "inlines", None) or []))
     return len(text.split()) > MAX_LABEL_WORDS and len(text) / lines >= PROSE_LINE_CHARS
+
+
+def _size_of(block: Any) -> float:
+    """The size a block is printed at: on a scanned page the size half its
+    printed lines (PrintedLinesAnalyzer) are set at or under - a misread
+    line of a figure's note read 11.2pt to its other's 4.3 - else its
+    text's; 0 unknown."""
+    sizes = sorted(l.get("size") or 0.0 for l in (getattr(block, "metadata", None) or {}).get("printed_lines") or [])
+    if sizes:
+        return sizes[(len(sizes) - 1) // 2]
+    return font_size(block, default=0.0) or 0.0
