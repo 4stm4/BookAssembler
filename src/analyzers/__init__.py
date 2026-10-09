@@ -34,6 +34,7 @@ from src.analyzers.list import ListDetectorAnalyzer
 from src.analyzers.normalization import NormalizationAnalyzer
 from src.analyzers.notebook_outputs import NotebookOutputAnalyzer
 from src.analyzers.ocr import OCRAnalyzer
+from src.analyzers.page_order import PageOrderAnalyzer
 from src.analyzers.page_agent import PageAgentAnalyzer
 from src.analyzers.paragraph import ParagraphAnalyzer
 from src.analyzers.printed_lines import PrintedLinesAnalyzer
@@ -67,6 +68,9 @@ def create_default_pipeline() -> List[BaseAnalyzer]:
         # face - read once, before anything judges by it (a heading's
         # weight), for the builder to set the page by.
         PrintedLinesAnalyzer(),
+        # A scanned page's blocks in the order it is read - before anything
+        # builds the document's structure out of their order.
+        PageOrderAnalyzer(),
         FontStatsAnalyzer(),
         EphemeraDetectorAnalyzer(),
         # Before headings: a contents line in a chapter-heading size was
@@ -141,6 +145,7 @@ __all__ = [
     "NormalizationAnalyzer",
     "NotebookOutputAnalyzer",
     "ParagraphAnalyzer",
+    "PageOrderAnalyzer",
     "PrintedLinesAnalyzer",
     "PipelineRunner",
     "ProperNounExtractorAnalyzer",
