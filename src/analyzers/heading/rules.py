@@ -3,17 +3,22 @@
 from src.analyzers.access import block_text, font_size
 from collections import Counter
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from src.krm.models import ContainerUnit, KnowledgeDocument, ParagraphBlock, UnknownBlock
 
 from src.analyzers.paragraph.rules import continues
 from src.analyzers.heading.signals import (
+    COLUMN_LINES,
+    COLUMN_WORDS,
     HANGING_INDENT_LINES,
+    HEAD_ROW_CELLS,
+    LARGER_MIN_WEIGHT,
     LARGER_THAN_BODY,
     MAX_HEADING_GAP_LINES,
     MAX_HEADING_LINES,
     MAX_PRINTED_HEADING_WORDS,
     SAME_HEADING_SIZE,
+    SAME_ROW,
     SMALLER_THAN_BODY,
     MIN_WORD_CHAR_RATIO,
     _COMMENT_CLOSE_RE,
@@ -142,11 +147,13 @@ def body_size(blocks: List[Any]) -> float:
 
 def _stands_apart(lines: List[Dict[str, Any]], text: str, body: float) -> str:
     """How a block's printed lines stand apart from the body text: "larger"
-    - set larger than it (LARGER_THAN_BODY) - or in its size "bold",
-    "italic" or "capitals", every line so; "" where they do not."""
+    - set larger than it (LARGER_THAN_BODY), and no lighter
+    (LARGER_MIN_WEIGHT) - or in its size "bold", "italic" or "capitals",
+    every line so; "" where they do not."""
     size = _printed_size(lines)
     if body and size >= LARGER_THAN_BODY * body:
-        return "larger"
+        light = any(l.get("weight") is not None and l["weight"] < LARGER_MIN_WEIGHT for l in lines)
+        return "" if light else "larger"
     if body and size < SMALLER_THAN_BODY * body:
         return ""
     if all(l.get("bold") for l in lines):
@@ -158,7 +165,8 @@ def _stands_apart(lines: List[Dict[str, Any]], text: str, body: float) -> str:
     return ""
 
 
-def _is_printed_heading(block: Any, under: List[Dict[str, Any]], body: float = 0.0) -> bool:
+def _is_printed_heading(block: Any, under: List[Dict[str, Any]], body: float = 0.0,
+                        others: Sequence[Dict[str, Any]] = ()) -> bool:
     """A scanned page's heading: a block of a line or two
     (MAX_HEADING_LINES) reading as a title, that stands apart from the
     body text by its print (_stands_apart) - larger, or in its size bold,
@@ -171,8 +179,11 @@ def _is_printed_heading(block: Any, under: List[Dict[str, Any]], body: float = 0
     across from it, set as body text - a line that stands apart over
     another that does is a table's or a figure's. One set larger may head
     a heading in its turn ("Z80 HARDWARE ORGANIZATION" over
-    "INTRODUCTION"). A line ending a sentence ("in separate sections.")
-    is none."""
+    "INTRODUCTION"); one ending in a colon introduces whatever follows
+    close under it - "TEST LOAD CIRCUIT:" its drawing. A line ending a
+    sentence ("in separate sections.") is none, nor one in a row of a
+    table's column heads (_in_head_row; others, the page's other printed
+    lines)."""
     lines = _printed(block)
     if not 1 <= len(lines) <= MAX_HEADING_LINES or len(block.inlines or []) > MAX_HEADING_LINES:
         return False
@@ -188,11 +199,14 @@ def _is_printed_heading(block: Any, under: List[Dict[str, Any]], body: float = 0
     x1 = max(l["box"][2] for l in lines)
     top, bottom = min(l["box"][1] for l in lines), max(l["box"][3] for l in lines)
     height = max(l["box"][3] - l["box"][1] for l in lines)
+    if apart and _in_head_row(lines[0], others, body):
+        return False
     if apart == "larger":
         return True
-    if len(under) < 2 or under[0]["page"] != lines[0]["page"]:
+    if not under or under[0]["page"] != lines[0]["page"]:
         return False
-    if _stands_apart([under[0]], under[0].get("text") or "", body):
+    introduces = bool(apart) and text.rstrip().endswith(":")
+    if not introduces and (len(under) < 2 or _stands_apart([under[0]], under[0].get("text") or "", body)):
         return False
     utop = under[0]["box"][1]
     left = min(l["box"][0] for l in under)
@@ -206,27 +220,80 @@ def _is_printed_heading(block: Any, under: List[Dict[str, Any]], body: float = 0
     return bool(apart) and left < x1 and x0 < right
 
 
-def heading_runs(block: Any, body: float) -> List[List[Any]]:
-    """A block of a scanned page cut at the headings OCR ran into its body
-    text: its lines in pieces, a heading's line or two (MAX_HEADING_LINES)
+def _in_head_row(line: Dict[str, Any], others: Sequence[Dict[str, Any]], body: float) -> bool:
+    """Whether a line stands in a row of HEAD_ROW_CELLS lines or more that
+    stand apart (_stands_apart) - a table's column heads."""
+    top, bottom = line["box"][1], line["box"][3]
+
+    def beside(other: Dict[str, Any]) -> bool:
+        shared = min(bottom, other["box"][3]) - max(top, other["box"][1])
+        return (other.get("page") == line.get("page")
+                and shared >= SAME_ROW * min(bottom - top, other["box"][3] - other["box"][1]))
+
+    mates = [o for o in others if beside(o) and _stands_apart([o], o.get("text") or "", body)]
+    return len(mates) >= HEAD_ROW_CELLS - 1
+
+
+def _line_text(inline: Any) -> str:
+    return " ".join(getattr(sp, "text", "") for sp in getattr(inline, "spans", []) or []).strip()
+
+
+def columns(block: Any) -> List[List[Any]]:
+    """A scanned page's block's lines in the columns they stand in, where
+    OCR ran two columns' text into one block: lines side by side, apart
+    across, fall in different columns - each COLUMN_LINES or more, one of
+    them running text (COLUMN_WORDS). [] where its lines stand in one
+    column."""
+    inlines = [il for il in (block.inlines or [])
+               if getattr(il, "visual_layout", None) is not None and il.visual_layout.bounding_box]
+    if (not _printed(block) or len(inlines) != len(block.inlines or [])
+            or len(inlines) < 2 * COLUMN_LINES):
+        return []
+    order = sorted(range(len(inlines)), key=lambda k: inlines[k].visual_layout.bounding_box.x0)
+    groups: List[List[int]] = []
+    right = None
+    for k in order:
+        box = inlines[k].visual_layout.bounding_box
+        if right is None or box.x0 >= right:
+            groups.append([])
+            right = box.x1
+        groups[-1].append(k)
+        right = max(right, box.x1)
+
+    def text_column(group: List[int]) -> bool:
+        return (len(group) >= COLUMN_LINES
+                and max(len(_line_text(inlines[k]).split()) for k in group) >= COLUMN_WORDS)
+
+    if len(groups) < 2 or not all(text_column(g) for g in groups):
+        return []
+    return [[inlines[k] for k in sorted(g)] for g in groups]
+
+
+def heading_runs(inlines: List[Any], printed: Dict[str, Dict[str, Any]], body: float) -> List[List[Any]]:
+    """A scanned page's block's lines cut at the headings OCR ran into its
+    body text: in pieces, a heading's line or two (MAX_HEADING_LINES)
     standing apart from the body (_stands_apart), reading as a title, a
     piece of its own - at the block's head (the Intel 3000 manual's
     "M-BUS AND I-BUS INPUTS The M-bus inputs..."), or after a line ending a
     sentence ("I/O devices. A AND B MULTIPLEXERS", "...M-bus. SCRATCHPAD The
-    scratchpad..."). [] where none stands in it, or it all stands apart -
-    a heading on its own."""
-    inlines = list(block.inlines or [])
-    printed = {(l.get("text") or "").strip(): l for l in _printed(block)}
+    scratchpad..."). A heading's second line measured smaller - few
+    capitals: "Incrementer" - goes with its first where printed in its
+    weight and slant. inlines are a block's lines, or a column's of them
+    (columns); printed, their print by their text. [] where none stands in
+    them, or they all stand apart - a heading on its own."""
     if len(inlines) < 2 or not printed:
         return []
-
-    def text_of(il: Any) -> str:
-        return " ".join(getattr(sp, "text", "") for sp in getattr(il, "spans", []) or []).strip()
-
-    lines = [printed.get(text_of(il)) for il in inlines]
+    lines = [printed.get(_line_text(il)) for il in inlines]
     apart = [bool(l) and bool(_stands_apart([l], l.get("text") or "", body)) for l in lines]
     if all(apart) or not any(apart):
         return []
+
+    def goes_on(k: int) -> bool:
+        before, line = lines[k - 1], lines[k]
+        return (bool(before) and bool(line) and (line.get("bold") or line.get("italic"))
+                and (line.get("bold"), line.get("italic")) == (before.get("bold"), before.get("italic"))
+                and not _line_text(inlines[k - 1]).rstrip().endswith((".", ":")))
+
     cuts = []
     k = 0
     while k < len(inlines):
@@ -236,8 +303,10 @@ def heading_runs(block: Any, body: float) -> List[List[Any]]:
         end = k
         while end < len(inlines) and apart[end]:
             end += 1
-        run_text = " ".join(text_of(il) for il in inlines[k:end])
-        opens = k == 0 or text_of(inlines[k - 1]).rstrip().endswith((".", ":"))
+        while end < len(inlines) and end - k < MAX_HEADING_LINES and goes_on(end):
+            end += 1
+        run_text = " ".join(_line_text(il) for il in inlines[k:end])
+        opens = k == 0 or _line_text(inlines[k - 1]).rstrip().endswith((".", ":"))
         if (end - k <= MAX_HEADING_LINES and opens and _reads_as_title(run_text)
                 and len(run_text.split()) <= MAX_PRINTED_HEADING_WORDS
                 and not run_text.rstrip().endswith((".", ",", ";"))):

@@ -65,6 +65,13 @@ HANGING_INDENT_LINES = 2.0
 # least: the MCS-40 manual's "THE FUNCTIONS OF A COMPUTER" 1.22 of its
 # 7.4pt body, its noise between lines of one size 0.03-0.06.
 LARGER_THAN_BODY = 1.12
+# A line read larger than the body prints its words at least this heavy
+# against the text around it (printed "weight"): set larger, a heading's
+# strokes are as wide as the body's and wider - 1.00-2.0 on the heading
+# fixtures. One lighter is small type OCR ran rows of together, read
+# larger: the MCS-40 manual's timing diagram labels "ENABLE / INHIBIT",
+# 0.6.
+LARGER_MIN_WEIGHT = 0.9
 # A line set smaller than this of the body is a diagram's label, a
 # footnote's - no heading (the Intel 3000 manual's block diagram labels
 # stand at 0.5-0.8 of its body).
@@ -76,3 +83,20 @@ MAX_HEADING_LINES = 2
 # (their levels go by their case and slant): 7.39 to 7.85pt in the MCS-40
 # manual for one style read at different heights of a scan.
 SAME_HEADING_SIZE = 1.08
+# A row of this many lines standing apart, side by side, is a table's
+# column heads ("Pin No.", "Designation", "Description of Function" over
+# the MCS-40 manual's pin table) - no headings. Two headings may stand
+# side by side ("TEST CONDITIONS:", "TEST LOAD CIRCUIT:" of the Intel 3000
+# manual).
+HEAD_ROW_CELLS = 3
+# Of the lower of two lines' height, how much of it they share to stand
+# on one row.
+SAME_ROW = 0.5
+# Lines a block's each column takes for the block to be two columns' text
+# OCR ran together: the MCS-40 manual's "Basic Timing" and its paragraph
+# beside "1. Address Register (Program Counter & Stack) & Address /
+# Incrementer". A row of a label table ("States: 15  Flags: none") is one.
+COLUMN_LINES = 2
+# Words of a line of running text, one of which each such column holds -
+# a table's columns of cells ("1,7,8,11", "Y0-Y7", "Active") none.
+COLUMN_WORDS = 5

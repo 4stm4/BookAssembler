@@ -7,7 +7,8 @@ User's Manual, Zaks "Programming the Z80", Intel Series 3000 Reference
 Manual). Its headings were read off the printed page by eye: their text,
 and their rank on the page - 1 its highest, a larger rank a heading under
 it, equal ranks headings of one level. A running head, a page number, a
-figure's caption, a diagram's labels are no headings.
+figure's caption, a diagram's labels, a table's column heads are no
+headings.
 
 The page goes through the whole pipeline (PdfSourceAdapter, every
 analyzer), and its headings are the titled containers under the
@@ -57,6 +58,15 @@ EXPECTED = {
         ("MEMORY WRITE:", 2),
         ("INPUT/OUTPUT:", 2),
     ],
+    "mcs40_x.pdf": [
+        ("INTERRUPTS:", 2),
+        ("MCS-40 SYSTEM OPERATION", 1),
+    ],
+    "mcs40_1-2.pdf": [
+        ("Basic Timing", 1),
+        ("Basic Description of Major Circuit Blocks", 1),
+        ("1. Address Register (Program Counter & Stack) & Address Incrementer", 2),
+    ],
     "zaks_41.pdf": [
         ("EXTERNAL REPRESENTATION OF INFORMATION", 1),
         ("1. Binary", 2),
@@ -80,6 +90,12 @@ EXPECTED = {
         ("A AND B MULTIPLEXERS", 2),
         ("ALS AND K-BUS", 2),
         ("MEMORY ADDRESS REGISTER AND A-BUS", 2),
+    ],
+    "intel3000_2-22.pdf": [
+        ("A.C. CHARACTERISTICS AND WAVEFORMS", 1),
+        ("TEST CONDITIONS:", 2),
+        ("TEST LOAD CIRCUIT:", 2),
+        ("CAPACITANCE(2) TA = 25°C", 2),
     ],
 }
 

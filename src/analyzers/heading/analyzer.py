@@ -16,7 +16,7 @@ from src.graph.knowledge_graph import EntityType
 
 from src.analyzers.heading.rules import (
     _collect_containers, _detect_heading_threshold, _heading_level, _is_heading, _is_monospace,
-    _is_printed_heading, _printed, _printed_under, body_size, heading_runs, printed_levels,
+    _is_printed_heading, _printed, _printed_under, body_size, columns, heading_runs, printed_levels,
 )
 
 class HeadingAnalyzer(BaseAnalyzer):
@@ -122,8 +122,10 @@ class HeadingAnalyzer(BaseAnalyzer):
         # A scanned page's block is judged by its print (PrintedLinesAnalyzer)
         # - OCR's sizes say nothing of it: a diagram's label it sized 10.8pt
         # on a 7.6pt page came out a heading - and ranked by its print.
+        page_lines = [(id(b), line) for b in live for line in _printed(b)]
         printed_headings = [b for b in live if _printed(b) and _is_printed_heading(
-            b, _printed_under(live, position[id(b)] + 1), body)]
+            b, _printed_under(live, position[id(b)] + 1), body,
+            [line for owner, line in page_lines if owner != id(b)])]
         printed_ids = {id(b) for b in printed_headings}
         levels = printed_levels(printed_headings, body)
 
@@ -165,41 +167,76 @@ class HeadingAnalyzer(BaseAnalyzer):
 
 
 def _split_at_headings(flat: List[Any], body: float) -> List[Any]:
-    """Each block a heading was run into (rules.heading_runs) as its pieces,
-    each with its lines and their print; the block tombstoned (RFC 0001
-    SS2.4), as a list OCR set in one block is split."""
+    """Each block OCR ran things into as its pieces, each with its lines
+    and their print, the block tombstoned (RFC 0001 SS2.4): two columns'
+    text (rules.columns) - each column's pieces after the last block over
+    them in their column, where its text ran on - and headings run into
+    body text (rules.heading_runs)."""
     out: List[Any] = []
     for block in flat:
-        pieces = (heading_runs(block, body) if isinstance(block, (ParagraphBlock, UnknownBlock))
-                  and not block.is_tombstoned else [])
-        if not pieces:
+        if not isinstance(block, (ParagraphBlock, UnknownBlock)) or block.is_tombstoned:
             out.append(block)
             continue
         printed = list((block.metadata or {}).get("printed_lines") or [])
-        for k, lines in enumerate(pieces):
-            texts = {" ".join(getattr(sp, "text", "") for sp in il.spans).strip() for il in lines}
-            boxes = [il.visual_layout.bounding_box for il in lines
-                     if getattr(il, "visual_layout", None) is not None and il.visual_layout.bounding_box]
-            vl = block.visual_layout
-            piece = type(block)(
-                id=derive_composite_id("heading-split", block.id, str(k)),
-                inlines=lines,
-                parent_container_id=block.parent_container_id,
-                provenance_info=block.provenance_info,
-                visual_layout=VisualLayout(
-                    bounding_box=NormalizedRect(min(b.x0 for b in boxes), min(b.y0 for b in boxes),
-                                                max(b.x1 for b in boxes), max(b.y1 for b in boxes)),
-                    page_or_screen_index=vl.page_or_screen_index, style=vl.style,
-                ) if boxes and vl is not None else vl,
-                extraction_confidence=block.extraction_confidence,
-                classification_confidence=block.classification_confidence,
-                confidence_score=block.confidence_score,
-            )
-            own = [pl for pl in printed if (pl.get("text") or "").strip() in texts]
-            if own:
-                piece.metadata["printed_lines"] = own
-            out.append(piece)
+        by_text = {(l.get("text") or "").strip(): l for l in printed}
+        split = columns(block)
+        groups = [heading_runs(lines, by_text, body) or [lines] for lines in split or [list(block.inlines or [])]]
+        if sum(len(g) for g in groups) < 2:
+            out.append(block)
+            continue
+        k = 0
+        for pieces in groups:
+            made = []
+            for lines in pieces:
+                made.append(_piece(block, lines, printed, k))
+                k += 1
+            at = _column_end(out, made[0]) if split else len(out)
+            out[at:at] = made
         block.is_tombstoned = True
         block.metadata = {**(block.metadata or {}), "tombstone_reason": "split_at_heading"}
         out.append(block)
     return out
+
+
+def _piece(block: Any, lines: List[Any], printed: List[Dict[str, Any]], k: int) -> Any:
+    """A block of some of a block's lines, with their print."""
+    texts = {" ".join(getattr(sp, "text", "") for sp in il.spans).strip() for il in lines}
+    boxes = [il.visual_layout.bounding_box for il in lines
+             if getattr(il, "visual_layout", None) is not None and il.visual_layout.bounding_box]
+    vl = block.visual_layout
+    piece = type(block)(
+        id=derive_composite_id("heading-split", block.id, str(k)),
+        inlines=lines,
+        parent_container_id=block.parent_container_id,
+        provenance_info=block.provenance_info,
+        visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(min(b.x0 for b in boxes), min(b.y0 for b in boxes),
+                                        max(b.x1 for b in boxes), max(b.y1 for b in boxes)),
+            page_or_screen_index=vl.page_or_screen_index, style=vl.style,
+        ) if boxes and vl is not None else vl,
+        extraction_confidence=block.extraction_confidence,
+        classification_confidence=block.classification_confidence,
+        confidence_score=block.confidence_score,
+    )
+    own = [pl for pl in printed if (pl.get("text") or "").strip() in texts]
+    if own:
+        piece.metadata["printed_lines"] = own
+    return piece
+
+
+def _column_end(blocks: List[Any], piece: Any) -> int:
+    """Where in blocks a column's piece goes: after the last block of its
+    page standing over it in its column - at the end where none does."""
+    box = piece.visual_layout.bounding_box if piece.visual_layout is not None else None
+    if box is None:
+        return len(blocks)
+    for k in range(len(blocks) - 1, -1, -1):
+        other = blocks[k]
+        vl = getattr(other, "visual_layout", None)
+        ob = vl.bounding_box if vl is not None else None
+        if (ob is None or other.is_tombstoned
+                or vl.page_or_screen_index != piece.visual_layout.page_or_screen_index):
+            continue
+        if ob.x0 < box.x1 and box.x0 < ob.x1 and ob.y1 <= box.y0 + 0.5 * (box.y1 - box.y0):
+            return k + 1
+    return len(blocks)

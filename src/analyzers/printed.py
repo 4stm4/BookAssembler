@@ -884,6 +884,7 @@ def settle_page(lines: List[Dict[str, Any]]) -> None:
     # (_WORD_BOLD).
     for k, line in enumerate(lines):
         level = max(1.0, around(k))
+        line["weight"] = weights[k] / level if weights[k] is not None else None
         if weights[k] is not None:
             line["bold"] = weights[k] >= _LINE_BOLD * level
         before = None
@@ -1116,7 +1117,9 @@ def read_printed_lines(np, pymupdf, source, items: List[Any]) -> List[Any]:
     area, {"bold", "italic", "glyphs" - the runs its ink falls apart into
     across, [x0, x1] each, "ink" - a misread word's print}], x
     page-normalised), "area",
-    "cap", "size", "face", "bold",
+    "cap", "size", "face", "bold", "weight" - how heavy its words print over
+    the text around it and its page's usual (settle_page; None where none
+    was weighed),
     "italic", "rgb", "underline" ([y page-normalised, thickness pt]),
     "overlines" ([x0, x1, y page-normalised, thickness pt] each), "page_pt"
     - its page's width and height."""
@@ -1163,8 +1166,8 @@ def read_printed_lines(np, pymupdf, source, items: List[Any]) -> List[Any]:
             "words": [[w[0] / pw, w[1] / pw] + list(w[2:4]) + [_normalised(w[4], pw)] if len(w) > 4
                       else [w[0] / pw, w[1] / pw] + list(w[2:]) for w in m["words"]],
             "area": m["area"], "cap": m["cap"],
-            "size": m["size"], "face": m["face"], "bold": m["bold"], "italic": m["italic"],
-            "rgb": m["rgb"],
+            "size": m["size"], "face": m["face"], "bold": m["bold"], "weight": m.get("weight"),
+            "italic": m["italic"], "rgb": m["rgb"],
             "underline": [m["underline"][0] / ph, m["underline"][1]] if m["underline"] else None,
             "overlines": [[a / pw, b / pw, y / ph, t] for a, b, y, t in m["overlines"]],
             "page_pt": [pw, ph],
