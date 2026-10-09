@@ -99,6 +99,16 @@ _BASELINE_BODY = 0.5      # a row this dense against the line's densest is in it
 _LETTER_GAP = 0.15
 _BODY_TOP = 0.3           # of its capitals' height under their top, a line's lowercase body starts (x-height ~0.72)
 _HEAD_DENSITY = 0.08      # a row this dense against the line's densest is its capitals', not a stray descender
+# In a line most of whose glyphs are as tall as its capitals (_TALL_LINE
+# of them and more, _tall_share), of that share, how dense against its
+# densest the row their tops reach is at the least: such a line prints its
+# capitals' top row dense, and the thin rows over it are a superscript's -
+# the Intel 3000 manual's "CAPACITANCE(2) TA = 25°C", its "(2)" a sixth
+# as dense as its capitals, read 7.0pt high to its peers' 5.3. In a
+# lowercase line only its few ascenders reach the top (_HEAD_DENSITY).
+_HEAD_TALL = 0.3
+_TALL_LINE = 0.6
+_TALL_GLYPHS = set("bdfhklt()[]{}/\\|")  # lowercase and signs as tall as a capital
 _COLOUR_SPREAD = 80       # channels this far apart: printed in a colour, not black
 _MISREAD = 0.5            # of a word's and its set text's ink, the most one misses of the other
 _LOWERED = 0.15           # of a line's capitals' height, how far under its baseline a letter set lower reaches
@@ -235,30 +245,47 @@ def _own_rows(np, glyphs, run, rect, clip):
     return (top, bottom) if top <= bottom else run
 
 
-def _foot(np, band) -> int:
+def _foot(np, band, level: Optional[float] = None) -> int:
     """A line's baseline row: the last its ink fills to _BASELINE_BODY of
-    its densest row or more - the bottom of its body, a scan's blur half
-    through its fall into the descenders. Down from its densest row to the
-    first the ink falls away under for good, a line of many "p"s and "y"s
-    - their tails as dense under it as a fraction of its body - set its
-    baseline a point into them."""
-    return int(np.flatnonzero(band >= _BASELINE_BODY * band.max())[-1])
+    its densest row (or of level) or more - the bottom of its body, a
+    scan's blur half through its fall into the descenders. Down from its
+    densest row to the first the ink falls away under for good, a line of
+    many "p"s and "y"s - their tails as dense under it as a fraction of
+    its body - set its baseline a point into them."""
+    return int(np.flatnonzero(band >= _BASELINE_BODY * (level or band.max()))[-1])
 
 
-def _foot_and_head(np, band):
+def _foot_and_head(np, band, tall: float = 0.0, capitals: bool = False):
     """A line's baseline row (_foot) and its capitals' top: where
     the unbroken ink over the baseline starts, from the first row its
     capitals and ascenders fill (a descender or two from the line above
-    fill less). (None, None) where there is no ink."""
+    fill less; a superscript over a line of capitals, tall the share of
+    its glyphs as tall as they, less - _HEAD_TALL, _TALL_LINE). A line
+    of capitals alone has no lowercase body to read its baseline under,
+    and the strokes of a "T", a "Y", a "P" thin out downward - "TYP" read
+    3.0pt high to its "MAX"'s 5.2: its baseline is read against the
+    middle of its rows of ink, not its densest. (None, None) where there
+    is no ink."""
     if not len(band) or band.max() == 0:
         return None, None
-    foot = _foot(np, band)
+    inked = band[band >= _HEAD_DENSITY * band.max()]
+    foot = _foot(np, band, float(np.median(inked)) if capitals else None)
     head = foot
     while head > 0 and band[head - 1] > 0:
         head -= 1
-    while head < foot and band[head] < _HEAD_DENSITY * band.max():
+    least = (_HEAD_TALL * tall if tall >= _TALL_LINE else _HEAD_DENSITY) * band.max()
+    while head < foot and band[head] < least:
         head += 1
     return foot, head
+
+
+def _tall_share(text: str) -> float:
+    """The share of a line's glyphs as tall as its capitals: capitals,
+    figures, ascenders, brackets."""
+    glyphs = [ch for ch in text if ch.isalnum() or ch in _TALL_GLYPHS]
+    if not glyphs:
+        return 0.0
+    return sum(ch.isupper() or ch.isdigit() or ch in _TALL_GLYPHS for ch in glyphs) / len(glyphs)
 
 
 def _stretch_feet(np, region) -> List[Any]:
@@ -628,7 +655,8 @@ def measure_line(np, pymupdf, page, rect, text: str, words: Optional[List[Any]] 
     upright = _straightened(np, region, skew)
     deep = _straightened(np, dark[top:bottom + 1, left:right], skew)
     # a line printed light - in colour, or grey - has little dark ink
-    foot, head = _foot_and_head(np, (deep if deep.sum() >= _DARK_SHARE * upright.sum() else upright).mean(axis=1))
+    foot, head = _foot_and_head(np, (deep if deep.sum() >= _DARK_SHARE * upright.sum() else upright).mean(axis=1),
+                                _tall_share(text), any(ch.isalpha() for ch in text) and not any(ch.islower() for ch in text))
     if foot is None:
         return None
     # the straightened rows are the line's at its left edge
