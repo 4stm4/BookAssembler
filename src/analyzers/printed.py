@@ -1009,8 +1009,10 @@ def _set_miss(np, pymupdf, mask, x0: float, y0: float, word: List[Any], line: Di
     if drawn.shape[0] < rows:
         drawn = np.vstack([drawn, np.zeros((rows - drawn.shape[0], drawn.shape[1]), dtype=bool)])
     printed_cols, drawn_cols = np.flatnonzero(mask.any(axis=0)), np.flatnonzero(drawn.any(axis=0))
-    if not len(printed_cols) or not len(drawn_cols):
+    if not len(printed_cols):
         return None
+    if not len(drawn_cols):
+        return 1.0  # the face has no glyph for it ("►"): it draws none of its print
     c0, c1 = int(printed_cols[0]), int(printed_cols[-1]) + 1
     d0, d1 = int(drawn_cols[0]), int(drawn_cols[-1]) + 1
     set_ = np.zeros_like(mask)

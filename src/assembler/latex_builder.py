@@ -599,8 +599,11 @@ def _printed_nodes(block: Any, target_lang: str, page_w: float, page_h: float,
             if fit and line.get("words")
             else [(x_mm, w_mm if fit else None, text, line.get("area"), line["bold"], line["italic"], None, [])]
         )
-        inks = [_ink_in_face(line["face"], bold, italic, t) if pw and font and not scan else None
-                for _, pw, t, _, bold, italic, scan, _ in pieces]
+        # a word its face's clone has no glyph for, in the main font
+        faces = [font if font and _face_sets(line["face"], bold, italic, t) else ""
+                 for _, _, t, _, bold, italic, _, _ in pieces]
+        inks = [_ink_in_face(line["face"], bold, italic, t) if pw and face and not scan else None
+                for (_, pw, t, _, bold, italic, scan, _), face in zip(pieces, faces)]
         size_bp, outline_bp = _weighed(line, pieces, inks)
         size = size_bp * 72.27 / 72.0
         spread = ""
@@ -616,12 +619,12 @@ def _printed_nodes(block: Any, target_lang: str, page_w: float, page_h: float,
         # widths and spaces are the print's, not the face's), else the
         # line boxed to its printed width.
         pen = "color={rgb,255:red,%d;green,%d;blue,%d}, " % tuple(line["rgb"]) if line.get("rgb") else ""
-        for (px, pw, piece, _, bold, italic, scan, letters), ink in zip(pieces, inks):
+        for (px, pw, piece, _, bold, italic, scan, letters), ink, face in zip(pieces, inks, faces):
             weight = ("\\bfseries " if bold else "") + ("\\itshape " if italic else "")
-            style = f"{colour}{font}\\fontsize{{{size:.2f}}}{{{size * 1.2:.2f}}}\\selectfont {weight}{spread}"
+            style = f"{colour}{face}\\fontsize{{{size:.2f}}}{{{size * 1.2:.2f}}}\\selectfont {weight}{spread}"
             py = y_mm + skew * (px - x_mm)
             placed = _set_letters(piece, letters, line["face"], bold, italic, size_bp, outline_mm) \
-                if letters and font and not scan else None
+                if letters and face and not scan else None
             if placed:
                 # each letter where it printed, as wide as its ink
                 start, body = placed
@@ -1250,6 +1253,22 @@ def _font_file(name: str) -> Optional[str]:
     except (OSError, subprocess.SubprocessError):
         return None
     return path or None
+
+
+@functools.lru_cache(maxsize=4096)
+def _face_sets(face: str, bold: bool, italic: bool, text: str) -> bool:
+    """Whether a face's file has a glyph for every sign of text: TeX Gyre
+    Termes has none for "►" (Zaks' "During T4: (S S S) ► TMP."), and set
+    in it the word was a box of nothing, which cannot be widened to its
+    print - the page did not compile. True where the file cannot be
+    found: the face as TeX finds it is then all there is."""
+    variant = ("bold" if bold else "") + ("italic" if italic else "") or "regular"
+    path = _font_file(f"{_FACE_FILE.get(face, 'texgyretermes')}-{variant}.otf")
+    if not path:
+        return True
+    import pymupdf
+    font = pymupdf.Font(fontfile=path)
+    return all(font.has_glyph(ord(ch)) for ch in text if not ch.isspace())
 
 
 @functools.lru_cache(maxsize=4096)
