@@ -58,7 +58,9 @@ _SKEW_MIN_PT = 80.0       # a line this wide says how its stretch of the page is
 _SKEW_PART = 3.0          # of a line's ink height, how wide a stretch its skew is read from the baseline of
 _SKEW_INKED = 0.5         # of a line's ink across, the least a stretch holds to have a baseline
 _SKEW_NEAR = 11           # the lines of a column, itself among them, a line's skew is the middle of
-_SAME_SIZE = 0.1          # within this of its kind's usual size, a line is set at it
+_SAME_SIZE = 0.1          # within this of its kind's usual size, a short line is set at it
+_SAME_SIZE_TEXT = 0.3     # within this of it, a line of running text (_TEXT_WORDS) is
+_TEXT_WORDS = 10          # a line of more words than this is running text - a heading prints in fewer
 _SHORT_TOKEN = 3          # characters in a token too short to measure its size by
 _SAME_ROW = 0.5           # of the lower box's height two source boxes share on one row
 _BOLD_GAIN = 0.6          # of the gap from regular to bold, over the page's lightest
@@ -948,17 +950,25 @@ def settle_page(lines: List[Dict[str, Any]]) -> None:
                 line["baseline"] = mate["baseline"] + mate["skew"] * (line["box"][0] - mate["box"][0])
                 line["size"] = mate["size"]
     # One kind of line - its weight and slant - is set at one size on a
-    # page: a line measured off it by less than _SAME_SIZE - a row or two
-    # of its capitals - is set at its kind's usual. A line a fifth larger
-    # is set so: the MCS-40 manual's "THE FUNCTIONS OF A COMPUTER", 9.0pt
-    # to its body's 7.4, set at 7.4 came out its body text.
+    # page: a short line measured off it by less than _SAME_SIZE - a row
+    # or two of its capitals - is set at its kind's usual. One a fifth
+    # larger is set so, a heading: the MCS-40 manual's "THE FUNCTIONS OF A
+    # COMPUTER", 9.0pt to its body's 7.4, set at 7.4 came out its body
+    # text; so would "Basic Description of Major Circuit Blocks", six
+    # words, 8.9pt to 7.55. A line of running text is the body's however
+    # it measured, a third off it and less (_SAME_SIZE_TEXT): on a page
+    # scanned askew a descender of the line above touches its capitals,
+    # its column's skew smears them - Zaks' "This corresponds to MOV r1,
+    # r2 for the 8080. Refer to line 1 of Fig. 2.27.", rising where its
+    # column falls, read 12.3pt on a 10.6pt page.
     for kind in {(l["bold"], l["italic"]) for l in lines}:
         same = [l for l in lines if (l["bold"], l["italic"]) == kind]
         if len(same) < 3:
             continue
         usual = sorted(l["size"] for l in same)[len(same) // 2]
         for line in same:
-            if abs(line["size"] / usual - 1.0) < _SAME_SIZE:
+            reach = _SAME_SIZE_TEXT if len(line["text"].split()) > _TEXT_WORDS else _SAME_SIZE
+            if abs(line["size"] / usual - 1.0) < reach:
                 line["size"] = usual
 
 
