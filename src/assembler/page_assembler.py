@@ -25,6 +25,7 @@ from src.assembler.latex_builder import (
     _printed_extent,
     _printed_lines,
     _printed_nodes,
+    _printed_page_mm,
     _scan_ink,
     _translated,
     render_node,
@@ -299,8 +300,11 @@ def _render_reflow(slot: PageSlot, target_lang: str) -> str:
     """Render a reflow page — linear LaTeX with alignment from bbox (RFC 0021 §3).
 
     Containers render heading-only (`recurse=False`): their children are already
-    grouped onto their own pages by `group_by_page`.
+    grouped onto their own pages by `group_by_page`. A scanned page read in
+    columns is rebuilt where it printed (_render_printed_page).
     """
+    if not target_lang and _reads_in_columns(slot):
+        return _render_printed_page(slot)
     body: List[str] = []
     above: Optional[Tuple[float, float, float, float]] = None
     extents = [_printed_extent(block) for block in slot.blocks]
@@ -313,6 +317,63 @@ def _render_reflow(slot: PageSlot, target_lang: str) -> str:
             body.append("\\par\\nointerlineskip\\vspace{%.2fmm}\n" % (here[1] - above[3]))
         render_node(body, block, target_lang, recurse=False, column_left=left)
         above = here
+    return "".join(body)
+
+
+# The text area of the house page (a4paper, margin=2.2cm), mm: a page
+# rebuilt where it printed is scaled down to it where larger.
+_TEXT_W_MM, _TEXT_H_MM = 210.0 - 2 * 22.0, 297.0 - 2 * 22.0
+
+
+def _reads_in_columns(slot: PageSlot) -> bool:
+    """Whether a page is a scanned one read in columns: every block of it
+    set as printed (_printed_extent) - a container heading without print
+    of its own aside - two of them side by side. Its columns, set one
+    under another in the flow, ran the Intel 3000 manual's page of three
+    over three pages."""
+    extents = []
+    for block in slot.blocks:
+        extent = _printed_extent(block)
+        if extent is None:
+            if isinstance(block, ContainerUnit):
+                continue
+            return False
+        extents.append(extent)
+    return any(a[2] <= b[0] and a[1] < b[3] and b[1] < a[3] for a in extents for b in extents)
+
+
+def _render_printed_page(slot: PageSlot) -> str:
+    """A scanned page rebuilt where it printed: its blocks - paragraphs,
+    headings, captions set by their printed lines, figures drawn from their
+    own ink - each where it stands on the page, in one picture, scaled down
+    to the text area where the page's print is larger. A container heading
+    without print of its own goes before it."""
+    body: List[str] = []
+    placed: List[Tuple[Any, Tuple[float, float, float, float]]] = []
+    for block in slot.blocks:
+        extent = _printed_extent(block)
+        if extent is None:
+            render_node(body, block, "", recurse=False)
+        else:
+            placed.append((block, extent))
+    x0 = min(e[0] for _, e in placed)
+    top = min(e[1] for _, e in placed)
+    width = max(e[2] for _, e in placed) - x0
+    height = max(e[3] for _, e in placed) - top
+    scale = min(1.0, _TEXT_W_MM / width, _TEXT_H_MM / height)
+    nodes: List[str] = []
+    for block, _ in placed:
+        ink = _figure_ink(block)
+        if ink:
+            nodes.append(_scan_ink(ink, *_printed_page_mm([ink]), (x0, top), ""))
+        else:
+            nodes.extend(_printed_nodes(block, "", *_printed_page_mm(_printed_lines(block)), origin=(x0, top)))
+    body.append(
+        "\\par\\noindent\\scalebox{%.4f}{\\begin{tikzpicture}\n" % scale
+        + f"\\useasboundingbox (0,0) rectangle ({width:.2f}mm,{-height:.2f}mm);\n"
+        + "".join(nodes)
+        + "\\end{tikzpicture}}\\par\n"
+    )
     return "".join(body)
 
 
