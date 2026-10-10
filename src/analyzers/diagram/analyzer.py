@@ -113,7 +113,8 @@ class DiagramDetectorAnalyzer(BaseAnalyzer):
             if not txt:
                 continue
             bb = _bbox_of(block)
-            if not bb:
+            if not bb or txt == caption_text:
+                # the caption is a block of its own, set as it printed
                 continue
             width = bb[2] - bb[0]
             is_sublabel = bool(_RE_SUBLABEL.match(txt))
@@ -122,8 +123,6 @@ class DiagramDetectorAnalyzer(BaseAnalyzer):
             is_label = (len(txt.split()) <= MAX_LABEL_WORDS and width <= MAX_LABEL_WIDTH) or is_sublabel
             if is_label:
                 labels.append((block, parent, txt, bb))
-            elif txt == caption_text:
-                continue
             elif _runs_on(block, txt) and not 0 < _size_of(block) < NOTE_SIZE * caption_size:
                 prose.append(bb)
             else:
