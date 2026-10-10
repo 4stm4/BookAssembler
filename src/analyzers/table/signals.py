@@ -39,6 +39,15 @@ _PROSE_SPAN = 0.9         # of the candidate's width a prose line runs across
 _PROSE_GAP = 2.5          # of its characters' average width: its widest word space
 _PROSE_MIN_WORDS = 5      # words of two letters or more in a prose line
 
+# A paragraph's lines carry on one another: one begins in lowercase, or
+# after a word broken over the line before. Of a single-column candidate's
+# rows, more than this so carried on make it a paragraph, however short its
+# lines - the Intel 3000 manual's narrow columns, "The ALS is capable of a
+# variety of / arithmetic and logic operations, in- / cluding 2's ...", 12
+# of 13, its lines a third of a page wide, 4 to 9 words, read as a table.
+# A list's, a contents page's rows begin anew.
+_CARRIED_ON = 0.5
+
 _SEPARATOR_RE = re.compile(r"^[\s\-_=|+:·.─━┃│┼┤├┬┴]{3,}$")
 
 _TAB_SPLIT_RE = re.compile(r"\t|  {2,}|(?:\s{2,}\|?\s{2,})")

@@ -1,6 +1,6 @@
 """table: Pure decision logic — no KRM writes, no I/O."""
 
-from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, X_OVERLAP_THRESHOLD, Y_STEP_TOLERANCE, _LABEL_ALIGN, _LABEL_VALUE_LEN, _PROSE_GAP, _PROSE_MIN_WORDS, _PROSE_SPAN, _SEPARATOR_RE, _SINGLE_COL_PROSE_LEN, _TAB_SPLIT_RE, log
+from src.analyzers.table.signals import _CARRIED_ON, MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, X_OVERLAP_THRESHOLD, Y_STEP_TOLERANCE, _LABEL_ALIGN, _LABEL_VALUE_LEN, _PROSE_GAP, _PROSE_MIN_WORDS, _PROSE_SPAN, _SEPARATOR_RE, _SINGLE_COL_PROSE_LEN, _TAB_SPLIT_RE, log
 import logging
 import re
 from dataclasses import dataclass
@@ -1341,6 +1341,17 @@ def _label_table(blocks: List[Any]) -> Optional[TableBlock]:
     return table
 
 
+def _carried_on(lines: List[str]) -> bool:
+    """Whether lines are a paragraph's: more than _CARRIED_ON of them carry
+    on the line before - begin in lowercase, or after a word broken over it
+    (a hyphen, OCR's "·" for one)."""
+    carried = sum(
+        1 for before, line in zip(lines, lines[1:])
+        if line.strip()[:1].islower() or before.rstrip().endswith(("-", "\u00b7", "\u2010"))
+    )
+    return len(lines) > 1 and carried > _CARRIED_ON * (len(lines) - 1)
+
+
 def _table_from_lines(block: Any) -> Optional[TableBlock]:
     """A TableBlock built from one block's own lines, or None.
 
@@ -1379,6 +1390,8 @@ def _table_from_lines(block: Any) -> Optional[TableBlock]:
         # spec-table row is judged as a whole row, not by this ceiling.
         return None
     if is_single_col and avg_text_len < 15:
+        return None
+    if is_single_col and _carried_on(row_texts):
         return None
 
     page_idx = _page_idx(block)
