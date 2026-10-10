@@ -26,6 +26,7 @@ from src.krm.models import (
     CaptionBlock,
     CodeBlock,
     ContainerUnit,
+    DOCUMENT_CONTAINER,
     EphemeraBlock,
     FigureBlock,
     FootnoteBlock,
@@ -297,7 +298,10 @@ def render_node(
             # A heading read off a scanned page's print (HeadingAnalyzer)
             # is set as printed, as its paragraphs are.
             body.append(_printed_block(node, target_lang, column_left))
-        elif node.title:
+        elif node.title and node.semantic_type != DOCUMENT_CONTAINER:
+            # the container that stands for the document has no heading of
+            # its own: set as one, a scan's page opened with "Chapter 1"
+            # and its file's name
             cmd = _heading_cmd(node.level)
             body.append(f"\\{cmd}{{{_esc(_translated(node, node.title, target_lang))}}}\n")
         if recurse:

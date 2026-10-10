@@ -13,6 +13,7 @@ import re
 from typing import List, Optional
 
 from src.krm.models import (
+    DOCUMENT_CONTAINER,
     CodeBlock,
     ContainerUnit,
     InlineUnit,
@@ -72,6 +73,7 @@ class ContainerStack:
             root = ContainerUnit(
                 title=self._doc.title or "Main Content",
                 level=1,
+                semantic_type=DOCUMENT_CONTAINER,
                 provenance_info=self._provenance,
             )
             self._doc.root_containers.append(root)

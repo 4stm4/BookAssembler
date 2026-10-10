@@ -66,3 +66,20 @@ def test_a_narrow_column_of_prose_is_no_table():
 
 def test_a_list_of_entries_is_no_prose():
     assert not _carried_on(["Standard carry", "Carry input", "Carry outputs", "Ground", "Supply"])
+
+
+def test_a_pdf_s_root_container_stands_for_the_document(tmp_path):
+    """The PDF adapter's one root container wraps the document - its title
+    the document's - and is marked so: no heading is set for it."""
+    import pymupdf
+
+    from src.adapters.pdf_adapter import PdfSourceAdapter
+    from src.krm.models import DOCUMENT_CONTAINER
+
+    path = tmp_path / "a_page.pdf"
+    pdf = pymupdf.open()
+    pdf.new_page().insert_text((72, 72), "Some text on a page.")
+    pdf.save(path)
+    with open(path, "rb") as fh:
+        doc = PdfSourceAdapter().parse(fh, f"file://{path}")
+    assert doc.root_containers[0].semantic_type == DOCUMENT_CONTAINER

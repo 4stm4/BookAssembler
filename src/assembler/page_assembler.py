@@ -37,6 +37,7 @@ from src.krm.models import (
     CaptionBlock,
     CodeBlock,
     ContainerUnit,
+    DOCUMENT_CONTAINER,
     EphemeraBlock,
     FootnoteBlock,
     FormulaBlock,
@@ -242,9 +243,10 @@ def layout_for(slot: PageSlot) -> str:
     def renders_something(b: Any) -> bool:
         if isinstance(b, BlankPageBlock):
             return False
-        # A container contributes a heading or nothing at all.
+        # A container contributes a heading or nothing at all - the one
+        # that stands for the document, none.
         if isinstance(b, ContainerUnit):
-            return bool(b.title)
+            return bool(b.title) and b.semantic_type != DOCUMENT_CONTAINER
         return True
 
     if slot.role == "blank" and not any(renders_something(b) for b in slot.blocks):

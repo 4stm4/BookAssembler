@@ -31,6 +31,7 @@ from src.adapters._shared import fallback_title
 from src.artifacts.store import sha256_file
 from src.krm.identity import derive_source_id
 from src.krm.models import (
+    DOCUMENT_CONTAINER,
     CodeBlock,
     ContainerUnit,
     FigureBlock,
@@ -287,6 +288,7 @@ class PdfSourceAdapter(BaseSourceAdapter):
             id=derive_source_id("root-container", source_uri, None, None, title),
             title=title,
             level=1,
+            semantic_type=DOCUMENT_CONTAINER,
             provenance_info=provenance,
         )
         doc.root_containers.append(current_container)

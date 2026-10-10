@@ -24,6 +24,7 @@ from src.adapters.base import (
 )
 from src.adapters._shared import ContainerStack, fallback_title, render_markdown
 from src.krm.models import (
+    DOCUMENT_CONTAINER,
     ContainerUnit,
     InlineUnit,
     KnowledgeDocument,
@@ -97,6 +98,7 @@ class MarkdownSourceAdapter(BaseSourceAdapter):
                 ContainerUnit(
                     title=doc.title or "Document Content",
                     level=1,
+                    semantic_type=DOCUMENT_CONTAINER,
                     provenance_info=provenance,
                 )
             )
@@ -161,6 +163,7 @@ class TextSourceAdapter(BaseSourceAdapter):
         root_container = ContainerUnit(
             title=doc_title,
             level=1,
+            semantic_type=DOCUMENT_CONTAINER,
             provenance_info=provenance,
         )
         doc.root_containers.append(root_container)

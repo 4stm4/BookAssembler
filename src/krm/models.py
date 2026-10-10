@@ -583,6 +583,14 @@ class RemarkSpec(SemanticUnit):
 # 5. Container & Root Units
 # ============================================================================
 
+# ContainerUnit.semantic_type of a container that stands for the document
+# itself: an adapter's wrapper round content that stands under no heading of
+# the source's own - a PDF's flat list of blocks, text before a first
+# heading. Its title is the document's (its file's name, where it has none);
+# it has no heading of its own to set.
+DOCUMENT_CONTAINER = "document"
+
+
 @dataclass
 class ContainerUnit(BaseKRMNode):
     """

@@ -36,6 +36,7 @@ from src.krm.models import (
     CalloutBlock,
     CaptionBlock,
     ContainerUnit,
+    DOCUMENT_CONTAINER,
     FootnoteBlock,
     KnowledgeDocument,
     ListBlock,
@@ -243,7 +244,9 @@ def _walk(node: Any) -> Iterator[Tuple[str, Any]]:
     if getattr(node, "is_tombstoned", False):
         return  # RFC 0001 §2.4: tombstoned nodes are excluded from output
     if isinstance(node, ContainerUnit):
-        if node.title:
+        # the container that stands for the document has no heading set,
+        # and none to translate (its title a file's name as often)
+        if node.title and node.semantic_type != DOCUMENT_CONTAINER:
             yield "title", node
         for child in node.children:
             yield from _walk(child)

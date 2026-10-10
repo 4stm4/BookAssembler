@@ -15,6 +15,7 @@ from src.krm.models import (
     CaptionBlock,
     CodeBlock,
     ContainerUnit,
+    DOCUMENT_CONTAINER,
     FormulaBlock,
     IndexEntryBlock,
     KnowledgeDocument,
@@ -248,6 +249,17 @@ class TestAssemblePages:
         c = ContainerUnit(title="Introduction", level=1, children=[_para("Body", page=0)])
         out = assemble_pages(_doc(c))
         assert "\\chapter{Introduction}" in out
+
+    def test_the_document_s_own_container_sets_no_heading(self):
+        """An adapter's wrapper round a document's content stands for the
+        document: set as a heading, a scan's first page opened with
+        "Chapter 1" and its file's name."""
+        root = ContainerUnit(title="intel3000_2-17", level=1, semantic_type=DOCUMENT_CONTAINER,
+                             children=[_para("Body", page=0)])
+        out = assemble_pages(_doc(root))
+        assert "intel3000" not in out
+        assert "\\chapter" not in out
+        assert "Body" in out
 
     def test_callout_body_rendered(self):
         """Regression: only the mdframed shell was emitted, content was dropped."""
