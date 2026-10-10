@@ -71,6 +71,7 @@
 | `ContainerUnit` (part/chapter/section/…) | ✅ | `HeadingAnalyzer` строит дерево |
 | `ContainerUnit(semantic_type='toc')` | ✅ | `TocAnalyzer` (`src/analyzers/toc/`, до `HeadingAnalyzer`), `PageAgent` (ручная пересборка страницы) |
 | `ContainerUnit(semantic_type='example')` | ✅ | `CaptionAnalyzer` (`caption_analyzer.py:112`) |
+| `ContainerUnit(semantic_type='document')` | ✅ | адаптеры: корневая обёртка содержимого без собственного заголовка источника (`DOCUMENT_CONTAINER`); заголовок для неё не набирается и не переводится |
 | `KnowledgeDocument` (root) | ✅ | адаптер |
 
 `semantic_type` — единственный на данный момент способ дать контейнеру
