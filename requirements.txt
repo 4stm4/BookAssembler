@@ -12,5 +12,6 @@ aiosqlite>=0.22,<1
 sqlalchemy>=2.0,<3
 pyyaml>=6.0,<7
 httpx>=0.28,<1
+cryptography>=42
 tqdm>=4.70,<5
 reportlab>=4.0,<5
