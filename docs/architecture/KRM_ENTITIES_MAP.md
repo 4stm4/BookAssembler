@@ -43,7 +43,7 @@
 | `BlankPageBlock` | ✅ | `TitlePageAnalyzer` (`title_page.py:190`) |
 | `TableBlock` + `TableCell` | ✅ | `TableDetector`, `PageAgent` (пересборка LaTeX) |
 | `FigureBlock` | ✅ | `PdfSourceAdapter` (`pdf_adapter.py:224`) |
-| `DiagramBlock` | ✅ | `DiagramDetectorAnalyzer` |
+| `DiagramBlock` | ✅ | `DiagramDetectorAnalyzer`: на скане, прочитанном построчно, — по чернилам страницы (длинные штрихи, не линейки, не рамка таблицы и не пометки по тексту), с подписью или без; метки забираются построчно, рисунок перерисовывается из собственных чернил (`metadata["printed_ink"]`). Иначе — по подписи «Figure N» и скоплению коротких меток |
 | `CodeBlock` | ✅ | `PdfSourceAdapter`, `text_markdown` |
 | `CaptionBlock` | ✅ | `CaptionAnalyzer` |
 | `FormulaBlock` | ✅ | `FormulaDetectorAnalyzer` (эвристика: math-font или ≥15% math-символов; заглушку заменит vision-OCR) |

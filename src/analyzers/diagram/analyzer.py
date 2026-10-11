@@ -1,5 +1,15 @@
-"""diagram: The analyzer itself: orchestration and KRM writes."""
+"""diagram: The analyzer itself: orchestration and KRM writes.
 
+On a scanned page read line by line a figure is found by the page's own
+ink (ink.py): its drawn strokes, the labels standing by them
+(_set_figure), drawn as printed from the ink itself. What OCR read in it
+goes into the figure, line by line - a block wholly so is tombstoned,
+another loses those lines: OCR sets a logic diagram's "Y6" on one line
+with the row of the table beside it. Elsewhere a figure is told by its
+caption and the short labels by it (_detect_on_page).
+"""
+
+from dataclasses import dataclass
 from src.analyzers.access import page_of
 from typing import Any, Dict, List, Optional, Tuple
 from src.analyzers.base import AnalyzerManifest, BaseAnalyzer, KRMPermission
@@ -13,15 +23,42 @@ from src.krm.models import (
     FormulaBlock,
     KnowledgeDocument,
     ParagraphBlock,
+    TableBlock,
     UnknownBlock,
     VisualLayout,
     NormalizedRect,
 )
 
-from src.analyzers.diagram.signals import FIGURE_ZOOM, INK_LEVEL, LEFT_PAD, MASK_PAD, MAX_LABEL_WIDTH, MAX_LABEL_WORDS, MIN_LABELS, NOTE_SIZE, PAD, RIGHT_PAD, _RE_FIGURE_CAPTION, _RE_SUBLABEL, log
-from src.analyzers.diagram.rules import Box, _bbox_of, _runs_on, _size_of, _text_of, figure_area
-from src.analyzers.printed import _runs_of
+from src.analyzers.diagram.ink import PageInk, drawn, is_figure, letters, printed_ink, read_page, strokes_ink, with_marks
+from src.analyzers.diagram.signals import FIGURE_ZOOM, GAP, INK_LEVEL, LEFT_PAD, MASK_PAD, MAX_LABEL_WIDTH, MAX_LABEL_WORDS, MIN_LABELS, NOTE_LINES, NOTE_SIZE, PAD, REACH, RIGHT_PAD, TOUCH, _RE_FIGURE_CAPTION, _RE_SUBLABEL, log
+from src.analyzers.diagram.rules import Box, _bbox_of, _runs_on, _size_of, _text_of, between, drawings, figure_area, holds, is_caption, is_small, meets, near, over
+from src.analyzers.heading.rules import _word_char_ratio, body_size
+from src.analyzers.heading.signals import MIN_WORD_CHAR_RATIO
 from src.analyzers.source_io import resolve_source_path
+
+
+@dataclass(eq=False)
+class _Line:
+    """A line of a page's text where it printed: its block and the block's
+    container, the line itself (None: a block whose lines have no place of
+    their own, taken whole), its text and box; whether its block is a
+    figure's caption, or runs on as body text; and whether the line is the
+    page's text - a caption, or words set no smaller than the page's body
+    - no label of a drawing it stands by."""
+    block: Any
+    parent: ContainerUnit
+    inline: Any
+    text: str
+    box: Box
+    caption: bool
+    runs_on: bool
+    page_text: bool = False
+
+    @property
+    def fixed(self) -> bool:
+        """The page's wherever it stands: in a drawing's area it is text
+        the drawing stands about."""
+        return self.caption or (self.runs_on and self.page_text)
 
 class DiagramDetectorAnalyzer(BaseAnalyzer):
     def __init__(self) -> None:
@@ -29,11 +66,12 @@ class DiagramDetectorAnalyzer(BaseAnalyzer):
             AnalyzerManifest(
                 name="DiagramDetectorAnalyzer",
                 version="1.0.0",
-                description="Clusters short labels on scanned pages into DiagramBlocks",
+                description="Finds the figures drawn on scanned pages, with the labels OCR read in them",
                 krm_permissions={
                     KRMPermission.READ,
                     KRMPermission.INSERT,
                     KRMPermission.TOMBSTONE,
+                    KRMPermission.MUTATE_ATTRIBUTES,
                 },
                 depends_on=["NormalizationAnalyzer"],
             )
@@ -79,13 +117,140 @@ class DiagramDetectorAnalyzer(BaseAnalyzer):
                 self._source = None
         count = 0
         try:
-            for pg, items in by_page.items():
-                count += self._detect_on_page(pg, items)
+            for pg in sorted(self._blocks):
+                found = self._by_ink(pg)
+                count += self._detect_on_page(pg, by_page.get(pg, [])) if found is None else found
         finally:
             if self._source is not None:
                 self._source.close()
         if count:
             log.info("DiagramDetectorAnalyzer: %d diagram(s) detected", count)
+
+    def _by_ink(self, page: int) -> Optional[int]:
+        """The figures of a scanned page found by its own ink, set in the
+        document: how many - None where the page is no scan read line by
+        line (PrintedLinesAnalyzer), or its source cannot be read."""
+        blocks = self._blocks.get(page, [])
+        texts = [b for b, _ in blocks if _is_text(b)]
+        sizes = sorted(l.get("size") or 0.0 for b in texts for l in (b.metadata or {}).get("printed_lines") or [])
+        if self._source is None or page >= self._source.page_count or not sizes:
+            return None
+        try:
+            import cv2
+            import numpy as np
+            import pymupdf
+        except ImportError:
+            return None
+        em = body_size(texts) or sizes[len(sizes) // 2]
+        if not em:
+            return None
+        ink = read_page(np, cv2, pymupdf, self._source[page], em)
+        lines = _page_lines(np, ink, page, blocks)
+
+        # the page's text a drawing stands clear of: its running text for a
+        # stroke to be a mark on, every line of it for two drawings to
+        # stand either side of - and what else of the page is no text
+        running = [_bbox_of(b) for b in texts if any(l.fixed for l in lines if l.block is b)]
+        others = [_bbox_of(b) for b, _ in blocks if not _is_text(b) and not isinstance(b, (CodeBlock, FormulaBlock))]
+        tables = [_bbox_of(b) for b, _ in blocks if isinstance(b, TableBlock)]
+        seeds = drawn(np, ink, running + others)
+        parts = drawings([tuple(ink.boxes[k]) for k in seeds], [l.box for l in lines if l.page_text] + others,
+                         ink.ems(GAP))
+        found = 0
+        for strokes in sorted(([seeds[k] for k in part] for part in parts), key=lambda st: ink.box(st)[1]):
+            box = ink.box(strokes)
+            # a register set as a table of its bits (RegisterAnalyzer) is drawn already
+            if any(holds(box, t) or holds(t, box) for t in tables):
+                continue
+            if is_figure(np, cv2, ink, strokes) and self._set_figure(np, page, ink, box, lines):
+                found += 1
+        return found
+
+    def _set_figure(self, np, page: int, ink: PageInk, strokes: Box, lines: List[_Line]) -> bool:
+        """Set the figure whose drawn strokes stand in a box of a page: the
+        lines of the page's text that are its own go into it - those in
+        its area, those between it and its caption (a note set under
+        Zaks' "Shift and Rotate", over its caption), those touching its
+        strokes (TOUCH), and those no text of the page (_Line.page_text)
+        within REACH of it as it stands with the ones it has - with the
+        marks by it no line accounts for (ink.with_marks), and it is
+        drawn from its own ink, the page's text left out. lines loses the
+        ones it takes."""
+        touch, reach = ink.ems(TOUCH), ink.ems(REACH)
+        area = strokes
+        own: List[_Line] = []
+        made = [(b, parent) for b, parent in self._blocks.get(page, []) if not _is_text(b) and not b.is_tombstoned]
+        caption = _caption_by(strokes, lines)
+        while True:
+            before = area
+            gap = between(area, _bbox_of(caption)) if caption is not None else None
+            for line in lines:
+                noted = gap is not None and holds(gap, line.box)
+                if line.caption or (line.fixed and not noted) or any(line is o for o in own):
+                    continue
+                if (noted or holds(area, line.box) or near(line.box, strokes, touch)
+                        or (not line.page_text and near(line.box, area, reach))):
+                    own.append(line)
+                    area = over([area, line.box])
+            # and a listing or a formula OCR made of its marks ("R -J" of
+            # Zaks' vertical "REGISTER 0")
+            marks = [(b, parent) for b, parent in made
+                     if isinstance(b, (CodeBlock, FormulaBlock)) and holds(area, _bbox_of(b))]
+            taken = {id(b) for b, _ in marks}
+            masks = [l.box for l in lines if not any(l is o for o in own)]
+            masks += [_bbox_of(b) for b, _ in made if id(b) not in taken]
+            area = with_marks(ink, area, masks, touch)
+            if area == before:
+                break
+        printed = strokes_ink(np, ink, area, masks)
+        if printed is None:
+            return False
+
+        box = tuple(printed["box"])
+        parent, at = self._place(page, box, {id(l.block) for l in own} | taken)
+        parts = sorted({l.block.id if l.inline is None else f"{l.block.id}/{_line_number(l)}" for l in own}
+                       | {b.id for b, _ in marks})
+        diagram = DiagramBlock(
+            # Built from the lines it takes, so its identity is theirs
+            # (RFC 0009 §5.2) - a drawing with no text in it, its place's.
+            id=derive_composite_id("diagram", *(parts or [parent.id, str(page)] + [f"{v:.3f}" for v in box])),
+            caption_text=_text_of(caption) if caption is not None else "",
+            labels=[{"text": l.text, "x0": l.box[0], "y0": l.box[1], "x1": l.box[2], "y1": l.box[3]}
+                    for l in own if l.text],
+            visual_layout=VisualLayout(bounding_box=NormalizedRect(*box), page_or_screen_index=page),
+            parent_container_id=parent.id,
+            extraction_confidence=0.85,
+            classification_confidence=0.80,
+            confidence_score=0.80,
+        )
+        diagram.metadata["printed_ink"] = printed
+        parent.children.insert(at, diagram)
+
+        reason = f"absorbed_into_diagram:{diagram.id}"
+        for block, _parent in marks:
+            block.is_tombstoned = True
+            block.metadata = {**(block.metadata or {}), "tombstone_reason": reason}
+        for block in {id(l.block): l.block for l in own}.values():
+            _take_lines(block, [l for l in own if l.block is block], reason)
+        lines[:] = [l for l in lines if not any(l is o for o in own)]
+        return True
+
+    def _place(self, page: int, box: Box, own: set) -> Tuple[ContainerUnit, int]:
+        """Where in the document a figure standing in a box of a page goes
+        (a container, a place among its children): after the last block of
+        the page standing over it - the page is in reading order
+        (PageOrderAnalyzer) - before the page's first where none does. own
+        are the blocks it takes (their ids)."""
+        blocks = [(b, parent) for b, parent in self._blocks.get(page, [])
+                  if not b.is_tombstoned and id(b) not in own]
+        middle = (box[1] + box[3]) / 2
+        above = [(b, parent) for b, parent in blocks
+                 if _bbox_of(b)[0] < box[2] and box[0] < _bbox_of(b)[2] and _bbox_of(b)[3] <= middle]
+        if above:
+            block, parent = above[-1]
+            return parent, parent.children.index(block) + 1
+        block, parent = blocks[0] if blocks else self._blocks[page][0]
+        return parent, parent.children.index(block)
 
     def _detect_on_page(
         self, page: int, items: List[Tuple[ParagraphBlock, ContainerUnit]]
@@ -268,11 +433,76 @@ def figure_ink(np, pymupdf, page: Any, area: Box, masks: List[Box]) -> Optional[
         c0 = int(((m[0] - MASK_PAD) * pw - clip.x0) * FIGURE_ZOOM)
         c1 = int(((m[2] + MASK_PAD) * pw - clip.x0) * FIGURE_ZOOM) + 1
         ink[max(0, r0):max(0, r1), max(0, c0):max(0, c1)] = False
-    rows, cols = np.flatnonzero(ink.any(axis=1)), np.flatnonzero(ink.any(axis=0))
-    if not len(rows):
+    return printed_ink(np, ink, clip.x0, clip.y0, (pw, ph))
+
+
+def _is_text(block: Any) -> bool:
+    """Whether a block is text as OCR read it - nothing made of it yet."""
+    return isinstance(block, (ParagraphBlock, UnknownBlock)) and not isinstance(block, DiagramBlock)
+
+
+def _page_lines(np, ink: PageInk, page: int, blocks: List[Tuple[Any, ContainerUnit]]) -> List[_Line]:
+    """The lines of a page's text, in the document's order, each told the
+    page's text or not (_Line.page_text): a caption's, or words
+    (MIN_WORD_CHAR_RATIO) set no smaller than the page's body (is_small) -
+    its size the page's em, its letters' ink as tall as its running
+    text's."""
+    lines: List[_Line] = []
+    for block, parent in blocks:
+        if not _is_text(block):
+            continue
+        text = _text_of(block)
+        caption, runs_on = is_caption(text), _runs_on(block, text)
+        placed = [(il, " ".join(getattr(sp, "text", "") for sp in getattr(il, "spans", []) or []).strip(), _bbox_of(il))
+                  for il in block.inlines or [] if _bbox_of(il) and page_of(il) == page]
+        for inline, line_text, box in placed or [(None, text, _bbox_of(block))]:
+            lines.append(_Line(block, parent, inline, line_text, box, caption, runs_on))
+    tall = [letters(np, ink, l.box) for l in lines]
+    running = sorted(letters(np, ink, l.box, share=75) for l in lines if l.runs_on)
+    body_tall = running[len(running) // 2] if running else 0.0
+    for line, height in zip(lines, tall):
+        size = next((pl.get("size") or 0.0 for pl in (line.block.metadata or {}).get("printed_lines") or []
+                     if holds(line.box, tuple(pl["box"]))), 0.0)
+        reads = _word_char_ratio(line.text) >= MIN_WORD_CHAR_RATIO
+        line.page_text = line.caption or (reads and not is_small(size, ink.em, height, body_tall, line.text))
+    return lines
+
+
+def _line_number(line: _Line) -> int:
+    return next(k for k, il in enumerate(line.block.inlines) if il is line.inline)
+
+
+def _caption_by(box: Box, lines: List[_Line]) -> Optional[Any]:
+    """The caption a figure standing in a box has by it (its block): the
+    page's nearest over or under it, across from it, no more of the page's
+    running text between them than a note's (NOTE_LINES). None where it
+    has none."""
+    stretches = []
+    for block in {id(l.block): l.block for l in lines if l.caption}.values():
+        place = _bbox_of(block)
+        if place[0] < box[2] and box[0] < place[2] and not meets(place, box):
+            stretches.append((between(box, place), block))
+    if not stretches:
         return None
-    ink = ink[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
-    x0, y0 = clip.x0 + cols[0] / FIGURE_ZOOM, clip.y0 + rows[0] / FIGURE_ZOOM
-    x1, y1 = clip.x0 + (cols[-1] + 1) / FIGURE_ZOOM, clip.y0 + (rows[-1] + 1) / FIGURE_ZOOM
-    return {"box": [x0 / pw, y0 / ph, x1 / pw, y1 / ph], "shape": list(ink.shape),
-            "runs": _runs_of(np, ink), "page_pt": [pw, ph]}
+    gap, nearest = min(stretches, key=lambda found: found[0][3] - found[0][1])
+    running = [l for l in lines if l.fixed and not l.caption and meets(l.box, gap)]
+    return nearest if len(running) <= NOTE_LINES else None
+
+
+def _take_lines(block: Any, taken: List[_Line], reason: str) -> None:
+    """Take a figure's lines out of a block: tombstone it where it is left
+    with none, else leave it the rest - its box theirs, its print's lines
+    without the ones gone."""
+    gone = {id(l.inline) for l in taken}
+    rest = [il for il in block.inlines or [] if id(il) not in gone]
+    boxes = [_bbox_of(il) for il in rest if _bbox_of(il)]
+    if any(l.inline is None for l in taken) or not boxes:
+        block.is_tombstoned = True
+        block.metadata = {**(block.metadata or {}), "tombstone_reason": reason}
+        return
+    block.inlines = rest
+    block.visual_layout.bounding_box = NormalizedRect(*over(boxes))
+    printed = (block.metadata or {}).get("printed_lines")
+    if printed:
+        block.metadata = {**block.metadata, "printed_lines": [
+            pl for pl in printed if not any(holds(l.box, tuple(pl["box"])) for l in taken)]}
