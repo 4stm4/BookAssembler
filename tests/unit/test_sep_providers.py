@@ -161,7 +161,8 @@ def test_fastapi_sep_endpoints() -> None:
         assert providers[0]["provider_id"] == provider_id
 
         # 3. GET /api/v1/sep/providers/{provider_id}/browse (Browse Directory)
-        browse_resp = client.get(f"/api/v1/sep/providers/{provider_id}/browse?folder_path=/books")
+        # the folder is named by `path`, as the web client names it (src/api/client.ts)
+        browse_resp = client.get(f"/api/v1/sep/providers/{provider_id}/browse?path=/books")
         assert browse_resp.status_code == 200
         items = browse_resp.json()
         assert len(items) == 1
@@ -176,7 +177,9 @@ def test_fastapi_sep_endpoints() -> None:
         assert import_resp.status_code == 201
         import_data = import_resp.json()
         job_id = import_data["job_id"]
-        assert import_data["status"] == "QUEUED"
+        # the import answers at once, its work going on in the background
+        # (import_from_sep_provider)
+        assert import_data["status"] == "PROCESSING"
         assert f"sep://{provider_id}/books/chapter1.txt" in import_data["source_uri"]
 
         # 5. GET /api/v1/jobs/{job_id}/status (Verify Job Created)
