@@ -2070,6 +2070,7 @@ def _mark_text_colour(np, pymupdf, page, table) -> int:
 
 
 _ITALIC_MIN_LETTERS = 6     # a few glyphs lean by their shapes alone ("A8-A15")
+_LINE_BAND = 0.4            # of the tallest band of a cell's ink: under it a band is no line of text
 
 
 def _mark_italic(np, pymupdf, page, table) -> int:
@@ -2093,11 +2094,28 @@ def _mark_italic(np, pymupdf, page, table) -> int:
                 continue
             pix = page.get_pixmap(matrix=pymupdf.Matrix(_RULE_ZOOM, _RULE_ZOOM), clip=clip, colorspace=pymupdf.csGRAY)
             ink = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width) < _RULE_INK_LEVEL
-            if ink.sum() < 50 or _slant(np, ink) < _ITALIC_SLANT:
+            if not _leans(np, ink):
                 continue
             vl.style = replace(vl.style, is_italic=True)
             italic += 1
     return italic
+
+
+def _leans(np, ink) -> bool:
+    """Whether a cell's ink leans as an italic does (_ITALIC_SLANT), line
+    by line. The lines of a cell set over one another lean each by itself;
+    taken together their strokes stand in line at some slant by chance -
+    the Intel 3000 manual's upright "NAME AND" over "FUNCTION" came out
+    italic. A band of ink under _LINE_BAND of the tallest is no line: a
+    dot, an accent, a rule under the words."""
+    rows = np.concatenate(([False], ink.any(axis=1), [False]))
+    edges = np.flatnonzero(rows[1:] != rows[:-1])
+    bands = list(zip(edges[::2], edges[1::2]))
+    if not bands:
+        return False
+    tallest = max(b - a for a, b in bands)
+    lines = [ink[a:b] for a, b in bands if b - a >= _LINE_BAND * tallest and ink[a:b].sum() >= 50]
+    return bool(lines) and all(_slant(np, line) >= _ITALIC_SLANT for line in lines)
 
 
 _INFLATED_SLACK_PT = 1.5   # more box above a line than usual, past noise

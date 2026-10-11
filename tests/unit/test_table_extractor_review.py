@@ -2378,3 +2378,47 @@ class TestOutlineAccounted:
         got_fb = float(re.search(r"FakeBold=([\d.]+)", tex).group(1))
         got_size = float(re.search(r"FakeBold=[\d.]+\}\\fontsize\{([\d.]+)\}", tex).group(1))
         assert abs(got_fb - fb) < 0.06 and abs(got_size - size) < 0.02
+
+
+class TestItalicLineByLine:
+    """A cell's lines lean each by itself. Taken together, the stems of two
+    upright lines set over one another stand in line at some slant by
+    chance: the Intel 3000 manual's "NAME AND" over "FUNCTION" came out
+    italic."""
+
+    @staticmethod
+    def _stems(np, rows, cols, at, lean=0.0):
+        """A line of stems, a stem every 20 columns from `at`, leaning
+        `lean` columns a row."""
+        ink = np.zeros((rows, cols), dtype=bool)
+        for x in range(at, cols - 20, 20):
+            for y in range(rows):
+                c = int(round(x + lean * (rows - 1 - y)))
+                ink[y, c:c + 3] = True
+        return ink
+
+    def test_two_upright_lines_over_one_another_do_not_lean(self):
+        np = pytest.importorskip("numpy")
+        from src.analyzers.table.rules import _leans
+        gap = np.zeros((6, 200), dtype=bool)
+        assert not _leans(np, np.vstack([self._stems(np, 20, 200, 10), gap, self._stems(np, 20, 200, 16)]))
+
+    def test_a_cell_is_italic_where_every_line_of_it_leans(self):
+        np = pytest.importorskip("numpy")
+        from src.analyzers.table.rules import _leans
+        gap = np.zeros((6, 200), dtype=bool)
+        leaning, upright = self._stems(np, 20, 200, 10, lean=0.2), self._stems(np, 20, 200, 10)
+        assert _leans(np, np.vstack([leaning, gap, leaning]))
+        assert not _leans(np, np.vstack([leaning, gap, upright]))
+
+    def test_a_line_of_leaning_stems_leans(self):
+        np = pytest.importorskip("numpy")
+        from src.analyzers.table.rules import _leans
+        assert _leans(np, self._stems(np, 20, 200, 10, lean=0.2))
+
+    def test_a_rule_under_an_italic_line_is_no_line_of_it(self):
+        np = pytest.importorskip("numpy")
+        from src.analyzers.table.rules import _leans
+        gap = np.zeros((4, 200), dtype=bool)
+        rule = np.ones((2, 200), dtype=bool)
+        assert _leans(np, np.vstack([self._stems(np, 20, 200, 10, lean=0.2), gap, rule]))
