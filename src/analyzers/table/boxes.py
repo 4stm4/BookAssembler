@@ -349,6 +349,8 @@ def _table_from_box_grid(grid: BoxGrid, page_idx: int, pw: float, ph: float) -> 
     )
     table.metadata.update({
         "box_grid": True,
+        # the page its places are shares of
+        "page_pt": [pw, ph],
         "column_rule_x": [x / pw for x in xs[1:-1]],
         "rule_y": [y / ph for y in ys],
         "table_rule_x0": xs[0] / pw, "table_rule_x1": xs[-1] / pw,

@@ -1,4 +1,6 @@
 """Regressions for defects found in the table extractor code review."""
+import pytest
+
 from src.analyzers.table.analyzer import TableDetectorAnalyzer
 from src.krm.models import (
     ContainerUnit, NormalizedRect, ParagraphBlock, StyledTextSpan,
@@ -513,8 +515,10 @@ def _styled(cell, size_pt=8.0):
     return cell
 
 
-def _ruled_tex(rows, x1=0.40):
-    """build_latex of a three-column table ruled at 0.175 and 0.275, no frame."""
+def _ruled_tex(rows, x1=0.40, page_pt=None, span_map=None):
+    """build_latex of a three-column table ruled at 0.175 and 0.275, no
+    frame - off a page of page_pt (pt) where given, with the span map its
+    analyzer gave it where given."""
     from src.assembler.latex_builder import build_latex
     from src.krm.models import KnowledgeDocument
     grid = [[c if c.visual_layout.style else _styled(c) for c in row] for row in rows]
@@ -529,8 +533,41 @@ def _ruled_tex(rows, x1=0.40):
         for cell in row:
             cell.border_left = cell.border_right = True
     table.metadata = {"column_rule_x": [0.175, 0.275]}
+    if page_pt:
+        table.metadata["page_pt"] = list(page_pt)
+    if span_map is not None:
+        table.span_map = span_map
     doc = KnowledgeDocument(title="t", root_containers=[ContainerUnit(title="", level=1, children=[table])])
     return build_latex(doc)
+
+
+class TestSetByItsOwnPage:
+    """A table's places are shares of the page it was printed on, and it is
+    set by that page: the Intel 3000 manual's pin table, its page 498pt
+    across, came out a fifth too wide for its type, set as off an A4
+    sheet."""
+
+    @staticmethod
+    def _rows():
+        return [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("aa", x0=0.20, y0=0.32), _cell("1", x0=0.33, y0=0.32)]]
+
+    @staticmethod
+    def _widths(tex):
+        import re
+        spec = re.search(r"\\begin\{tabular\}\{(.*)\}\n", tex).group(1)
+        return [float(w) for w in re.findall(r"p\{([0-9.]+)cm\}", spec)]
+
+    def test_a_table_off_a_smaller_page_is_set_smaller(self):
+        a4 = self._widths(_ruled_tex(self._rows()))
+        small = self._widths(_ruled_tex(self._rows(), page_pt=(297.64, 420.94)))   # half an A4 sheet each way
+        assert a4 and len(small) == len(a4)
+        # half as wide, but for what stands between its columns whatever the page
+        assert 0.4 < sum(small) / sum(a4) < 0.55
+
+    def test_a_table_that_names_no_page_is_set_as_off_an_a4_sheet(self):
+        assert self._widths(_ruled_tex(self._rows())) == self._widths(
+            _ruled_tex(self._rows(), page_pt=(595.28, 841.89)))
 
 
 class TestPrintedHeight:

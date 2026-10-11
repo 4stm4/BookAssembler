@@ -676,6 +676,9 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                 page_index = vl.page_or_screen_index or 0
                 if page_index >= source.page_count:
                     continue
+                # the page its print was read off: every place in it is a
+                # share of that page, and the builder sets it by it
+                table.metadata["page_pt"] = [source[page_index].rect.width, source[page_index].rect.height]
                 _mark_fill(np, pymupdf, source[page_index], table)
                 _mark_text_colour(np, pymupdf, source[page_index], table)
                 _find_placeholder_marks(np, pymupdf, source[page_index], table)

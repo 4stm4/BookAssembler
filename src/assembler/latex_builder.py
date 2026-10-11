@@ -15,6 +15,7 @@ import os
 import re
 import statistics
 import subprocess
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.security.manager import Capability, get_security_manager
@@ -962,7 +963,7 @@ def _styled_cell_text(
     h = _box_height(cell)
     if median_pt > 0 and line_box > 0 and h is not None and (
         abs(h - line_box) <= _SIZE_NOISE_TOLERANCE * line_box
-        or h * _A4_HEIGHT_PT > 1.2 * _size_of(style)
+        or h * _page_h_pt() > 1.2 * _size_of(style)
     ):
         size_pt = median_pt
     if size_pt > 0:
@@ -994,7 +995,7 @@ def _styled_cell_text(
             bold, italic = bool(getattr(style, "is_bold", False)), bool(getattr(style, "is_italic", False))
             fitted, pen = "", 0.0
             for token, (a, b) in zip(tokens, spans):
-                start, width = a * _A4_WIDTH_PT, max(0.1, (b - a) * _A4_WIDTH_PT)
+                start, width = a * _page_w_pt(), max(0.1, (b - a) * _page_w_pt())
                 box, shift = width, 0.0
                 ink = _ink_in_face(face, bold, italic, token) if font_prefix else None
                 if ink is not None and ink[1] > 0:
@@ -1005,7 +1006,7 @@ def _styled_cell_text(
                 pen = start + shift + box
             body = "\\leavevmode" + fitted
         else:
-            body = f"\\resizebox{{{(box.x1 - box.x0) * _A4_WIDTH_PT:.2f}pt}}{{\\height}}{{{body}}}"
+            body = f"\\resizebox{{{(box.x1 - box.x0) * _page_w_pt():.2f}pt}}{{\\height}}{{{body}}}"
     lead, words = False, text
     if one_line and fit_width and sum(ch.isalpha() for ch in (raw or text)) >= _FIT_MIN_LETTERS:
         # A line of words at its printed width too, its leader left to run
@@ -1026,11 +1027,11 @@ def _styled_cell_text(
             # spaces drifted the index fixture's names 2-4pt off their
             # print - its text kept whole (\printedwords)
             dims = ",".join(
-                f"{(a - (spans[k - 1][1] if k else 0.0)) * _A4_WIDTH_PT:.2f}/{max(0.1, (b - a) * _A4_WIDTH_PT):.2f}"
+                f"{(a - (spans[k - 1][1] if k else 0.0)) * _page_w_pt():.2f}/{max(0.1, (b - a) * _page_w_pt()):.2f}"
                 for k, (a, b) in enumerate(spans))
             body = prefix + f"\\printedwords{{{words}}}{{{dims}}}" + ("\\dotfill" if lead else "")
         else:
-            body = prefix + f"\\leavevmode\\resizebox{{{printed * _A4_WIDTH_PT:.2f}pt}}{{\\height}}{{{words}}}" + (
+            body = prefix + f"\\leavevmode\\resizebox{{{printed * _page_w_pt():.2f}pt}}{{\\height}}{{{words}}}" + (
                 "\\dotfill" if lead else "")
 
     colour = getattr(style, "text_color_rgb", None)
@@ -1111,21 +1112,21 @@ def _positioned_lines(cell: Any, raw: str, drop_pt: float = 0.0, origin_x: Optio
         for n, line in enumerate(words_of):
             line_flags = flags[n] if n < len(flags) else []
             out = ""
-            indent = (line[0][0] - origin) * _A4_WIDTH_PT
+            indent = (line[0][0] - origin) * _page_w_pt()
             if indent > _PLACE_MIN_PT:
                 out += f"\\rule{{{indent:.2f}pt}}{{0pt}}"
             for k, (x0, word, x1) in enumerate(line):
                 marked = _bold_marked([word], line_flags[k:k + 1])
-                out += f"\\resizebox{{{max(0.1, (x1 - x0) * _A4_WIDTH_PT):.2f}pt}}{{\\height}}{{{marked}}}"
+                out += f"\\resizebox{{{max(0.1, (x1 - x0) * _page_w_pt()):.2f}pt}}{{\\height}}{{{marked}}}"
                 if k + 1 < len(line):
-                    out += f"\\hspace*{{{(line[k + 1][0] - x1) * _A4_WIDTH_PT:.2f}pt}}"
+                    out += f"\\hspace*{{{(line[k + 1][0] - x1) * _page_w_pt():.2f}pt}}"
             if drop_pt > 0.05:
                 out = f"\\raisebox{{{-drop_pt:.2f}pt}}[\\height][\\depth]{{{out}}}"
             lines.append(out)
     for n, runs in enumerate(segments if not lines else []):
         line_flags = flags[n] if n < len(flags) else []
         out = ""
-        indent = (runs[0][0] - origin) * _A4_WIDTH_PT
+        indent = (runs[0][0] - origin) * _page_w_pt()
         if indent > _PLACE_MIN_PT:
             out += f"\\rule{{{indent:.2f}pt}}{{0pt}}"
         used = 0
@@ -1140,11 +1141,11 @@ def _positioned_lines(cell: Any, raw: str, drop_pt: float = 0.0, origin_x: Optio
                 # description fixture's lines fell 8-10pt short, and a run
                 # boxed to the next one's start, its type grown to the
                 # print's, closed the gap between them ("INTAwill").
-                out += f"\\resizebox{{{(run[2] - x) * _A4_WIDTH_PT:.2f}pt}}{{\\height}}{{{marked}}}"
+                out += f"\\resizebox{{{(run[2] - x) * _page_w_pt():.2f}pt}}{{\\height}}{{{marked}}}"
                 if nxt is not None:
-                    out += f"\\hspace*{{{(nxt[0] - run[2]) * _A4_WIDTH_PT:.2f}pt}}"
+                    out += f"\\hspace*{{{(nxt[0] - run[2]) * _page_w_pt():.2f}pt}}"
             elif nxt is not None:
-                out += f"\\makebox[{(nxt[0] - x) * _A4_WIDTH_PT:.2f}pt][l]{{{marked}}}"
+                out += f"\\makebox[{(nxt[0] - x) * _page_w_pt():.2f}pt][l]{{{marked}}}"
             else:
                 out += marked
         # lowered without moving the line's box: its glyphs grown to the
@@ -1166,7 +1167,7 @@ def _positioned_lines(cell: Any, raw: str, drop_pt: float = 0.0, origin_x: Optio
     usual = (feet[-1] - feet[0]) / (len(feet) - 1)
     out = lines[0]
     for n in range(1, len(lines)):
-        off = (feet[n] - feet[n - 1] - usual) * _A4_HEIGHT_PT
+        off = (feet[n] - feet[n - 1] - usual) * _page_h_pt()
         out += (f"\\vadjust{{\\vskip{off:.2f}pt}}" if abs(off) > 0.05 else "") + "\\newline " + lines[n]
     return out
 
@@ -1358,6 +1359,32 @@ def _size_of(style: Any) -> float:
     short."""
     return (getattr(style, "font_size_pt", 0.0) or 0.0) * _TEX_PT_PER_BP
 _A4_WIDTH_PT = 21.0 * _PT_PER_CM
+
+# The page the table being set was printed on (TeX points): its cells, its
+# rules, its words' places are shares of that page, and are set by it. An
+# A4 sheet where the table says nothing of its page (metadata "page_pt",
+# TableDetectorAnalyzer) - every length here was taken against one, and a
+# table off a smaller page came out that much too large for its type: the
+# Intel 3000 manual's pin table, its page 498pt across, a fifth too wide
+# and over a quarter too tall.
+_SOURCE_PAGE_PT: ContextVar[Tuple[float, float]] = ContextVar(
+    "source_page_pt", default=(_A4_WIDTH_PT, _A4_HEIGHT_PT))
+
+
+def _page_w_pt() -> float:
+    return _SOURCE_PAGE_PT.get()[0]
+
+
+def _page_h_pt() -> float:
+    return _SOURCE_PAGE_PT.get()[1]
+
+
+def _printed_page_pt(table: Any) -> Tuple[float, float]:
+    """The size of the page a table was printed on (TeX points)."""
+    size = (getattr(table, "metadata", None) or {}).get("page_pt")
+    if not size:
+        return (_A4_WIDTH_PT, _A4_HEIGHT_PT)
+    return (size[0] * _TEX_PT_PER_BP, size[1] * _TEX_PT_PER_BP)
 # How far short of the table's edge a measured rule may stop and still be
 # drawn across all of it: scan edges are ragged by a point or so.
 _PARTIAL_RULE_TOL_PT = 2.0
@@ -1493,7 +1520,7 @@ def _lowered_to_print(text: str, cell: Any, row_top_line: Optional[float], line_
         return text
     if centre - row_top_line < _LOWER_MIN_BOX_SHARE * line_box:
         return text
-    drop = (centre - row_top_line) * _A4_HEIGHT_PT
+    drop = (centre - row_top_line) * _page_h_pt()
     return f"\\raisebox{{{-drop:.2f}pt}}[0pt][0pt]{{{text}}}"
 
 
@@ -1552,8 +1579,8 @@ def _render_box_table(table: TableBlock) -> str:
     md = table.metadata
     xs = [md["table_rule_x0"]] + list(md["column_rule_x"]) + [md["table_rule_x1"]]
     ys = list(md["rule_y"])
-    widths = [(b - a) * _A4_WIDTH_PT for a, b in zip(xs, xs[1:])]
-    heights = [(b - a) * _A4_HEIGHT_PT for a, b in zip(ys, ys[1:])]
+    widths = [(b - a) * _page_w_pt() for a, b in zip(xs, xs[1:])]
+    heights = [(b - a) * _page_h_pt() for a, b in zip(ys, ys[1:])]
     nrows, ncols = len(heights), len(widths)
     origin = {}
     for row in table.grid:
@@ -1698,7 +1725,17 @@ def _render_label_table(table: TableBlock) -> str:
 
 
 def _render_table(table: TableBlock) -> str:
-    """Render a table atomically (RFC 0007 §5.2).
+    """Render a table atomically (RFC 0007 §5.2), by the page it was
+    printed on (_SOURCE_PAGE_PT)."""
+    page = _SOURCE_PAGE_PT.set(_printed_page_pt(table))
+    try:
+        return _set_table(table)
+    finally:
+        _SOURCE_PAGE_PT.reset(page)
+
+
+def _set_table(table: TableBlock) -> str:
+    """A table's LaTeX.
 
     If a table agent (GOT-OCR/MinerU) recognized it, use that LaTeX verbatim;
     otherwise fall back to the spatial grid from TableDetector.
@@ -1881,7 +1918,7 @@ def _render_table(table: TableBlock) -> str:
                     _n = raw.count("\n") + 1
                     _h = _box_height(cell)
                     if _h is not None and _n > 1:
-                        _leading = max(0.0, (_h - line_box) * _A4_HEIGHT_PT / (_n - 1))
+                        _leading = max(0.0, (_h - line_box) * _page_h_pt() / (_n - 1))
                         line_pitch[(row_idx, col)] = _leading
                     # Lines set where they were printed take their type at
                     # the size its ink says (the analyzer's ink_size_pt),
@@ -2037,7 +2074,7 @@ def _render_table(table: TableBlock) -> str:
                 entries.sort(key=lambda e: e[0])
                 joined = ""
                 for prev, cur in zip(entries, entries[1:]):
-                    advance = max(0.0, (cur[0] - prev[0]) * _A4_WIDTH_PT)
+                    advance = max(0.0, (cur[0] - prev[0]) * _page_w_pt())
                     joined += f"\\makebox[{advance:.2f}pt][l]{{{prev[2]}}}"
                 joined += entries[-1][2]
                 cells[col] = joined
@@ -2107,7 +2144,7 @@ def _render_table(table: TableBlock) -> str:
     # page's own full width the table actually occupied there (RFC 0002);
     # scaling by the SAME fraction of a full a4 page's width reproduces that
     # proportion instead of always spending the whole safe budget.
-    _A4_FULL_WIDTH_CM = 21.0
+    _PAGE_WIDTH_CM = _page_w_pt() / _PT_PER_CM
     _MAX_TABLE_WIDTH_CM = 16.0
     _MIN_TABLE_WIDTH_CM = 6.0
     vl = getattr(table, "visual_layout", None)
@@ -2115,7 +2152,7 @@ def _render_table(table: TableBlock) -> str:
     if bb is not None:
         target_width_cm = max(
             _MIN_TABLE_WIDTH_CM,
-            min(_MAX_TABLE_WIDTH_CM, (bb.x1 - bb.x0) * _A4_FULL_WIDTH_CM),
+            min(_MAX_TABLE_WIDTH_CM, (bb.x1 - bb.x0) * _PAGE_WIDTH_CM),
         )
     else:
         target_width_cm = _MAX_TABLE_WIDTH_CM
@@ -2261,7 +2298,7 @@ def _render_table(table: TableBlock) -> str:
                     continue
                 _pad_pt = (
                     fractions[_i] - (col_max_x1[_i] - col_min_x0[_i])
-                ) * _A4_FULL_WIDTH_CM * _PT_PER_CM
+                ) * _page_w_pt()
                 if _pad_pt > 0:
                     _real_pads_pt.append(_pad_pt)
             if _real_pads_pt:
@@ -2304,7 +2341,7 @@ def _render_table(table: TableBlock) -> str:
             col_width_cm = [
                 max(
                     _MIN_NARROW_P_CM if not is_wide[i] else 2.2,
-                    f * _A4_FULL_WIDTH_CM - _sides_cm(i),
+                    f * _PAGE_WIDTH_CM - _sides_cm(i),
                 )
                 for i, f in enumerate(fractions)
             ]
@@ -2352,7 +2389,7 @@ def _render_table(table: TableBlock) -> str:
                     _set_pt = (
                         boundaries[_i + 1] - _ink_x1[_i] if _right_set
                         else _ink_x0[_i] - boundaries[_i]
-                    ) * _A4_FULL_WIDTH_CM * _PT_PER_CM
+                    ) * _page_w_pt()
                     # \tabcolsep and half the rule, or nothing on an open
                     # side; and the inset between the ink edge as read and
                     # the glyph box LaTeX places (_INK_EDGE_INSET_PT).
@@ -2431,7 +2468,7 @@ def _render_table(table: TableBlock) -> str:
     # printed out past it is placed there on its own - and a right-set
     # one's where its widest value does.
     if col_width_cm is None and col_min_x0 is not None and col_max_x1 is not None:
-        _gap = 2 * _tabcolsep_pt / (_A4_FULL_WIDTH_CM * _PT_PER_CM)
+        _gap = 2 * _tabcolsep_pt / (_page_w_pt())
         _starts = [_text_start(i) for i in range(ncols)]
 
         def _fraction(i: int) -> Optional[float]:
@@ -2444,7 +2481,7 @@ def _render_table(table: TableBlock) -> str:
 
         fractions = [_fraction(i) for i in range(ncols)]
         if all(f is not None and f > 0 for f in fractions):
-            col_width_cm = [f * _A4_FULL_WIDTH_CM for f in fractions]
+            col_width_cm = [f * _PAGE_WIDTH_CM for f in fractions]
             # A right-set column's values end at their usual right edge,
             # not at the next column's start: the DC characteristics
             # fixture's TYP figures stood 29pt right of their print, against
@@ -2453,7 +2490,7 @@ def _render_table(table: TableBlock) -> str:
                 if (col_is_right is not None and col_is_right[i]
                         and i < len(col_edge_x1) and col_edge_x1[i] is not None):
                     _col_indent_pt[i] = max(
-                        0.0, (_starts[i] + fractions[i] - col_edge_x1[i]) * _A4_FULL_WIDTH_CM * _PT_PER_CM)
+                        0.0, (_starts[i] + fractions[i] - col_edge_x1[i]) * _page_w_pt())
 
     # Narrow columns hold short numeric-ish values (MIN/TYP/MAX/UNITS) that
     # the source right-aligns, not the wide CHARACTERISTICS/CONDITIONS text
@@ -2552,7 +2589,7 @@ def _render_table(table: TableBlock) -> str:
             # And the frame stands where it was printed from the text, not
             # a \tabcolsep off it: the index fixture's frame is 22pt out
             # from its names and 21pt from its page numbers.
-            _scale = _A4_FULL_WIDTH_CM * _PT_PER_CM
+            _scale = _page_w_pt()
             _fx0, _fx1 = _table_md.get("table_rule_x0"), _table_md.get("table_rule_x1")
             _pad_l = _pad_r = None
             if _fx0 is not None and seps[0] == "|" and col_min_x0 and _text_start(0) is not None:
@@ -2621,7 +2658,7 @@ def _render_table(table: TableBlock) -> str:
         # a negative kern.
         if col_is_right is None or col >= len(col_is_right) or col >= len(col_edge_x0):
             return text
-        scale = _A4_FULL_WIDTH_CM * _PT_PER_CM
+        scale = _page_w_pt()
         if col_is_right[col]:
             if col_edge_x1[col] is None:
                 return text
@@ -2654,7 +2691,7 @@ def _render_table(table: TableBlock) -> str:
     # fixture's dots stand 6.2pt apart, not \dotfill's 3.6.
     _dot_phase = None
     if _table_md.get("leader_pitch"):
-        _dot_pitch_pt = _table_md["leader_pitch"] * _A4_WIDTH_PT
+        _dot_pitch_pt = _table_md["leader_pitch"] * _page_w_pt()
         _dot_phase = _table_md.get("leader_phase")
 
     def _phase_from(col: int, fallback: float) -> float:
@@ -2663,7 +2700,7 @@ def _render_table(table: TableBlock) -> str:
         start = _text_start(col) if col < ncols else None
         if _dot_phase is None or start is None:
             return fallback
-        return ((_dot_phase - start) * _A4_WIDTH_PT) % _dot_pitch_pt
+        return ((_dot_phase - start) * _page_w_pt()) % _dot_pitch_pt
 
     def _dots_at(phase_pt: float, overhang_pt: float = 0.0, weight: str = "") -> str:
         """Aligned leader dots, phase_pt into each pitch; overhang_pt runs
@@ -2708,8 +2745,8 @@ def _render_table(table: TableBlock) -> str:
         if _source_bounds is None or col >= len(_source_bounds) - 1:
             return ""
         left_open = col == 0 and _open_left
-        start = _source_bounds[col] + (0.0 if left_open else (_rule_w_pt / 2.0 + _tabcolsep_pt) / _A4_WIDTH_PT)
-        shift = (ink_x0 - start) * _A4_WIDTH_PT
+        start = _source_bounds[col] + (0.0 if left_open else (_rule_w_pt / 2.0 + _tabcolsep_pt) / _page_w_pt())
+        shift = (ink_x0 - start) * _page_w_pt()
         return f"\\leftskip={shift:.2f}pt\\relax " if abs(shift) > 0.05 else ""
 
     def _fit_to_column(text: str, col: int) -> str:
@@ -2822,7 +2859,7 @@ def _render_table(table: TableBlock) -> str:
     # dropped the rule above the voltage-regulator fixture's header (5.3pt
     # off against a 5.09pt reach) while inventing one under its "with
     # line" row, where the source prints none.
-    _rules_pt = sorted(y * _A4_HEIGHT_PT for y in (_table_md.get("rule_y") or []))
+    _rules_pt = sorted(y * _page_h_pt() for y in (_table_md.get("rule_y") or []))
     _rule_extent = dict(zip(_rules_pt, _table_md.get("rule_x_extent") or []))
     # Each rule at the weight it was printed (TeX pt from PDF pt); the
     # table's median, \arrayrulewidth, where it was not measured.
@@ -2840,9 +2877,9 @@ def _render_table(table: TableBlock) -> str:
             if getattr(c, "visual_layout", None) is not None and c.visual_layout.bounding_box is not None
         ]
         _row_centre_pt.append(
-            sum((b.y0 + b.y1) / 2.0 for b in _boxes) / len(_boxes) * _A4_HEIGHT_PT if _boxes else None
+            sum((b.y0 + b.y1) / 2.0 for b in _boxes) / len(_boxes) * _page_h_pt() if _boxes else None
         )
-        _row_top_pt.append(min(b.y0 for b in _boxes) * _A4_HEIGHT_PT if _boxes else None)
+        _row_top_pt.append(min(b.y0 for b in _boxes) * _page_h_pt() if _boxes else None)
 
     def _rule_below_pt(row: int) -> Optional[float]:
         """The measured rule between row and the next, or under the last."""
@@ -2883,7 +2920,7 @@ def _render_table(table: TableBlock) -> str:
         full = f"\\noalign{{\\hrule height {weight:.2f}pt}}" if rule_pt in _rule_weight else "\\hline"
         if extent is None or _emitted_bounds_pt is None:
             return full
-        tol = _PARTIAL_RULE_TOL_PT / _A4_WIDTH_PT
+        tol = _PARTIAL_RULE_TOL_PT / _page_w_pt()
         if extent[0] <= _source_bounds[0] + tol and extent[1] >= _source_bounds[-1] - tol:
             return full
         a, b = _to_tabular_pt(extent[0]), _to_tabular_pt(extent[1])
@@ -2893,7 +2930,7 @@ def _render_table(table: TableBlock) -> str:
         )
 
     _sub_rules = [
-        (x, y0 * _A4_HEIGHT_PT, y1 * _A4_HEIGHT_PT) for x, y0, y1 in (_table_md.get("sub_rule") or [])
+        (x, y0 * _page_h_pt(), y1 * _page_h_pt()) for x, y0, y1 in (_table_md.get("sub_rule") or [])
     ]
 
     def _sub_rules_from(rule_pt: Optional[float]) -> str:
@@ -3091,7 +3128,7 @@ def _render_table(table: TableBlock) -> str:
     # for the stretch that makes THIS table's own row count exactly fill
     # its own real height budget (target_height_cm, the same measurement
     # width already uses) replaces the constant with a per-table value.
-    _A4_FULL_HEIGHT_CM = 29.7
+    _PAGE_HEIGHT_CM = _page_h_pt() / _PT_PER_CM
     _ARRAYSTRETCH_DEFAULT = 1.15
     dynamic_arraystretch = _ARRAYSTRETCH_DEFAULT
 
@@ -3356,7 +3393,7 @@ def _render_table(table: TableBlock) -> str:
         # true height in just adds the unmodelled 14.5pt on top again.
         # Fixing this properly means modelling what the formula is
         # missing, not swapping its input.
-        target_height_pt = (bb.y1 - bb.y0) * _A4_FULL_HEIGHT_CM * _PT_PER_CM
+        target_height_pt = (bb.y1 - bb.y0) * _page_h_pt()
         # The row_gaps-driven _extra_ratio (above) sums one term per
         # GAP (len(rendered_rows)-1 of them - there is no "trailing
         # gap" after the last row), but _total_lines counts one unit
@@ -3416,7 +3453,7 @@ def _render_table(table: TableBlock) -> str:
     # actually has. On a table without sub-rows the two agree anyway
     # (14.3 against 14.8pt on the decimal/binary fixture).
     _real_gaps_pt = sorted(
-        g * _A4_FULL_HEIGHT_CM * _PT_PER_CM for g in row_gaps if g and g > 0
+        g * _page_h_pt() for g in row_gaps if g and g > 0
     )
     _baseline_gap_pt = (
         _real_gaps_pt[len(_real_gaps_pt) // 2] if _real_gaps_pt else 0.0
@@ -3562,7 +3599,7 @@ def _render_table(table: TableBlock) -> str:
         # fixture's stacked status lines reserved them twice - 116pt and
         # 74pt of blank under two rows, and the table no longer fit a page.
         surplus = (
-            (gap * _A4_FULL_HEIGHT_CM * _PT_PER_CM) - _baseline_gap_pt
+            (gap * _page_h_pt()) - _baseline_gap_pt
             - max(0, _row_line_count(i) - 1) * _row_line_step(i)
             - _cap_step_pt(i)
             if gap and _baseline_gap_pt > 0 else 0.0
@@ -3593,7 +3630,7 @@ def _render_table(table: TableBlock) -> str:
     # and that 5pt is the vertical offset the border mask shows.
     # Appended here rather than beside the \hline itself because the
     # page-height constant is only bound further down.
-    _page_h_pt = _A4_FULL_HEIGHT_CM * _PT_PER_CM
+    _page_height_pt = _page_h_pt()
     # These come from bb, an OCR box that on a scan sits INSIDE the ink
     # it covers, and measuring them from the ink instead was tried and
     # lost - not because the measurement is wrong, but because the error
@@ -3634,11 +3671,11 @@ def _render_table(table: TableBlock) -> str:
     _rule_y0 = _table_md.get("table_rule_y0")
     _rule_y1 = _table_md.get("table_rule_y1")
     _top_air_pt = (
-        max(0.0, (bb.y0 - _rule_y0) * _page_h_pt)
+        max(0.0, (bb.y0 - _rule_y0) * _page_height_pt)
         if bb is not None and _rule_y0 is not None else 0.0
     )
     _bottom_air_pt = (
-        max(0.0, (_rule_y1 - bb.y1) * _page_h_pt)
+        max(0.0, (_rule_y1 - bb.y1) * _page_height_pt)
         if bb is not None and _rule_y1 is not None else 0.0
     )
     # This air is ADDED, and taking it back out of the first row's own
@@ -3682,7 +3719,7 @@ def _render_table(table: TableBlock) -> str:
     # height below the band's top; the source's cap height is the median
     # height of its one-line bands (its glyphs are taller than ours, and a
     # band's own foot moves with its descenders and subscripts).
-    _line_box_pt = line_box * _A4_HEIGHT_PT
+    _line_box_pt = line_box * _page_h_pt()
     _text_band = {
         r: band for r, band in zip(_rules_pt, _table_md.get("text_band_pt") or [])
         if band is not None
