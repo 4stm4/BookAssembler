@@ -18,7 +18,7 @@ from src.krm.models import (
     UnknownBlock,
 )
 
-from src.analyzers.title_page.signals import MAX_SCAN_PAGES, MAX_TITLE_BLOCK_LEN, MIN_SCORE, TITLE_MAX_PAGES, _NodeLoc, _RE_STRONG, log
+from src.analyzers.title_page.signals import MAX_SCAN_PAGES, MAX_TITLE_BLOCK_LEN, MAX_TITLE_LINES, MIN_SCORE, TITLE_MAX_PAGES, _NodeLoc, _RE_STRONG, log
 from src.analyzers.title_page.rules import _extract_metadata, _get_text, _is_words, _score_page_blocks
 
 class TitlePageAnalyzer(BaseAnalyzer):
@@ -144,6 +144,9 @@ class TitlePageAnalyzer(BaseAnalyzer):
                 continue
             # Nor a table's columns of numbers: its lines are words.
             if not _is_words(texts):
+                continue
+            # And they are few.
+            if sum(max(1, len(getattr(loc[0], "inlines", None) or [])) for loc in locs) > MAX_TITLE_LINES:
                 continue
             # Beyond the very first page, require a strong front-matter signal so
             # ALL-CAPS section headings (CONTENTS, SECTION 1) are not caught.

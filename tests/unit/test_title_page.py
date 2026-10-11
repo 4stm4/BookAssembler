@@ -125,3 +125,23 @@ class TestATitlePageIsWords:
         lines = ["PROGRAMMING THE Z80", "RODNAY ZAKS", "SYBEX", "1980"]
         root = _run([_para(t, page=0) for t in lines])
         assert any(isinstance(c, TitlePageBlock) for c in root.children)
+
+
+class TestATitlePageIsAFewLines:
+    """The Intel 3000 manual's 3003 page, cut out as a page of its own: a
+    pin table, a logic diagram's labels, its equations under headings in
+    capitals - seventy lines of words, none a running paragraph."""
+
+    def test_a_page_dense_with_lines_is_no_title_page(self):
+        rows = ["PIN DESCRIPTION", "LOGIC DIAGRAM", "3003 LOGIC EQUATIONS"]
+        rows += [f"Standard carry look-ahead input {k}" for k in range(40)]
+        root = _run([_para(t, page=0) for t in rows])
+        assert not any(isinstance(c, TitlePageBlock) for c in root.children)
+
+    def test_a_block_s_lines_count_each(self):
+        table = ParagraphBlock(
+            inlines=[TextLineInline(spans=[StyledTextSpan(text=f"Carry output {k}")]) for k in range(40)],
+            visual_layout=VisualLayout(bounding_box=NormalizedRect(0.1, 0.2, 0.9, 0.8), page_or_screen_index=0),
+        )
+        root = _run([_para("PIN DESCRIPTION", page=0), _para("LOGIC DIAGRAM", page=0), table])
+        assert not any(isinstance(c, TitlePageBlock) for c in root.children)
