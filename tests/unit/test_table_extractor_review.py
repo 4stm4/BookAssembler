@@ -570,6 +570,21 @@ class TestSetByItsOwnPage:
             _ruled_tex(self._rows(), page_pt=(595.28, 841.89)))
 
 
+class TestSpansByColumn:
+    def test_a_span_over_a_ragged_row_covers_its_own_column_only(self):
+        """The Intel 3000 manual's pin table ends one row "output enable |
+        HIGH", "HIGH" over two rows, the second place of its row; the row
+        under it is "28 | Vcc | +5 volt supply", and lost its "Vcc" - the
+        second place of that row, the first column but one."""
+        from src.analyzers.table.rules import _build_span_map
+        rows = [[_cell("Pin", x0=0.10, y0=0.30), _cell("Symbol", x0=0.20, y0=0.30), _cell("Type", x0=0.33, y0=0.30)],
+                [_cell("output", x0=0.20, y0=0.32), _cell("HIGH", x0=0.33, y0=0.32)],
+                [_cell("28", x0=0.10, y0=0.34), _cell("Vcc", x0=0.20, y0=0.34)]]
+        rows[1][1].row_span = 2
+        tex = _ruled_tex(rows, span_map=_build_span_map(rows))
+        assert "Vcc" in tex and "28" in tex and "HIGH" in tex
+
+
 class TestPrintedHeight:
     @staticmethod
     def _rows(label_drop):
@@ -770,6 +785,25 @@ class TestOneLineMultirow:
     def test_a_label_printed_on_one_line_spans_its_rows_unwrapped(self):
         rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
                 [_cell("Label", x0=0.10, y0=0.32), _cell("aa", x0=0.20, y0=0.32), _cell("1", x0=0.33, y0=0.32)],
+                [_cell("bb", x0=0.20, y0=0.34), _cell("2", x0=0.33, y0=0.34)]]
+        rows[1][0].row_span = 2
+        assert "\\multirow{2}{*}" in _ruled_tex(rows)
+
+    def test_a_label_printed_on_the_first_of_its_rows_is_set_there(self):
+        """The Intel 3000 manual's "Carry outputs" stands on the first of
+        the two lines it spans, not midway down them."""
+        import re
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.32), _cell("aa", x0=0.20, y0=0.32), _cell("1", x0=0.33, y0=0.32)],
+                [_cell("bb", x0=0.20, y0=0.34), _cell("2", x0=0.33, y0=0.34)]]
+        rows[1][0].row_span = 2
+        moved = re.search(r"\\multirow\{2\}\{\*\}\[(-?[0-9.]+)pt\]", _ruled_tex(rows))
+        # up, by half the step between its two rows
+        assert moved and float(moved.group(1)) > 0
+
+    def test_a_label_printed_midway_down_its_rows_is_left_there(self):
+        rows = [[_cell("Name", x0=0.10, y0=0.30), _cell("Cond", x0=0.20, y0=0.30), _cell("V", x0=0.33, y0=0.30)],
+                [_cell("Label", x0=0.10, y0=0.33), _cell("aa", x0=0.20, y0=0.32), _cell("1", x0=0.33, y0=0.32)],
                 [_cell("bb", x0=0.20, y0=0.34), _cell("2", x0=0.33, y0=0.34)]]
         rows[1][0].row_span = 2
         assert "\\multirow{2}{*}{" in _ruled_tex(rows)

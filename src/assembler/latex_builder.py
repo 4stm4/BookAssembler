@@ -1388,6 +1388,9 @@ def _printed_page_pt(table: Any) -> Tuple[float, float]:
 # How far short of the table's edge a measured rule may stop and still be
 # drawn across all of it: scan edges are ragged by a point or so.
 _PARTIAL_RULE_TOL_PT = 2.0
+# Of a line's box, how far off the middle of its rows a spanning cell must
+# have printed to be moved there: nearer is a label printed midway.
+_SPAN_PLACE_SHARE = 0.25
 # How far a column's set edge as the analyzer reads it off the ink lies
 # from where LaTeX has to place the glyphs' box for the two inks to
 # coincide: the glyphs' side bearing plus the anti-aliased edge the ink
@@ -1809,7 +1812,19 @@ def _set_table(table: TableBlock) -> str:
           and not md.get("column_rule_x")) else set()
     _leader_joins = {b for b in _leader_joins if 0 < b < len(bins or [])}
 
-    span_map = getattr(table, "span_map", {})
+    # The places a spanning cell covers are told below from the cells' own
+    # spans, by the columns they are set in. The table's own map counts a
+    # row's cells as they come, and a row with no cell in a middle column
+    # counts short: the Intel 3000 manual's pin table ends one row
+    # "output enable | HIGH", "HIGH" over two rows, and its map covered the
+    # second place of the row under it - "28 | Vcc | +5 volt supply" lost
+    # its "Vcc". It serves where cells stand in their grid's own columns;
+    # and is the table's, not the builder's to write in.
+    span_map: Dict[Tuple[int, int], Tuple[int, int]] = (
+        {} if bins is not None and len(bins) > 1 else dict(getattr(table, "span_map", None) or {}))
+    # Where a spanning cell was printed down the page (its middle, pt), by
+    # (row, col): it is set there, not midway down the rows it spans.
+    span_printed: Dict[Tuple[int, int], float] = {}
     # Where each lone placeholder mark sits in the source, by (row, col) -
     # see _place_at_printed_x below. Filled only where cells are binned by x.
     printed_x: Dict[Tuple[int, int], Tuple[float, float]] = {}
@@ -1999,6 +2014,9 @@ def _set_table(table: TableBlock) -> str:
                 cell_content = text
                 if row_span > 1 or col_span > 1:
                     cell_content = ("cell", row_span, col_span, text)
+                    _own = cell.visual_layout.bounding_box if cell.visual_layout else None
+                    if _own is not None:
+                        span_printed[(row_idx, col)] = (_own.y0 + _own.y1) / 2.0 * _page_h_pt()
                 # A collision here (cells[col] already set by an earlier
                 # cell in THIS row, both nearest to the same bin) silently
                 # overwrites rather than merges - confirmed a REAL case on
@@ -2835,11 +2853,12 @@ def _set_table(table: TableBlock) -> str:
                     width = f"{col_width_cm[col]:.2f}cm"
                 else:
                     width = f"{wide_width_cm:.2f}cm" if is_wide[col] else "*"
+                up = _raised_to_print(row_idx, col, row_span)
                 if col_span > 1:
                     # Both row_span and col_span: \multicolumn{\multirow{...}{...}{...}}
-                    return f"\\multicolumn{{{col_span}}}{{{_span_spec(col, col_span, spec)}}}{{\\multirow{{{row_span}}}{{{width}}}{{{text}}}}}"
+                    return f"\\multicolumn{{{col_span}}}{{{_span_spec(col, col_span, spec)}}}{{\\multirow{{{row_span}}}{{{width}}}{up}{{{text}}}}}"
                 else:
-                    return f"\\multirow{{{row_span}}}{{{width}}}{{{text}}}"
+                    return f"\\multirow{{{row_span}}}{{{width}}}{up}{{{text}}}"
             else:
                 if col_span > 1:
                     return f"\\multicolumn{{{col_span}}}{{{_span_spec(col, col_span, spec)}}}{{{text}}}"
@@ -2869,6 +2888,19 @@ def _set_table(table: TableBlock) -> str:
 
     def _weight_of(rule_pt: Optional[float]) -> float:
         return _rule_weight.get(rule_pt, _rule_w_pt) if rule_pt is not None else _rule_w_pt
+
+    def _raised_to_print(row: int, col: int, rows: int) -> str:
+        """How far a cell over several rows is moved (\\multirow's own
+        "[..pt]") to stand where it printed. \\multirow sets it midway down
+        its rows, and a label is not always printed there: the Intel 3000
+        manual's "Carry outputs" stands on the first of its two lines. ""
+        where it printed midway, to a share of a line (_SPAN_PLACE_SHARE)."""
+        printed = span_printed.get((row, col))
+        last = min(row + rows, len(_row_centre_pt)) - 1
+        if printed is None or last <= row or _row_centre_pt[row] is None or _row_centre_pt[last] is None:
+            return ""
+        up = (_row_centre_pt[row] + _row_centre_pt[last]) / 2.0 - printed
+        return f"[{up:.2f}pt]" if abs(up) > _SPAN_PLACE_SHARE * line_box * _page_h_pt() else ""
     _row_centre_pt: List[Optional[float]] = []
     _row_top_pt: List[Optional[float]] = []
     for _grow in grid:
@@ -3169,6 +3201,15 @@ def _set_table(table: TableBlock) -> str:
         styled_cells, texts = rendered_rows[row_idx]
         best = 1
         for col, raw in enumerate(texts):
+            if raw and (row_idx, col) in stacked and not (col < len(is_wide) and is_wide[col]):
+                # A narrow column's cell does not wrap: its lines are the
+                # ones the source stacked. Counted one, the Intel 3000
+                # manual's "Active" over "LOW" left its row a line short,
+                # and every row under it a line's pitch low.
+                spans = styled_cells[col] if col < len(styled_cells) else ""
+                if not (isinstance(spans, tuple) and spans[1] > 1):
+                    best = max(best, raw.count("\n") + 1)
+                continue
             if col < len(is_wide) and is_wide[col] and raw and col < len(col_width_cm):
                 styled = styled_cells[col] if col < len(styled_cells) else ""
                 if isinstance(styled, tuple):
