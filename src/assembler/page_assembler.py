@@ -26,7 +26,9 @@ from src.assembler.latex_builder import (
     _printed_lines,
     _printed_nodes,
     _printed_page_mm,
+    _printed_table,
     _scan_ink,
+    _table_node,
     _translated,
     render_node,
 )
@@ -317,7 +319,11 @@ def _render_reflow(slot: PageSlot, target_lang: str) -> str:
             # stand as far apart as the print left them - not TeX's line
             # skip, which set a paragraph against the heading over it.
             body.append("\\par\\nointerlineskip\\vspace{%.2fmm}\n" % (here[1] - above[3]))
-        render_node(body, block, target_lang, recurse=False, column_left=left)
+        if isinstance(block, TableBlock) and here and not target_lang:
+            # a table hung where it printed, as the blocks about it are set
+            body.append(_printed_table(block, left))
+        else:
+            render_node(body, block, target_lang, recurse=False, column_left=left)
         above = here
     return "".join(body)
 
@@ -332,7 +338,8 @@ def _reads_in_columns(slot: PageSlot) -> bool:
     set as printed (_printed_extent) - a container heading without print
     of its own aside - two of them side by side. Its columns, set one
     under another in the flow, ran the Intel 3000 manual's page of three
-    over three pages."""
+    over three pages; its pin table, set under the logic diagram it
+    stands beside, ran that page onto a second."""
     extents = []
     for block in slot.blocks:
         extent = _printed_extent(block)
@@ -347,9 +354,10 @@ def _reads_in_columns(slot: PageSlot) -> bool:
 def _render_printed_page(slot: PageSlot) -> str:
     """A scanned page rebuilt where it printed: its blocks - paragraphs,
     headings, captions set by their printed lines, figures drawn from their
-    own ink - each where it stands on the page, in one picture, scaled down
-    to the text area where the page's print is larger. A container heading
-    without print of its own goes before it."""
+    own ink, tables hung by their top rules - each where it stands on the
+    page, in one picture, scaled down to the text area where the page's
+    print is larger. A container heading without print of its own goes
+    before it."""
     body: List[str] = []
     placed: List[Tuple[Any, Tuple[float, float, float, float]]] = []
     for block in slot.blocks:
@@ -368,6 +376,14 @@ def _render_printed_page(slot: PageSlot) -> str:
         ink = _figure_ink(block)
         if ink:
             nodes.append(_scan_ink(ink, *_printed_page_mm([ink]), (x0, top), ""))
+        elif isinstance(block, TableBlock):
+            # hung where it printed - or, where the builder cannot, set
+            # over the picture rather than lost
+            node = _table_node(block, (x0, top))
+            if node:
+                nodes.append(node)
+            else:
+                render_node(body, block, "", recurse=False)
         else:
             nodes.extend(_printed_nodes(block, "", *_printed_page_mm(_printed_lines(block)), origin=(x0, top)))
     body.append(

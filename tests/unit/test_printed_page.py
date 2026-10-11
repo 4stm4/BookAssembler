@@ -83,3 +83,85 @@ def test_a_pdf_s_root_container_stands_for_the_document(tmp_path):
     with open(path, "rb") as fh:
         doc = PdfSourceAdapter().parse(fh, f"file://{path}")
     assert doc.root_containers[0].semantic_type == DOCUMENT_CONTAINER
+
+
+# --- a table of a scanned page, hung where it printed ----------------------
+
+import pytest
+
+from src.assembler.latex_builder import _printed_extent, _printed_table, _table_node, _table_place
+from src.krm.models import ParagraphBlock as _Paragraph, StyleDescriptor, TableCell
+
+_PAGE_PT = (400.0, 600.0)   # the page the table was read off, pt
+
+
+def _cell(text: str, x0: float, y0: float) -> TableCell:
+    return TableCell(
+        content=[_Paragraph(inlines=[TextLineInline(spans=[StyledTextSpan(text=text)])])],
+        visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=x0, y0=y0, x1=x0 + 0.06, y1=y0 + 0.012),
+            page_or_screen_index=0, style=StyleDescriptor(font_size_pt=7.0),
+        ),
+    )
+
+
+def _table(rules=(0.29, 0.315), page_pt=_PAGE_PT, **marks) -> TableBlock:
+    """A table of two rows on the left of its page, a rule over it and one
+    under its heads."""
+    grid = [[_cell("PIN", 0.10, 0.30), _cell("SYMBOL", 0.20, 0.30), _cell("TYPE", 0.32, 0.30)],
+            [_cell("17", 0.10, 0.32), _cell("Cn", 0.20, 0.32), _cell("Active", 0.32, 0.32)]]
+    table = TableBlock(
+        grid=grid, row_count=2, column_count=3,
+        visual_layout=VisualLayout(page_or_screen_index=0,
+                                   bounding_box=NormalizedRect(x0=0.10, y0=0.30, x1=0.38, y1=0.332)),
+    )
+    table.metadata.update({"rule_y": list(rules), **marks})
+    if page_pt:
+        table.metadata["page_pt"] = list(page_pt)
+    return table
+
+
+def test_a_table_with_a_rule_over_it_has_a_place_on_its_page():
+    x0, top, x1, bottom = _table_place(_table())
+    mm = 25.4 / 72.0
+    assert (x0, x1) == pytest.approx((0.10 * 400 * mm, 0.38 * 400 * mm))
+    # from its top rule down to its last line - or the rule under it
+    assert (top, bottom) == pytest.approx((0.29 * 600 * mm, 0.332 * 600 * mm))
+    assert _printed_extent(_table()) == _table_place(_table())
+
+
+def test_a_table_the_builder_cannot_hang_has_none():
+    assert _table_place(_table(page_pt=None)) is None            # read off no page
+    assert _table_place(_table(rules=(0.315,))) is None          # no rule over its first row
+    assert _table_place(_table(box_grid=True)) is None           # drawn as boxes
+    assert _table_place(_table(label_table=True)) is None        # labels and their values
+
+
+def test_a_table_is_hung_by_its_top_rule_and_its_first_column():
+    node = _table_node(_table(), origin=(0.0, 0.0))
+    assert "\\begin{tabular}" in node and "\\begin{center}" not in node
+    import re
+    x, y = map(float, re.search(r"at \(([-0-9.]+)mm, ([-0-9.]+)mm\)", node).groups())
+    mm = 25.4 / 72.0
+    # its top rule's upper edge, down the page
+    assert -y == pytest.approx(0.29 * 600 * mm, abs=0.3)
+    # a column's lead before its first column's text
+    assert 0.10 * 400 * mm - 3.0 < x < 0.10 * 400 * mm
+
+
+def test_a_table_in_the_flow_stands_as_far_in_as_it_printed():
+    out = _printed_table(_table(), column_left=0.05 * 400 * 25.4 / 72.0)
+    assert out.count("\\begin{tikzpicture}") == 1 and "\\begin{center}" not in out
+    import re
+    x = float(re.search(r"at \(([-0-9.]+)mm,", out).group(1))
+    # 5% of the page in from its column's edge, less its column's lead
+    assert 0.0 < x <= 0.05 * 400 * 25.4 / 72.0
+
+
+def test_a_page_with_a_table_beside_its_text_is_rebuilt_where_it_printed():
+    beside = _printed("LOGIC DIAGRAM of the look-ahead carry", 0.50, 0.30, 0.90, 0.31)
+    slot = PageSlot(page_index=0, blocks=[_table(page_pt=(612.0, 792.0)), beside])   # the page _printed reads off
+    assert _reads_in_columns(slot)
+    out = _render_printed_page(slot)
+    assert out.count("\\begin{tikzpicture}") == 1
+    assert "\\begin{tabular}" in out and "\\begin{center}" not in out

@@ -561,10 +561,69 @@ def _printed_figure(block: Any, column_left: Optional[float] = None) -> str:
     )
 
 
+def _table_place(table: Any) -> Optional[Tuple[float, float, float, float]]:
+    """Where a table of a scanned page stands on it (mm: x0, top, x1,
+    bottom) - its cells and the rules about them - for a table the builder
+    can set there: one read off its page (metadata "page_pt") with a rule
+    printed over its first row to hang it by. None for any other: a table
+    drawn as boxes, one of labels, one an agent recognized, one with no
+    rule over it go in the flow."""
+    md = getattr(table, "metadata", None) or {}
+    size, rules = md.get("page_pt"), md.get("rule_y") or []
+    vl = getattr(table, "visual_layout", None)
+    box = vl.bounding_box if vl is not None else None
+    first = [c.visual_layout.bounding_box for c in (table.grid[0] if table.grid else [])
+             if getattr(c, "visual_layout", None) is not None and c.visual_layout.bounding_box is not None]
+    if not size or box is None or not first or md.get("box_grid") or md.get("label_table") or md.get("latex"):
+        return None
+    centre = sum((b.y0 + b.y1) / 2.0 for b in first) / len(first)
+    over = [y for y in rules if y < centre]
+    if not over:
+        return None
+    w, h = size[0] * 25.4 / 72.0, size[1] * 25.4 / 72.0
+    x0 = min(box.x0, md.get("table_rule_x0") or box.x0)
+    x1 = max(box.x1, md.get("table_rule_x1") or box.x1)
+    return (x0 * w, max(over) * h, x1 * w, max([box.y1] + list(rules)) * h)
+
+
+def _table_node(table: Any, origin: Tuple[float, float]) -> str:
+    """A table as a node of a page's picture, where it printed: its box's
+    top left corner at the place its top rule and its first column's edge
+    stood (_set_table), measured from origin (mm on its page). "" where
+    the builder could not hang it."""
+    corner: List[float] = []
+    box = _render_table(table, corner)
+    if not corner:
+        return ""
+    mm = 25.4 / 72.27
+    return (f"  \\node[anchor=north west, inner sep=0pt, outer sep=0pt] at "
+            f"({corner[0] * mm - origin[0]:.2f}mm, {origin[1] - corner[1] * mm:.2f}mm) {{{box}}};\n")
+
+
+def _printed_table(table: Any, column_left: Optional[float] = None) -> str:
+    """A table set where it printed (_table_node) as a block in the flow,
+    as _printed_block sets a paragraph: as wide and tall as it stood, as
+    far in from the flow's edge as it stood in from its column's. Centred
+    in the flow, as any table, where the builder could not hang it."""
+    x0, top, x1, bottom = _table_place(table)
+    left = x0 if column_left is None else min(column_left, x0)
+    node = _table_node(table, (left, top))
+    if not node:
+        return _render_table(table)
+    return (
+        "\\par\\noindent\\begin{tikzpicture}\n"
+        f"\\useasboundingbox (0,0) rectangle ({x1 - left:.2f}mm,{top - bottom:.2f}mm);\n"
+        + node
+        + "\\end{tikzpicture}\\par\n"
+    )
+
+
 def _printed_extent(block: Any) -> Optional[Tuple[float, float, float, float]]:
     """Where a block's printed lines' ink stands on its page (mm): x0, top,
-    x1, bottom - a figure's, its own ink's (_figure_ink) - None where its
-    print was not read."""
+    x1, bottom - a figure's, its own ink's (_figure_ink); a table's, its
+    cells and rules (_table_place) - None where its print was not read."""
+    if isinstance(block, TableBlock):
+        return _table_place(block)
     ink = _figure_ink(block)
     if ink:
         page_w, page_h = _printed_page_mm([ink])
@@ -1727,21 +1786,28 @@ def _render_label_table(table: TableBlock) -> str:
             + "\n".join(rows) + "\n\\end{tabular}\\par\n")
 
 
-def _render_table(table: TableBlock) -> str:
+def _render_table(table: TableBlock, corner: Optional[List[float]] = None) -> str:
     """Render a table atomically (RFC 0007 §5.2), by the page it was
-    printed on (_SOURCE_PAGE_PT)."""
+    printed on (_SOURCE_PAGE_PT) - centred in the flow, or, asked for its
+    corner, as a box to stand on the page (_set_table)."""
     page = _SOURCE_PAGE_PT.set(_printed_page_pt(table))
     try:
-        return _set_table(table)
+        return _set_table(table, corner)
     finally:
         _SOURCE_PAGE_PT.reset(page)
 
 
-def _set_table(table: TableBlock) -> str:
+def _set_table(table: TableBlock, corner: Optional[List[float]] = None) -> str:
     """A table's LaTeX.
 
     If a table agent (GOT-OCR/MinerU) recognized it, use that LaTeX verbatim;
     otherwise fall back to the spatial grid from TableDetector.
+
+    Given a list for its corner, a table hung by its printed top rule
+    comes back a bare box - no centring about it - and the list holds
+    where on its page (TeX pt across, down) the box's top left corner
+    stood: the page assembler sets it there (_table_node). Any other
+    comes back as for the flow, the list left empty.
     """
     md = getattr(table, "metadata", None) or {}
     if md.get("box_grid"):
@@ -4037,16 +4103,26 @@ def _set_table(table: TableBlock) -> str:
             f"{{\\setlength{{\\fboxsep}}{{0pt}}\\colorbox[RGB]{{{r},{g},{b}}}{{"
             + tabular + "}}"
         )
-    lines = [
-        "\\begin{center}",
+    set_up = [
         f"\\renewcommand{{\\arraystretch}}{{{dynamic_arraystretch:.3f}}}",
         f"\\setlength{{\\tabcolsep}}{{{_tabcolsep_pt:.2f}pt}}",
         f"\\setlength{{\\arrayrulewidth}}{{{_rule_w_pt:.2f}pt}}",
         size_cmd,
-        tabular,
-        "\\end{center}",
-        "",
     ]
+    if corner is not None and _has_top_rule and _top_rule_pt is not None:
+        # Its top rule's upper edge is the box's; its left edge stands a
+        # column's lead before the first column's text, or where the
+        # columns' own bounds put it.
+        if _source_bounds is not None and _emitted_bounds_pt is not None:
+            left = _source_bounds[0] * _page_w_pt() - _emitted_bounds_pt[0]
+        else:
+            first = col_min_x0[0] if col_min_x0 and col_min_x0[0] is not None else (bb.x0 if bb is not None else 0.0)
+            lead = 0.0 if col_spec.startswith("@{}") else _tabcolsep_pt + (_rule_w_pt if col_spec.startswith("|") else 0.0)
+            left = first * _page_w_pt() - lead
+        corner[:] = [left, _top_rule_pt - _weight_of(_top_rule_pt) / 2.0]
+        # no line ends inside: in a picture's node each would be a space
+        return "{" + "".join(set_up) + tabular.replace("\n", "%\n") + "}"
+    lines = ["\\begin{center}"] + set_up + [tabular, "\\end{center}", ""]
     return "\n".join(lines)
 
 
