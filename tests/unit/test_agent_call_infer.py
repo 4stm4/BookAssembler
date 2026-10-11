@@ -1,4 +1,9 @@
-"""call_infer endpoint selection and retry policy (src/agents/router.py)."""
+"""call_infer endpoint selection and retry policy (src/agents/router.py).
+
+A role has a route of its own (RFC 0022 §4.4: /vision, /table, /formula,
+/refine, /translate), tried first; /infer - the shared envelope - is the
+fallback for a Runner not yet on that version, and /ocr the legacy alias
+that only ever spoke image payloads."""
 from src.agents.tasks import Priority
 import io
 import json
@@ -43,36 +48,63 @@ def _install(monkeypatch, handler):
     return calls
 
 
-def test_infer_success_does_not_call_ocr(monkeypatch):
+def _not_found(url):
+    return urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+
+def test_a_role_s_own_route_answers_and_nothing_else_is_called(monkeypatch):
     calls = _install(
         monkeypatch, lambda url: _Resp(json.dumps({"text": "ok"}).encode())
     )
     assert router.call_infer("http://h", "vision", b"img") == "ok"
-    assert calls == ["http://h/infer"]
+    assert calls == ["http://h/vision"]
+
+
+def test_a_runner_without_role_routes_answers_on_infer(monkeypatch):
+    """A Runner still on the shared envelope 404s on /vision."""
+
+    def handler(url):
+        if url.endswith("/vision"):
+            raise _not_found(url)
+        return _Resp(json.dumps({"text": "from-infer"}).encode())
+
+    calls = _install(monkeypatch, handler)
+    assert router.call_infer("http://h", "vision", b"img") == "from-infer"
+    assert calls == ["http://h/vision", "http://h/infer"]
 
 
 def test_non_timeout_failure_falls_back_to_ocr(monkeypatch):
-    """A got-ocr agent 404s on /infer — /ocr must still be tried."""
+    """A got-ocr agent 404s on the role's route and on /infer — /ocr must
+    still be tried."""
 
     def handler(url):
-        if url.endswith("/infer"):
-            raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+        if not url.endswith("/ocr"):
+            raise _not_found(url)
         return _Resp(json.dumps({"text": "from-ocr"}).encode())
 
     calls = _install(monkeypatch, handler)
     assert router.call_infer("http://h", "vision", b"img") == "from-ocr"
-    assert calls == ["http://h/infer", "http://h/ocr"]
+    assert calls == ["http://h/vision", "http://h/infer", "http://h/ocr"]
 
 
-def test_timeout_retries_then_skips_ocr(monkeypatch):
-    """A saturated uplink: retry /infer, but never queue more bytes on /ocr."""
+def test_a_task_with_no_route_of_its_own_goes_to_infer(monkeypatch):
+    calls = _install(
+        monkeypatch, lambda url: _Resp(json.dumps({"text": "ok"}).encode())
+    )
+    assert router.call_infer("http://h", "ocr", b"img") == "ok"
+    assert calls == ["http://h/infer"]
+
+
+def test_timeout_retries_then_tries_no_other_route(monkeypatch):
+    """A saturated uplink: retry the route, but never queue more bytes on
+    /infer or /ocr behind it."""
 
     def handler(url):
         raise socket.timeout("The read operation timed out")
 
     calls = _install(monkeypatch, handler)
     assert router.call_infer("http://h", "vision", b"img") is None
-    assert calls == ["http://h/infer"] * router.INFER_ATTEMPTS
+    assert calls == ["http://h/vision"] * router.INFER_ATTEMPTS
 
 
 def test_timeout_then_success_within_retries(monkeypatch):
@@ -142,7 +174,7 @@ class TestTextTasksAndPriority:
 
         monkeypatch.setattr(router, "_post_infer", fake_post)
         router.call_infer("http://a", "refine", prompt="x")
-        assert urls == ["http://a/infer"]
+        assert urls == ["http://a/refine", "http://a/infer"]
 
     def test_ollama_text_task_carries_no_images_field(self, monkeypatch):
         """The edge-cluster fallback path for bulk work (RFC 0022 §7.2)."""
