@@ -108,3 +108,20 @@ class TestTitlePageDetectionExcludesTombstonedText:
         assert titles, "a real title page should still be detected"
         joined = " ".join(ln.spans[0].text for ln in titles[0].inlines)
         assert "RUNNING HEADER" not in joined
+
+
+class TestATitlePageIsWords:
+    """The Intel 3000 manual's "A.C. CHARACTERISTICS AND WAVEFORMS", cut
+    out as a page of its own: capitals over short lines - and columns of
+    numbers and units. A table's page is no title page."""
+
+    def test_a_page_of_a_table_s_numbers_is_no_title_page(self):
+        cells = ["A.C. CHARACTERISTICS AND WAVEFORMS", "SYMBOL", "PARAMETER", "Clock Cycle Time",
+                 "100", "70", "ns", "33", "20", "ns", "50 27", "30 13", "ns ns"]
+        root = _run([_para(t, page=0) for t in cells])
+        assert not any(isinstance(c, TitlePageBlock) for c in root.children)
+
+    def test_a_page_of_a_title_s_words_is_one(self):
+        lines = ["PROGRAMMING THE Z80", "RODNAY ZAKS", "SYBEX", "1980"]
+        root = _run([_para(t, page=0) for t in lines])
+        assert any(isinstance(c, TitlePageBlock) for c in root.children)

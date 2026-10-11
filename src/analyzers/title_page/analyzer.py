@@ -19,7 +19,7 @@ from src.krm.models import (
 )
 
 from src.analyzers.title_page.signals import MAX_SCAN_PAGES, MAX_TITLE_BLOCK_LEN, MIN_SCORE, TITLE_MAX_PAGES, _NodeLoc, _RE_STRONG, log
-from src.analyzers.title_page.rules import _extract_metadata, _get_text, _score_page_blocks
+from src.analyzers.title_page.rules import _extract_metadata, _get_text, _is_words, _score_page_blocks
 
 class TitlePageAnalyzer(BaseAnalyzer):
     def __init__(self) -> None:
@@ -141,6 +141,9 @@ class TitlePageAnalyzer(BaseAnalyzer):
                 continue
             # A title page has no running paragraphs (only short centered lines).
             if any(len(t) > MAX_TITLE_BLOCK_LEN for t in texts):
+                continue
+            # Nor a table's columns of numbers: its lines are words.
+            if not _is_words(texts):
                 continue
             # Beyond the very first page, require a strong front-matter signal so
             # ALL-CAPS section headings (CONTENTS, SECTION 1) are not caught.

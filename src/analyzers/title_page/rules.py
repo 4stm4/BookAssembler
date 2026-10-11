@@ -1,6 +1,6 @@
 """title_page: Pure decision logic — no KRM writes, no I/O."""
 
-from src.analyzers.title_page.signals import MAX_SCAN_PAGES, MAX_TITLE_BLOCK_LEN, MIN_SCORE, TITLE_MAX_PAGES, _NodeLoc, _RE_COPYRIGHT, _RE_EDITION, _RE_ISBN, _RE_PUBLISHER, _RE_STRONG, _RE_YEAR, log
+from src.analyzers.title_page.signals import MAX_SCAN_PAGES, MAX_TITLE_BLOCK_LEN, MAX_WORDLESS, MIN_SCORE, TITLE_MAX_PAGES, _NodeLoc, _RE_COPYRIGHT, _RE_EDITION, _RE_ISBN, _RE_PUBLISHER, _RE_STRONG, _RE_WORD, _RE_YEAR, log
 import logging
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -32,6 +32,12 @@ def _is_mostly_upper(text: str) -> bool:
     if len(alpha) < 3:
         return False
     return sum(1 for c in alpha if c.isupper()) / len(alpha) > 0.7
+
+def _is_words(texts: List[str]) -> bool:
+    """Whether a page's blocks are words, as a title page's are: no more
+    than MAX_WORDLESS of them without one - a table's numbers and units."""
+    return sum(1 for t in texts if not _RE_WORD.search(t)) <= MAX_WORDLESS * len(texts)
+
 
 def _score_page_blocks(texts: List[str]) -> int:
     score = 0
