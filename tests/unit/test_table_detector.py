@@ -58,3 +58,19 @@ class TestRejectedRunKeepsBlocks:
         tables = [ch for ch in c.children if type(ch).__name__ == "TableBlock"]
         assert len(tables) == 1
         assert any(ch.is_tombstoned for ch in c.children)
+
+
+    def test_long_single_lines_one_under_another_are_no_table(self):
+        """The Intel 3000 manual's logic equations, a line to a block, each
+        running the width of the page: lines of display formulas, not the
+        rows of a table of one column."""
+        doc, c = self._doc([
+            "Cn + 7 = Y6X6 + Y6Y5X5 + Y6Y5Y4X4 + Y6Y5Y4Y3X3 + Y6Y5Y4Y3Y2X2 + Y6Y5Y4Y3Y2Y1X1",
+            "Cn + 8 = High Impedance State when ECn + 8 Low and the carry is not driven",
+            "Cn + 8 = Y7X7 + Y7Y6X6 + Y7Y6Y5X5 + Y7Y6Y5Y4X4 + Y7Y6Y5Y4Y3X3 + Y7Y6Y5Y4Y3Y2X2",
+            "Cn + 9 = Y8X8 + Y8Y7X7 + Y8Y7Y6X6 + Y8Y7Y6Y5X5 + Y8Y7Y6Y5Y4X4 + Y8Y7Y6Y5Y4Y3X3",
+            "Cn + 10 = Y9X9 + Y9Y8X8 + Y9Y8Y7X7 + Y9Y8Y7Y6X6 + Y9Y8Y7Y6Y5X5 + Y9Y8Y7Y6Y5Y4X4",
+        ])
+        self._run(doc)
+        assert not any(type(ch).__name__ == "TableBlock" for ch in c.children)
+        assert not any(ch.is_tombstoned for ch in c.children)

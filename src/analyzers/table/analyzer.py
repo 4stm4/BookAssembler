@@ -19,7 +19,7 @@ from src.krm.models import (
 from src.analyzers.caption.signals import _CAPTION_RE
 from src.analyzers.source_io import resolve_source_path
 from src.analyzers.table.boxes import _box_grid, _table_from_box_grid
-from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, log
+from src.analyzers.table.signals import MAX_BLOCK_HEIGHT, MAX_CELL_TEXT_LEN, MIN_TABLE_ROWS, _SINGLE_COL_PROSE_LEN, log
 from src.analyzers.table.rules import _absorb_stray_columns, _bbox, _is_leader_residue, _marks_on_leaders, _reseat_stacked_lines, _build_span_map, _cell_x0, _column_bins, _column_of, _find_placeholder_marks, _frame_rules, _cluster_columns, _count_columns, _drop_leaders, _find_table_runs, _fold_label_rows, _get_text, _header_row_for_block, _looks_like_separator, _mark_cell_borders, _mark_fill, _mark_printed_width, _measure_leader_grid, _deflate_boxes, _reads_as_prose, _label_rows, _label_table, _mark_italic, _mark_typeface, _size_display_type, _mark_text_colour, _page_idx, _regrid_ruled_bands, _rows_from_block, _rows_from_group, _snap_row_to_columns, _split_cells_at_rules, _table_from_lines
 
 
@@ -818,6 +818,14 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                     if is_single_col and row_count < 5 and not has_separators:
                         continue
                     if is_single_col and avg_text_len < 15 and not has_separators:
+                        continue
+                    # Nor are single-column rows that run long: lines of
+                    # text or of display formulas, as in a single block
+                    # (_table_from_lines). The Intel 3000 manual's logic
+                    # equations, "Cn + 8 = Y7X7 + Y7Y6X6 + ...", a line to
+                    # a block, 62 characters a line, came out a table of
+                    # one column.
+                    if is_single_col and avg_text_len > _SINGLE_COL_PROSE_LEN and not has_separators:
                         continue
 
                     grid: List[List[TableCell]] = []
