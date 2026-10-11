@@ -53,6 +53,31 @@ def _fills_empty_column(cell: "TableCell", row: List["TableCell"], bins: List[fl
     return all(_column_of(other, bins) != col for other in row)
 
 
+def _fold_into(target_cell: "TableCell", orphan_cell: "TableCell", above: bool) -> None:
+    """Fold an orphan cell's lines into target_cell - over its own where
+    the orphan printed above it - its box grown over both.
+
+    The merged cell now holds text that, in the source, spanned both
+    cells' own y-range - a taller cell than either alone. Widening
+    target_cell's own bounding_box to that union is what lets a later
+    per-row height calculation (RFC 0021 SS3, latex_builder's row-height
+    struts) see this row as genuinely taller instead of only as tall as
+    whichever single line target_cell started as."""
+    if above:
+        target_cell.content = list(orphan_cell.content) + list(target_cell.content)
+    else:
+        target_cell.content = list(target_cell.content) + list(orphan_cell.content)
+    t_vl = getattr(target_cell, "visual_layout", None)
+    o_vl = getattr(orphan_cell, "visual_layout", None)
+    t_bb = getattr(t_vl, "bounding_box", None) if t_vl else None
+    o_bb = getattr(o_vl, "bounding_box", None) if o_vl else None
+    if t_vl is not None and t_bb is not None and o_bb is not None:
+        t_vl.bounding_box = NormalizedRect(
+            x0=min(t_bb.x0, o_bb.x0), y0=min(t_bb.y0, o_bb.y0),
+            x1=max(t_bb.x1, o_bb.x1), y1=max(t_bb.y1, o_bb.y1),
+        )
+
+
 def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]:
     """Fold a single-cell grid row into the nearest fuller row's cell.
 
@@ -228,32 +253,23 @@ def _merge_orphan_rows(grid: List[List["TableCell"]]) -> List[List["TableCell"]]
     orphan_indices = set()
     ordered = sorted(decisions, key=lambda d: -d[0] if d[1] > d[0] else d[0])
     for i, nearest, target_cell in ordered:
-        orphan_cell = grid[i][0]
-        if nearest > i:
-            target_cell.content = list(orphan_cell.content) + list(target_cell.content)
-        else:
-            target_cell.content = list(target_cell.content) + list(orphan_cell.content)
-
-        # The merged cell now holds text that, in the source, spanned both
-        # cells' own y-range - a taller cell than either alone. Widening
-        # target_cell's own bounding_box to that union is what lets a
-        # later per-row height calculation (RFC 0021 SS3, latex_builder's
-        # row-height struts) see this row as genuinely taller instead of
-        # only as tall as whichever single line target_cell started as.
-        t_vl = getattr(target_cell, "visual_layout", None)
-        o_vl = getattr(orphan_cell, "visual_layout", None)
-        t_bb = getattr(t_vl, "bounding_box", None) if t_vl else None
-        o_bb = getattr(o_vl, "bounding_box", None) if o_vl else None
-        if t_vl is not None and t_bb is not None and o_bb is not None:
-            t_vl.bounding_box = NormalizedRect(
-                x0=min(t_bb.x0, o_bb.x0), y0=min(t_bb.y0, o_bb.y0),
-                x1=max(t_bb.x1, o_bb.x1), y1=max(t_bb.y1, o_bb.y1),
-            )
+        _fold_into(target_cell, grid[i][0], above=nearest > i)
         orphan_indices.add(i)
 
     for i, target, _ in insertions:
-        grid[target].append(grid[i][0])
-        grid[target].sort(key=_cell_x0)
+        orphan_cell = grid[i][0]
+        # A column the row left empty takes one cell: a second orphan of
+        # that column is the cell's next line, not a cell beside it. The
+        # Intel 3000 manual's pin table heads a column "NAME AND" over
+        # "FUNCTION", its "PIN", "SYMBOL", "TYPE" set level between the
+        # two - both were put into the row, five heads over four columns.
+        column = _column_of(orphan_cell, bins)
+        held = next((c for c in grid[target] if _column_of(c, bins) == column), None)
+        if held is None:
+            grid[target].append(orphan_cell)
+            grid[target].sort(key=_cell_x0)
+        else:
+            _fold_into(held, orphan_cell, above=_cell_y0(orphan_cell) < _cell_y0(held))
         orphan_indices.add(i)
     # A span is only right once every row between the two it covers is
     # gone - otherwise it would reach over a row that stayed.

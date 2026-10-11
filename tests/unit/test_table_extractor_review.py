@@ -162,6 +162,24 @@ class TestMergeOrphanRows:
         assert label and label[0].row_span == 2
         assert [_cell_text(c) for c in out[1]][0] == "Average Temperature"
 
+    def test_two_orphans_of_one_empty_column_are_one_cell_of_two_lines(self):
+        """The Intel 3000 manual's pin table heads a column "NAME AND" over
+        "FUNCTION", its "PIN", "SYMBOL", "TYPE" set level between the two:
+        both lines are the one head of the column the row left empty."""
+        from src.analyzers.table.analyzer import _cell_text, _merge_orphan_rows
+        grid = [
+            [_cell("NAME AND", x0=0.30, y0=0.165)],
+            [_cell("PIN", x0=0.12, y0=0.172), _cell("SYMBOL", x0=0.21, y0=0.172), _cell("TYPE", x0=0.43, y0=0.172)],
+            [_cell("FUNCTION", x0=0.30, y0=0.180)],
+            [_cell("1,7,8,11", x0=0.12, y0=0.20), _cell("Y0-Y7", x0=0.21, y0=0.20),
+             _cell("Standard carry", x0=0.30, y0=0.20), _cell("Active", x0=0.43, y0=0.20)],
+        ]
+        out = _merge_orphan_rows(grid)
+        assert [[_cell_text(c) for c in row] for row in out] == [
+            ["PIN", "SYMBOL", "NAME AND FUNCTION", "TYPE"],
+            ["1,7,8,11", "Y0-Y7", "Standard carry", "Active"],
+        ]
+
     def test_label_stays_its_own_row_when_its_column_is_taken(self):
         from src.analyzers.table.analyzer import _cell_text, _merge_orphan_rows
         grid = [
