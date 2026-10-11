@@ -34,13 +34,14 @@ from fastapi import (
     File,
     HTTPException,
     Query,
+    Request,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
     status,
 )
 from fastapi.responses import FileResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from src.adapters import create_default_registry
 from src.api.stores import BoundedLRU, DocStore
@@ -102,6 +103,25 @@ class DocumentUploadResponse(BaseModel):
     job_id: str
     status: str
     source_uri: str
+
+
+async def _json_payload(request: Request) -> Optional[DocumentUploadRequest]:
+    """The text payload a JSON request carries to the upload endpoint; None
+    where the request is no JSON.
+
+    The endpoint takes a file too, so FastAPI reads its body as a form: a
+    JSON body - what the web client sends for a text document
+    (src/api/client.ts) - left `payload` unset, and the upload came out an
+    empty document named "upload://file.txt"."""
+    if "application/json" not in request.headers.get("content-type", ""):
+        return None
+    try:
+        return DocumentUploadRequest.model_validate(await request.json())
+    except (ValueError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Not a document upload payload: {exc}",
+        )
 
 
 class JobStatusResponse(BaseModel):
@@ -1085,6 +1105,7 @@ def create_app() -> FastAPI:
     async def upload_document(
         payload: Optional[DocumentUploadRequest] = None,
         file: Optional[UploadFile] = File(None),
+        request: Request = None,  # type: ignore[assignment]
     ) -> DocumentUploadResponse:
         """
         Uploads a document or text payload and initializes a processing Job.
@@ -1093,6 +1114,8 @@ def create_app() -> FastAPI:
         adapter and runs the full analyzer pipeline in background.
         For text payloads: creates a simple document synchronously.
         """
+        if payload is None and file is None and request is not None:
+            payload = await _json_payload(request)
         source_uri = "upload://file.txt"
         raw_bytes: Optional[bytes] = None
 
@@ -1135,7 +1158,12 @@ def create_app() -> FastAPI:
         if not content_text:
             content_text = ""
         if content_text:
+            # Text pasted in as it is, read off nothing: it goes to a human
+            # (HITL, RFC 0016). The doubt is its extraction's - confidence
+            # is the lesser of extraction and classification, and set on the
+            # result alone it was gone once the text was classified.
             paragraph = ParagraphBlock(
+                extraction_confidence=0.5,
                 confidence_score=0.5,
                 inlines=[TextLineInline(spans=[StyledTextSpan(text=content_text)])]
             )

@@ -114,7 +114,9 @@ def test_fastapi_endpoints_workflow() -> None:
         assert upload_resp.status_code == 201
         upload_data = upload_resp.json()
         job_id = upload_data["job_id"]
-        assert upload_data["status"] == "QUEUED"
+        # a text payload is processed in the request itself (upload_document):
+        # its job is done when the answer comes
+        assert upload_data["status"] == "COMPLETED"
         assert upload_data["source_uri"] == "s3://bucket/doc123.pdf"
 
         # 2. Get Job Status
@@ -122,7 +124,7 @@ def test_fastapi_endpoints_workflow() -> None:
         assert status_resp.status_code == 200
         status_data = status_resp.json()
         assert status_data["job_id"] == job_id
-        assert status_data["status"] == "QUEUED"
+        assert status_data["status"] == "COMPLETED"
 
         # 3. Get HITL Pending Tasks
         pending_resp = client.get("/api/v1/hitl/pending")
@@ -169,7 +171,7 @@ def test_fastapi_endpoints_workflow() -> None:
         upload_payload = DocumentUploadRequest(source_uri="s3://bucket/doc123.pdf", content="Low confidence section text")
         upload_res = loop.run_until_complete(upload_handler(payload=upload_payload, file=None))
         job_id = upload_res.job_id
-        assert upload_res.status == "QUEUED"
+        assert upload_res.status == "COMPLETED"
 
         # 2. Job Status
         status_handler = routes["/api/v1/jobs/{job_id}/status"].endpoint
