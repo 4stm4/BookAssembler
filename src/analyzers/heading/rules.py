@@ -4,7 +4,7 @@ from src.analyzers.access import block_text, font_size
 from collections import Counter
 import re
 from typing import Any, Dict, List, Optional, Sequence
-from src.krm.models import ContainerUnit, KnowledgeDocument, ParagraphBlock, UnknownBlock
+from src.krm.models import ContainerUnit, FigureBlock, KnowledgeDocument, ParagraphBlock, UnknownBlock
 
 from src.analyzers.caption.signals import _CAPTION_RE
 from src.analyzers.paragraph.rules import continues
@@ -125,7 +125,13 @@ def _printed(block: Any) -> List[Dict[str, Any]]:
 def _printed_under(blocks: List[Any], start: int) -> List[Dict[str, Any]]:
     """The printed lines of the paragraph blocks[start] starts: it and the
     blocks after it that continue it (paragraph.rules.continues) - OCR cuts
-    a paragraph into pieces, and its first line can stand alone."""
+    a paragraph into pieces, and its first line can stand alone. A figure
+    there stands as one line, where it is drawn: a heading introduces its
+    drawing ("TEST LOAD CIRCUIT:") as it does a paragraph."""
+    if start < len(blocks) and isinstance(blocks[start], FigureBlock):
+        vl = blocks[start].visual_layout
+        box = vl.bounding_box if vl is not None else None
+        return [{"page": vl.page_or_screen_index, "box": [box.x0, box.y0, box.x1, box.y1], "text": ""}] if box else []
     lines: List[Dict[str, Any]] = []
     k = start
     while k < len(blocks) and isinstance(blocks[k], (ParagraphBlock, UnknownBlock)):
