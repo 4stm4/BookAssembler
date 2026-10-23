@@ -2585,8 +2585,7 @@ def _set_table(table: TableBlock, corner: Optional[List[float]] = None) -> str:
     # instead, when a real measured width is available.
     def _narrow_align_prefix(i: int) -> str:
         # \leftskip / \rightskip, not \hspace: both were measured on an
-        # isolated table (tests/e2e/_debug_colindent_calib.py) and only
-        # the skips do the job. A trailing <{\hspace{}} on a \raggedleft
+        # isolated table and only the skips do the job. A trailing <{\hspace{}} on a \raggedleft
         # column moved its text by exactly nothing (its gap to the rule
         # stayed 1.7pt whether the hspace was there or not), while
         # \rightskip moved it to 8.3pt as asked. \hspace also indents
