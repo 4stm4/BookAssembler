@@ -7,6 +7,7 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import type { Socket } from 'net';
 import dotenv from 'dotenv';
 import { spawn } from 'child_process';
 import { createProxyMiddleware } from 'http-proxy-middleware';
@@ -24,13 +25,14 @@ const API_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
 app.use(cors());
 
-app.use('/api/v1', createProxyMiddleware({
+const apiProxy = createProxyMiddleware({
   target: 'http://127.0.0.1:8000',
   changeOrigin: true,
-  pathRewrite: (_path: string, req: any) => req.originalUrl,
+  pathFilter: '/api/v1/',
   timeout: API_TIMEOUT_MS,
   proxyTimeout: API_TIMEOUT_MS,
-}) as any);
+});
+app.use(apiProxy as any);
 
 // For `npm run dev`: the backend is started here, its logs inherited - they
 // are the only view into pipeline and assembly work. The container image
@@ -69,8 +71,18 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`BookAssembler Server running on http://0.0.0.0:${PORT}`);
+  });
+  // The job's progress socket (/api/v1/ws/jobs/:id) is an upgrade, which no
+  // middleware sees: without this the browser's handshake hung unanswered.
+  // Nothing else here takes one (Vite's HMR has a port of its own).
+  server.on('upgrade', (req, socket, head) => {
+    if (req.url?.startsWith('/api/v1/')) {
+      apiProxy.upgrade(req, socket as Socket, head);
+    } else {
+      socket.destroy();
+    }
   });
 }
 
