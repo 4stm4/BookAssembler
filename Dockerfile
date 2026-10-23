@@ -28,10 +28,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Latin Modern Roman (neither is a Times/Helvetica/Courier match). DejaVu
 # stays the document's main font for Cyrillic; TeX Gyre is Latin-only too
 # (same gap Latin Modern has), selected per-cell in latex_builder.py.
+#
+# Each package at its version (RFC 0012 §3.3: the same input builds the
+# same PDF), the engine (texlive-binaries) and its base too: the tables'
+# overlay tests measure the rebuild to a few percent, and a TeX Live that
+# moved under them would move every measure. When Debian moves one of
+# these (texlive-binaries took +deb12u2 in a point release) the build stops
+# here, by name: take the new version, run the e2e tests, and set it here.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    texlive-xetex texlive-latex-recommended texlive-latex-extra \
-    texlive-lang-cyrillic texlive-fonts-recommended fonts-dejavu \
-    fonts-texgyre && \
+    texlive-binaries=2022.20220321.62855-5.1+deb12u2 \
+    texlive-base=2022.20230122-3 \
+    texlive-latex-base=2022.20230122-3 \
+    texlive-xetex=2022.20230122-3 \
+    texlive-latex-recommended=2022.20230122-3 \
+    texlive-latex-extra=2022.20230122-4 \
+    texlive-lang-cyrillic=2022.20230122-1 \
+    texlive-fonts-recommended=2022.20230122-3 \
+    fonts-dejavu=2.37-6 \
+    fonts-texgyre=20180621-6 && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
