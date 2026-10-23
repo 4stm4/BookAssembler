@@ -61,13 +61,6 @@ jobs:
             -o Dir::Cache::Archives="$HOME/tex-debs" -o Acquire::Retries=3
           rm -f ~/tex-debs/lock
 
-      - name: Restore pip's cache
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/pip
-          key: pip-bookworm-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
-          restore-keys: pip-bookworm-
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
