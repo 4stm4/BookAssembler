@@ -81,3 +81,36 @@ def test_the_target_language_names_no_path(data, lang):
     res = client.post(f"/api/v1/jobs/{JOB}/assemble", json={"target_lang": lang})
     assert res.status_code == 422
     assert not list(root.rglob("planted*"))
+
+
+@pytest.mark.parametrize("uri", [
+    "file:///etc/hosts", "FILE:///srv/book.pdf", "upload://../../keep.pdf",
+    "sep://nvme-local/../keep.pdf", "/etc/hosts", "\\\\server\\share\\book.pdf",
+])
+def test_a_text_payload_names_no_file_on_the_server(data, uri):
+    """The analyzers read a document's source by its uri; a text payload's
+    uri is only a label, and one naming a server file had them read it."""
+    client, _root, _ssd = data
+    before = client.get("/api/v1/documents").json()
+    res = client.post("/api/v1/documents/upload",
+                      json={"source_uri": uri, "content": "some text"})
+    assert res.status_code == 422
+    assert client.get("/api/v1/documents").json() == before
+
+
+@pytest.mark.parametrize("uri", ["workspace://document_ch4.txt", "s3://bucket/doc.pdf"])
+def test_a_text_payload_keeps_its_label(data, uri):
+    client, _root, _ssd = data
+    res = client.post("/api/v1/documents/upload",
+                      json={"source_uri": uri, "content": "some text"})
+    assert res.status_code == 201
+    assert res.json()["source_uri"] == uri
+
+
+def test_an_upload_is_named_by_its_base_name(data):
+    client, root, ssd = data
+    res = client.post("/api/v1/documents/upload",
+                      files={"file": ("../../keep.txt", b"text of the upload", "text/plain")})
+    assert res.status_code == 201
+    assert res.json()["source_uri"] == "upload://keep.txt"
+    assert (root / "keep.txt").read_text() == "beside the data root"

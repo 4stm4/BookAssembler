@@ -49,6 +49,23 @@ class TestResolveSourcePath:
     def test_sep_uri_malformed_without_a_relative_part(self):
         assert resolve_source_path(_doc("sep://provider-only")) is None
 
+    def test_upload_uri_stays_under_ssd_path(self, tmp_path, monkeypatch):
+        """The upload is saved under its base name in a job's directory; the
+        uri once carried the client's "../" path, and it was followed."""
+        ssd = tmp_path / "ssd"
+        (ssd / "job-123").mkdir(parents=True)
+        (tmp_path / "secret.pdf").write_bytes(b"%PDF-1.4")
+        monkeypatch.setenv("KAE_SSD_PATH", str(ssd))
+        assert resolve_source_path(_doc("upload://../../secret.pdf")) is None
+
+    def test_sep_uri_stays_under_its_root(self, tmp_path, monkeypatch):
+        ssd = tmp_path / "ssd"
+        ssd.mkdir()
+        (tmp_path / "secret.pdf").write_bytes(b"%PDF-1.4")
+        monkeypatch.setenv("KAE_SSD_PATH", str(ssd))
+        assert resolve_source_path(_doc("sep://provider/../secret.pdf")) is None
+        assert resolve_source_path(_doc(f"sep://provider/{tmp_path}/secret.pdf")) is None
+
     def test_absolute_path_that_exists(self, tmp_path):
         pdf = tmp_path / "book.pdf"
         pdf.write_bytes(b"%PDF-1.4")
