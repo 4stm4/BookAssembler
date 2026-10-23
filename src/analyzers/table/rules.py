@@ -1495,6 +1495,10 @@ _RULE_SIDE_MARGIN_PT = 2.0
 _RULE_GLYPHS = set("|[]!lI1")
 
 
+# A cell's measures of its own text, which a cell whose text changes loses.
+_TEXT_MEASURES = ("printed_width", "printed_words", "line_segments", "line_bold", "line_base", "line_words")
+
+
 def _split_cells_at_rules(page, table) -> None:
     """Split a cell whose words stand in more than one column.
 
@@ -1539,7 +1543,11 @@ def _split_cells_at_rules(page, table) -> None:
                 if box.x0 * pw - 1 <= (w[0] + w[2]) / 2 <= box.x1 * pw + 1
                 and box.y0 * ph - 1 <= (w[1] + w[3]) / 2 <= box.y1 * ph + 1
             ]
-            if not inside or " ".join(w[4] for w in inside) != " ".join(_cell_text_of(cell).split()):
+            # Its words are its text, the spaces between them aside: the
+            # text layer joins two lines it found side by side without one
+            # (the uA7912's TYP "-12 0" and MAX "-12.6", one cell "-12
+            # 0-12.6" across the rule between them).
+            if not inside or "".join(w[4] for w in inside) != "".join(_cell_text_of(cell).split()):
                 continue
             kept = [w for w in inside if not on_rule(w)]
             by_column: Dict[int, List[Any]] = {}
@@ -1559,7 +1567,9 @@ def _split_cells_at_rules(page, table) -> None:
                     " ".join(w[4] for w in sorted(line, key=lambda w: w[7]))
                     for line in sorted(lines.values(), key=lambda l: min(w[1] for w in l))
                 )
-                parts.append((text, rect(ws)))
+                ordered = [w for line in sorted(lines.values(), key=lambda l: min(w[1] for w in l))
+                           for w in sorted(line, key=lambda w: w[7])]
+                parts.append((text, rect(ws), ordered))
             first, rest = parts[0], parts[1:]
             cell.content = [ParagraphBlock(
                 inlines=[TextLineInline(spans=[StyledTextSpan(text=first[0])])],
@@ -1567,8 +1577,17 @@ def _split_cells_at_rules(page, table) -> None:
             cell.visual_layout = VisualLayout(
                 bounding_box=first[1], page_or_screen_index=page_index, style=style,
             )
-            for text, r in rest:
-                row.append(_make_cell(text, r, style, page_index))
+            # What was measured of the whole text measures it no more: the
+            # voltage-regulator fixture's label, cut from "IOUT = 5 mA" here,
+            # kept the width the two printed together and was stretched over
+            # that cell. Each part is measured afresh (_mark_printed_width).
+            for key in _TEXT_MEASURES:
+                cell.metadata.pop(key, None)
+            _record_printed_width(page, cell, first[2])
+            for text, r, ordered in rest:
+                part = _make_cell(text, r, style, page_index)
+                _record_printed_width(page, part, ordered)
+                row.append(part)
             row.sort(key=_cell_x0)
     table.span_map = _build_span_map(table.grid)
 
@@ -1787,25 +1806,33 @@ def _regrid_ruled_bands(page, table) -> None:
         return (b.y0 + b.y1) / 2
 
     new_grid: List[List["TableCell"]] = []
+    rebuilt: List["TableCell"] = []      # the cells of the bands rebuilt from words
+    rebuilt_rows: set = set()            # and their rows (ids)
     changed = False
     bands = list(zip(rule_y, rule_y[1:]))
+    # Printed lines, by where the words sit, not by tesseract's own block
+    # and line numbers: it reads a nested table's columns as blocks of
+    # their own ("IO/M", "S1", "S0", "Status" on one line came as four),
+    # and a paragraph's last words as a line apart. Read over the whole
+    # table, then each line goes to one band, by its middle: a rule never
+    # runs through a printed line, and one that stops short of a column
+    # (the voltage-regulator fixture's sub-rule under "-55 C < TJ < +25 C")
+    # has that column's line standing on it - its words, taken one by one,
+    # went half to the band above it and half to the band below.
+    all_lines: List[List[Any]] = []
+    for w in sorted(words, key=lambda w: (w[1] + w[3]) / 2):
+        centre = (w[1] + w[3]) / 2
+        if all_lines and abs(centre - sum((v[1] + v[3]) / 2 for v in all_lines[-1]) / len(all_lines[-1])) \
+                < 0.5 * (w[3] - w[1]):
+            all_lines[-1].append(w)
+        else:
+            all_lines.append([w])
+
+    def line_middle(line) -> float:
+        return sum((w[1] + w[3]) / 2 for w in line) / len(line)
+
     for lo, hi in bands:
-        in_band = sorted(
-            (w for w in words if lo * ph < (w[1] + w[3]) / 2 < hi * ph),
-            key=lambda w: (w[1] + w[3]) / 2,
-        )
-        # Printed lines, by where the words sit, not by tesseract's own
-        # block and line numbers: it reads a nested table's columns as
-        # blocks of their own ("IO/M", "S1", "S0", "Status" on one line came
-        # as four), and a paragraph's last words as a line apart.
-        printed: List[List[Any]] = []
-        for w in in_band:
-            centre = (w[1] + w[3]) / 2
-            if printed and abs(centre - sum((v[1] + v[3]) / 2 for v in printed[-1]) / len(printed[-1])) \
-                    < 0.5 * (w[3] - w[1]):
-                printed[-1].append(w)
-            else:
-                printed.append([w])
+        printed = [line for line in all_lines if lo * ph < line_middle(line) < hi * ph]
         rows_y: List[List[Tuple[int, List[Any]]]] = []
         for line in printed:
             by_col: Dict[int, List[Any]] = {}
@@ -1852,12 +1879,35 @@ def _regrid_ruled_bands(page, table) -> None:
             ]
             row.append(part)
         new_grid.append(row)
+        rebuilt.extend(row)
+        rebuilt_rows.add(id(row))
     if not changed:
         return
     # rows outside every band (above the first rule, below the last) stay
     first, last = rule_y[0], rule_y[-1]
     above = [row for row in table.grid if row and centre_y(row[0]) <= first]
     below = [row for row in table.grid if row and centre_y(row[0]) >= last]
+    # A cell a rebuilt band now holds is not kept again in a row left as it
+    # was. A line goes to a band by its words' middle, a row by its first
+    # cell's box, and across a rule that stops short of its column the two
+    # can part: the voltage-regulator fixture's "Average Temperature
+    # Coefficient of Output Voltage" line stands 0.0002 over its sub-rule,
+    # its cell's box 0.0001 under it. Taken word by word, its words went to
+    # the band above and its row to the one below, and it was set twice,
+    # one copy over the other.
+    def held(cell) -> bool:
+        b = cell.visual_layout.bounding_box if cell.visual_layout else None
+        if b is None:
+            return False
+        cx, cy = (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2
+        letters = re.sub(r"\W", "", _cell_text_of(cell))
+        return bool(letters) and any(
+            r.x0 <= cx <= r.x1 and r.y0 <= cy <= r.y1 and letters in re.sub(r"\W", "", _cell_text_of(new))
+            for new in rebuilt for r in [new.visual_layout.bounding_box]
+        )
+
+    new_grid = [kept for kept in ([c for c in row if id(row) in rebuilt_rows or not held(c)] for row in new_grid)
+                if kept]
     table.grid = above + new_grid + below
     # In a grid the rules say which rows a cell covers, and every cell here
     # is one band's; a span inferred before (a heading over the empty cells
@@ -2308,7 +2358,8 @@ def _deflate_boxes(np, pymupdf, page, table) -> int:
     tall over 6pt capitals, three of them reaching into the name above.
     Their steps and their type size, both read off those boxes, came out
     4pt and up to 4pt too large. A cell's own line is the lowest run of
-    ink rows in its box; where the box stands above that line by more than
+    ink rows in its box at least half as tall as its tallest, specks under
+    it aside; where the box stands above that line by more than
     the table's usual margin (_INFLATED_SLACK_PT past it), its top is set
     that usual margin above the line. Cells of several lines are left as
     they are - a cell is one line where nothing over its own line is
@@ -2334,6 +2385,14 @@ def _deflate_boxes(np, pymupdf, page, table) -> int:
             runs = _runs_of(np, ink.any(axis=1))
             if not runs:
                 continue
+            # The cell's own line is the lowest run tall enough to be one:
+            # under it only specks - a rule's edge the box reaches, dust. The
+            # uA7912 table's head boxes "MIN", "TYP" and "UNITS" down to the
+            # rule under it; a pixel row of its edge was taken for their line,
+            # the words themselves for the foot of a line above, and each box
+            # was brought down onto the rule, 0.07pt tall.
+            tallest = max(b - a for a, b in runs)
+            runs = runs[:max(k for k, (a, b) in enumerate(runs) if b - a >= tallest / 2) + 1]
             own = runs[-1][1] - runs[-1][0]
             over = [r for r in runs[:-1] if r[1] - r[0] >= own / 2]
             if len(over) > 1 or (over and over[0][0] > 0):
@@ -2381,18 +2440,26 @@ def _mark_printed_width(page, table) -> int:
     for row in table.grid:
         cells = sorted(row, key=_cell_x0)
         for cell, found in zip(cells, _row_words(cells, words, pw, ph)):
-            text = _cell_text_of(cell).strip()
-            if not found or "\n" in text or [w[4] for w in found] != text.split():
-                continue
-            # by the words' ink (_ink_words), not their boxes: OCR boxed the
-            # index fixture's names a letter short of their print
-            inks = _ink_words(page, found)
-            start = min(a for a, _ in inks)
-            cell.metadata["printed_width"] = (max(b for _, b in inks) - start) / pw
-            # and each word's span from the first's start (page fractions)
-            cell.metadata["printed_words"] = [[(a - start) / pw, (b - start) / pw] for a, b in inks]
-            measured += 1
+            measured += _record_printed_width(page, cell, found)
     return measured
+
+
+def _record_printed_width(page, cell, found) -> bool:
+    """_mark_printed_width for one cell, its words on the page found: True
+    where the cell is one line and its words are its text, and it was
+    measured."""
+    text = _cell_text_of(cell).strip()
+    if not found or "\n" in text or [w[4] for w in found] != text.split():
+        return False
+    pw = page.rect.width
+    # by the words' ink (_ink_words), not their boxes: OCR boxed the
+    # index fixture's names a letter short of their print
+    inks = _ink_words(page, found)
+    start = min(a for a, _ in inks)
+    cell.metadata["printed_width"] = (max(b for _, b in inks) - start) / pw
+    # and each word's span from the first's start (page fractions)
+    cell.metadata["printed_words"] = [[(a - start) / pw, (b - start) / pw] for a, b in inks]
+    return True
 
 
 def _row_words(cells, words, pw: float, ph: float) -> List[Optional[List[Any]]]:

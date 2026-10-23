@@ -780,6 +780,52 @@ class TestSplitCellsAtRules:
         assert [_cell_text_of(c) for c in table.grid[0]] == ["Output Voltage", "IOUT"]
         assert table.grid[0][1].visual_layout.bounding_box.x0 * pw >= 229
 
+    @staticmethod
+    def _one_cell(page, text):
+        pw, ph = page.rect.width, page.rect.height
+        words = page.get_text("words")
+        cell = TableCell(
+            content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text=text)])])],
+            visual_layout=VisualLayout(bounding_box=NormalizedRect(
+                x0=min(w[0] for w in words) / pw, y0=min(w[1] for w in words) / ph,
+                x1=max(w[2] for w in words) / pw, y1=max(w[3] for w in words) / ph), page_or_screen_index=0),
+        )
+        table = TableBlock(grid=[[cell]], row_count=1, column_count=2,
+                           visual_layout=VisualLayout(bounding_box=cell.visual_layout.bounding_box, page_or_screen_index=0))
+        return cell, table
+
+    def test_values_the_text_layer_ran_together_without_a_space_are_split(self):
+        # the uA7912's TYP "-12 0" and MAX "-12.6", one cell "-12 0-12.6"
+        import pymupdf
+        from src.analyzers.table.rules import _cell_text_of, _split_cells_at_rules
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((200, 300), "-12 0", fontsize=8)
+        page.insert_text((260, 300), "-12.6", fontsize=8)
+        _, table = self._one_cell(page, "-12 0-12.6")
+        table.metadata = {"column_rule_x": [250 / page.rect.width]}
+        _split_cells_at_rules(page, table)
+        assert [_cell_text_of(c) for c in table.grid[0]] == ["-12 0", "-12.6"]
+
+    def test_each_part_is_measured_afresh(self):
+        # the label cut from "IOUT" kept the width the two printed together
+        import pymupdf
+        from src.analyzers.table.rules import _split_cells_at_rules
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((120, 300), "Output Voltage", fontsize=8)
+        page.insert_text((230, 300), "IOUT", fontsize=8)
+        pw = page.rect.width
+        cell, table = self._one_cell(page, "Output Voltage IOUT")
+        cell.metadata["printed_width"] = 130 / pw
+        cell.metadata["printed_words"] = [[0.0, 0.05], [0.06, 0.1], [0.18, 0.22]]
+        table.metadata = {"column_rule_x": [220 / pw]}
+        _split_cells_at_rules(page, table)
+        label, iout = table.grid[0]
+        assert label.metadata["printed_width"] * pw < 60      # "Output Voltage" at 8pt
+        assert len(label.metadata["printed_words"]) == 2
+        assert 10 < iout.metadata["printed_width"] * pw < 25
+
 
 class TestOneLineMultirow:
     def test_a_label_printed_on_one_line_spans_its_rows_unwrapped(self):
@@ -1036,6 +1082,44 @@ class TestRegridRuledBands:
         table.metadata = {"column_rule_x": [200 / pw], "rule_y": [300 / ph, 350 / ph]}
         _regrid_ruled_bands(page, table)
         assert table.row_count == 1 and table.grid[0][0].content[0].inlines[0].spans[0].text == "x"
+
+    def test_a_line_standing_on_a_short_rule_is_set_once(self):
+        """The voltage-regulator fixture's "Average Temperature Coefficient of
+        Output Voltage" and "IOUT = 5 mA" stand on the sub-rule between its
+        two temperature ranges, a rule that stops short of their columns:
+        taken word by word, the label went to the band above (its middle a
+        hair over the rule) and its row, kept, to the band below - the row
+        was set twice."""
+        import pymupdf
+        from src.analyzers.table.rules import _cell_text_of, _regrid_ruled_bands
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        pw, ph = page.rect.width, page.rect.height
+        page.insert_text((110, 332.5), "LABEL", fontsize=8)    # its middle over the rule at 330
+        page.insert_text((150, 334.0), "IOUT", fontsize=8)     # and this one's under it
+        page.insert_text((210, 318), "-55", fontsize=8)
+        page.insert_text((260, 318), "0.4", fontsize=8)
+        page.insert_text((210, 345), "+25", fontsize=8)
+        page.insert_text((260, 345), "0.3", fontsize=8)
+        words = page.get_text("words")
+        label, iout = [w for w in words if w[4] in ("LABEL", "IOUT")]
+        assert (label[1] + label[3]) / 2 < 330 < (iout[1] + iout[3]) / 2
+
+        def cell(*texts):
+            ws = [w for w in words if w[4] in texts]
+            return TableCell(
+                content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text=" ".join(texts))])])],
+                visual_layout=VisualLayout(bounding_box=NormalizedRect(
+                    x0=min(w[0] for w in ws) / pw, y0=min(w[1] for w in ws) / ph,
+                    x1=max(w[2] for w in ws) / pw, y1=max(w[3] for w in ws) / ph), page_or_screen_index=0),
+            )
+        grid = [[cell("LABEL", "IOUT"), cell("-55"), cell("0.4")], [cell("+25"), cell("0.3")]]
+        table = TableBlock(grid=grid, row_count=2, column_count=3, visual_layout=VisualLayout(
+            bounding_box=NormalizedRect(x0=100 / pw, y0=300 / ph, x1=400 / pw, y1=360 / ph), page_or_screen_index=0))
+        table.metadata = {"column_rule_x": [200 / pw, 250 / pw], "rule_y": [300 / ph, 330 / ph, 360 / ph]}
+        _regrid_ruled_bands(page, table)
+        tokens = [t for row in table.grid for c in row for t in _cell_text_of(c).split()]
+        assert sorted(tokens) == sorted(["LABEL", "IOUT", "-55", "0.4", "+25", "0.3"])
 
 
 class TestStackedPitch:
@@ -1652,6 +1736,32 @@ class TestDeflateBoxes:
         assert _deflate_boxes(np, pymupdf, page, table) == 1
         box = rows[2][0].visual_layout.bounding_box
         assert box.y0 <= box.y1 and abs(box.y1 * 842 - 503.75) < 1e-6
+
+    def test_a_speck_under_a_line_is_not_its_line(self):
+        # The uA7912 head's "MIN" boxed down to the rule under it: a pixel row
+        # of the rule's edge was taken for its line, and the box brought down
+        # onto the rule, 0.07pt tall.
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _deflate_boxes
+
+        def cell(y0, y1):
+            return TableCell(
+                content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text="MIN")])])],
+                visual_layout=VisualLayout(bounding_box=NormalizedRect(100 / 595, y0 / 842, 140 / 595, y1 / 842),
+                                           page_or_screen_index=0))
+
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        rows = []
+        for y in (600.0, 620.0, 500.0):          # a line of ink from each box's top
+            page.draw_rect(pymupdf.Rect(100, y, 140, y + 4), color=None, fill=(0, 0, 0))
+            rows.append([cell(y, y + 6)])
+        page.draw_rect(pymupdf.Rect(90, 505.7, 150, 507), color=None, fill=(0, 0, 0))   # the rule under it
+        table = TableBlock(grid=rows, row_count=3, column_count=1, visual_layout=rows[0][0].visual_layout)
+        before = rows[2][0].visual_layout.bounding_box
+        _deflate_boxes(np, pymupdf, page, table)
+        assert rows[2][0].visual_layout.bounding_box == before
 
 
 class TestTypeface:

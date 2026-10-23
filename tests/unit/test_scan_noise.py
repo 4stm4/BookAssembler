@@ -57,6 +57,13 @@ def test_debris_is_noise(text):
     "SBC HL, ss",
     "EX AF, AF′",
     "JP (IX)",
+    # a spec table's rows, as OCR read them: operators between letters and
+    # figures, "*" for a degree sign, a 0 for an O (the uA7812 and uA7912
+    # characteristics lost four rows to the rule)
+    "16 V < V|N<22V 30 60 mV",
+    "5 mA < l0UT < 1 JO A K 15 W",
+    "-55*C < Tj < *25* C 0.4 mWC/",
+    "Tj • 25*C",
 ])
 def test_real_text_is_not_noise(text):
     assert not is_scan_noise(text)
