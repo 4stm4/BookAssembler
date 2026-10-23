@@ -113,7 +113,9 @@ export const App: React.FC = () => {
     setIsAssembling(true);
     setAssembleResult(null);
     try {
-      const res = await fetch(`${(window as any).__KAE_API || 'http://' + window.location.hostname + ':8000'}/api/v1/jobs/${activeJobId}/assemble`, {
+      // Through the gateway, as every other call: straight to :8000 it is
+      // another origin, and the backend answers no CORS preflight.
+      const res = await fetch(`/api/v1/jobs/${activeJobId}/assemble`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_lang: 'Russian' }),
