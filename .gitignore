@@ -1,6 +1,9 @@
 # Секреты
 .env
 
+# Обходы своей сети для docker compose (README, «Запуск»)
+docker-compose.override.yml
+
 # Build / Dependencies
 node_modules/
 dist/

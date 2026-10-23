@@ -147,17 +147,33 @@ BookAssembler/
 Backend, frontend и XeLaTeX собираются в один образ.
 
 ```bash
+cp .env.example .env   # необязательно: адреса Ollama, ключ OpenAI, лимиты
 docker compose up -d --build
 ```
 
-- UI: `http://<host>:3000`
+- UI: `http://<host>:3000` (API для UI проксируется шлюзом по `/api/v1`)
 - API: `http://<host>:8000/api/v1`
-- Данные (импортированные PDF, KRM-JSON, сборки): volume `/data`
+- Данные (импортированные PDF, KRM-JSON, сборки): `/data/kae` на хосте
+
+Если сборке или контейнеру нужны обходы своей сети (DNS, адреса зеркал),
+их место — в `docker-compose.override.yml` рядом с `docker-compose.yml`:
+compose подхватывает его сам, а в git он не попадает. Например:
+
+```yaml
+services:
+  kae:
+    build:
+      network: host
+      extra_hosts:
+        - "deb.debian.org:151.101.2.132"
+    dns:
+      - 8.8.8.8
+```
 
 Импорт: в UI **«Импорт из SEP»** → выбери PDF из подключённого LocalFS-провайдера
 (по умолчанию — каталог данных на диске) → пайплайн запустится, прогресс идёт по SSE.
 
-> Сборка фронтенда выполняется **внутри Docker** (`npm install` + `vite build` в
+> Сборка фронтенда выполняется **внутри Docker** (`npm ci` + `vite build` в
 > Dockerfile). Локально `npm install` не требуется.
 
 ---
