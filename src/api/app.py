@@ -18,6 +18,7 @@ Guarantees:
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 import io
 import json
 import logging
@@ -202,10 +203,24 @@ def create_app() -> FastAPI:
     """
     Application factory for Knowledge Assembly Engine REST API.
     """
+    # The service's start and stop (FastAPI's lifespan; on_event is
+    # deprecated): the persisted documents restored and the job worker
+    # started, the worker stopped. What it calls is this factory's own,
+    # defined below - there by the time the app starts.
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncGenerator[None, None]:
+        _load_persisted_docs()
+        pyjobkit_bridge.start_worker()
+        try:
+            yield
+        finally:
+            await pyjobkit_bridge.stop_worker()
+
     app = FastAPI(
         title="Knowledge Assembly Engine API",
         version="1.0.0",
         description="REST API for document ingestion, jobs tracking, HITL verification, graph visualizer, and SEP endpoints",
+        lifespan=lifespan,
     )
 
     job_manager = JobManager()
@@ -228,15 +243,6 @@ def create_app() -> FastAPI:
             options={"root_path": kae_ssd_path},
         )
         sep_manager.register_provider(nvme_config)
-
-    @app.on_event("startup")
-    async def startup_event() -> None:
-        _load_persisted_docs()
-        pyjobkit_bridge.start_worker()
-
-    @app.on_event("shutdown")
-    async def shutdown_event() -> None:
-        await pyjobkit_bridge.stop_worker()
 
     def _count_nodes(doc: KnowledgeDocument) -> int:
         count = 0

@@ -15,7 +15,7 @@ Guarantees:
 import copy
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from src.analyzers.base import (
     BaseAnalyzer,
@@ -233,6 +233,13 @@ class PipelineRunner:
         self._validate_dependencies(analyzers)
         self._analyzers = list(analyzers)
         self._calibrator = ConfidenceCalibrator()
+        # The analyzers the last execute() rolled back, by name, each with
+        # its error ("ValueError: ..."). Rolling one back keeps the document
+        # whole, but its work is missing from it, and a log line alone let
+        # such a failure go unseen: the table analyzer failed on a scanned
+        # spec page from 2 October to 23 October, every table of the page
+        # lost, and nothing was red.
+        self.failures: List[Tuple[str, str]] = []
 
     def _validate_dependencies(self, analyzers: List[BaseAnalyzer]) -> None:
         """
@@ -365,6 +372,7 @@ class PipelineRunner:
         on_progress: optional callback(step: int, total: int, analyzer_name: str)
         """
         total = len(self._analyzers)
+        self.failures = []
         for step, analyzer in enumerate(self._analyzers):
             manifest = analyzer.manifest
 
@@ -390,11 +398,12 @@ class PipelineRunner:
                 )
             except SecurityViolationError:
                 raise
-            except Exception:
+            except Exception as exc:
                 logging.getLogger(__name__).exception(
                     "Analyzer '%s' failed; rolling back to pre-run state (RFC 0005 §6.1)",
                     manifest.name,
                 )
+                self.failures.append((manifest.name, f"{type(exc).__name__}: {exc}"))
                 self._restore_state(doc, doc_snap)
                 self._restore_state(rg, rg_snap)
                 self._restore_state(kg, kg_snap)

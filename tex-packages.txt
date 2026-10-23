@@ -1,0 +1,24 @@
+# The TeX toolchain, each package at its version (RFC 0012 §3.3: the same
+# input builds the same PDF). The image (Dockerfile) and the e2e job of CI
+# both install this list on Debian bookworm, so the reference tests measure
+# the toolchain the service sets books with.
+#
+# The engine (texlive-binaries) and its base are pinned with the rest: the
+# overlay tests measure a rebuild to a few percent. When Debian moves one
+# of these (the engine took +deb12u2 in a point release) the install stops
+# at it by name: take the new version, run the e2e tests, set it here.
+#
+# fonts-texgyre: TeX Gyre Termes/Heros/Cursor, metric-compatible clones of
+# Times/Helvetica/Courier, for Latin-only cells set in one of those in the
+# source (latex_builder.py picks per cell); DejaVu is the main font, for
+# Cyrillic.
+texlive-binaries=2022.20220321.62855-5.1+deb12u2
+texlive-base=2022.20230122-3
+texlive-latex-base=2022.20230122-3
+texlive-xetex=2022.20230122-3
+texlive-latex-recommended=2022.20230122-3
+texlive-latex-extra=2022.20230122-4
+texlive-lang-cyrillic=2022.20230122-1
+texlive-fonts-recommended=2022.20230122-3
+fonts-dejavu=2.37-6
+fonts-texgyre=20180621-6

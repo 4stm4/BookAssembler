@@ -20,18 +20,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-get install -y --no-install-recommends nodejs && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# RFC 0012 §3.3: XeLaTeX toolchain for target-document assembly (Cyrillic-capable).
-# fonts-texgyre adds TeX Gyre Termes/Heros/Cursor - metric-compatible OTF
-# clones of Times/Helvetica/Courier - so a Latin-only cell whose source was
-# actually set in one of those (common in scanned technical books) can
-# render in a font close to the source's own, instead of DejaVu Serif or
-# Latin Modern Roman (neither is a Times/Helvetica/Courier match). DejaVu
-# stays the document's main font for Cyrillic; TeX Gyre is Latin-only too
-# (same gap Latin Modern has), selected per-cell in latex_builder.py.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    texlive-xetex texlive-latex-recommended texlive-latex-extra \
-    texlive-lang-cyrillic texlive-fonts-recommended fonts-dejavu \
-    fonts-texgyre && \
+# RFC 0012 §3.3: XeLaTeX toolchain for target-document assembly
+# (Cyrillic-capable), each package at its version - tex-packages.txt, which
+# the e2e job of CI installs too, on this same Debian.
+COPY tex-packages.txt /tmp/
+RUN apt-get update && grep -v '^#' /tmp/tex-packages.txt | \
+    xargs apt-get install -y --no-install-recommends && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

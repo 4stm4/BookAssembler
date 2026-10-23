@@ -9,9 +9,9 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # The version the image ships (Dockerfile: python:3.13-slim).
           python-version: "3.13"
@@ -29,43 +29,37 @@ jobs:
 
   e2e:
     # The reference tests (TESTS_STOPLIST.md) and the other end-to-end tests:
-    # each PDF through the whole pipeline and the XeLaTeX build. They skip
-    # where the TeX toolchain is missing, so the toolchain is the image's
-    # (Dockerfile) and a run that skips any of them fails.
+    # each PDF through the whole pipeline and the XeLaTeX build - on the
+    # image's own base (Debian bookworm, Python 3.13) with its TeX packages
+    # at their pins (tex-packages.txt), so the overlays are measured on the
+    # TeX the service sets books with, not the runner's Ubuntu one (TeX Live
+    # 2025 to the image's 2022). They skip where the toolchain is missing,
+    # so a run that skips any of them fails.
     runs-on: ubuntu-latest
+    container: python:3.13-slim-bookworm
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The packages are kept between runs: the toolchain is some 400MB, and
       # one run of the merge into main fetched it off a mirror at 50kB/s for
       # 55 minutes, the job's limit spent before its tests were half run.
       - name: Restore the TeX packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/tex-debs
-          key: tex-debs-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
-          restore-keys: tex-debs-${{ runner.os }}-
+          key: tex-debs-bookworm-${{ hashFiles('tex-packages.txt') }}
+          restore-keys: tex-debs-bookworm-
 
       - name: Install the TeX toolchain the image ships
         # A slow mirror fails here, by name, not as the tests cancelled.
         timeout-minutes: 20
         run: |
           mkdir -p ~/tex-debs/partial
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            -o Dir::Cache::Archives="$HOME/tex-debs" -o Acquire::Retries=3 \
-            texlive-xetex texlive-latex-recommended texlive-latex-extra \
-            texlive-lang-cyrillic texlive-fonts-recommended fonts-dejavu \
-            fonts-texgyre
-          # apt keeps them as root; the cache is saved as the runner's user
-          sudo rm -f ~/tex-debs/lock
-          sudo chown -R "$USER" ~/tex-debs
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-          cache: pip
+          apt-get update
+          grep -v '^#' tex-packages.txt | xargs apt-get install -y --no-install-recommends \
+            -o Dir::Cache::Archives="$HOME/tex-debs" -o Acquire::Retries=3
+          rm -f ~/tex-debs/lock
 
       - name: Install dependencies
         run: |
@@ -100,9 +94,9 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -123,13 +117,13 @@ jobs:
     # no job run), so the check is a step and the rest follow its answer.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Look for a corpus
         id: corpus
         run: echo "present=${{ hashFiles('benchmark/corpus/**/input.*') != '' }}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: steps.corpus.outputs.present == 'true'
         with:
           python-version: "3.13"
@@ -151,7 +145,7 @@ jobs:
             --report-out benchmark-report.json \
             --strict-regression-check
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && steps.corpus.outputs.present == 'true'
         with:
           name: benchmark-report
