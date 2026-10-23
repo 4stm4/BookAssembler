@@ -9,9 +9,9 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # The version the image ships (Dockerfile: python:3.13-slim).
           python-version: "3.13"
@@ -35,13 +35,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The packages are kept between runs: the toolchain is some 400MB, and
       # one run of the merge into main fetched it off a mirror at 50kB/s for
       # 55 minutes, the job's limit spent before its tests were half run.
       - name: Restore the TeX packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/tex-debs
           key: tex-debs-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
@@ -62,7 +62,7 @@ jobs:
           sudo rm -f ~/tex-debs/lock
           sudo chown -R "$USER" ~/tex-debs
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
@@ -100,9 +100,9 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -123,13 +123,13 @@ jobs:
     # no job run), so the check is a step and the rest follow its answer.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Look for a corpus
         id: corpus
         run: echo "present=${{ hashFiles('benchmark/corpus/**/input.*') != '' }}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: steps.corpus.outputs.present == 'true'
         with:
           python-version: "3.13"
@@ -151,7 +151,7 @@ jobs:
             --report-out benchmark-report.json \
             --strict-regression-check
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && steps.corpus.outputs.present == 'true'
         with:
           name: benchmark-report
