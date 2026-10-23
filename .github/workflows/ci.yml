@@ -37,13 +37,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The packages are kept between runs: the toolchain is some 400MB, and
+      # one run of the merge into main fetched it off a mirror at 50kB/s for
+      # 55 minutes, the job's limit spent before its tests were half run.
+      - name: Restore the TeX packages
+        uses: actions/cache@v4
+        with:
+          path: ~/tex-debs
+          key: tex-debs-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: tex-debs-${{ runner.os }}-
+
       - name: Install the TeX toolchain the image ships
+        # A slow mirror fails here, by name, not as the tests cancelled.
+        timeout-minutes: 20
         run: |
+          mkdir -p ~/tex-debs/partial
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
+            -o Dir::Cache::Archives="$HOME/tex-debs" -o Acquire::Retries=3 \
             texlive-xetex texlive-latex-recommended texlive-latex-extra \
             texlive-lang-cyrillic texlive-fonts-recommended fonts-dejavu \
             fonts-texgyre
+          # apt keeps them as root; the cache is saved as the runner's user
+          sudo rm -f ~/tex-debs/lock
+          sudo chown -R "$USER" ~/tex-debs
 
       - uses: actions/setup-python@v5
         with:
