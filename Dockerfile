@@ -1,11 +1,15 @@
 FROM node:22-bookworm-slim AS frontend
 
 WORKDIR /app
-COPY package.json bun.lock ./
-RUN npm install
-COPY index.html vite.config.ts tsconfig.json ./
+# npm ci installs what package-lock.json pins; npm reads no bun.lock, and
+# `npm install` without the lock resolved the ranges afresh on every build.
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY index.html vite.config.ts tsconfig.json server.ts ./
 COPY src/ src/
-RUN npx vite build
+# The UI (dist/) and the gateway (dist/server.cjs), as `npm run build` makes
+# them: here, where esbuild - a dev dependency - is installed at its pin.
+RUN npm run build
 
 
 FROM python:3.13-slim-bookworm
@@ -35,15 +39,13 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY package.json bun.lock ./
-RUN npm install --omit=dev
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
-COPY server.ts tsconfig.json ./
 COPY src/ src/
+# Skill packs (RFC 0006): the API loads skills/*.yaml from the working directory.
+COPY skills/ skills/
 COPY --from=frontend /app/dist dist/
-
-RUN npx esbuild server.ts --bundle --platform=node --format=cjs \
-    --packages=external --sourcemap --outfile=dist/server.cjs
 
 RUN mkdir -p /data/ssd
 
