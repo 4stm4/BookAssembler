@@ -109,6 +109,20 @@ class LocalFSProvider(BaseSEPProvider):
         root = config.options.get("root_path") or config.credentials.get("root_path", "/")
         self.root_path = os.path.abspath(str(root))
 
+    def _inside(self, rel: str) -> Optional[str]:
+        """rel resolved under root_path, or None when it leads out of it.
+
+        A prefix test let "../<root name>_secret" through: "/data/ssd_secret"
+        starts with "/data/ssd". The common path of the two is the root only
+        for what is inside it. Symlinks are left as they are: one in the root
+        is the operator's to put there, the API makes none.
+        """
+        clean_rel = rel.lstrip("/").replace("\\", "/")
+        target = os.path.abspath(os.path.join(self.root_path, clean_rel))
+        if os.path.commonpath([self.root_path, target]) != self.root_path:
+            return None
+        return target
+
     async def test_connection(self) -> bool:
         """
         Verifies that root_path exists and is readable.
@@ -119,14 +133,8 @@ class LocalFSProvider(BaseSEPProvider):
         """
         Lists files and directories under folder_path within root_path.
         """
-        clean_rel = folder_path.lstrip("/").replace("\\", "/")
-        target = os.path.abspath(os.path.join(self.root_path, clean_rel))
-
-        # Ensure sandbox confinement within root_path
-        if not target.startswith(self.root_path):
-            target = self.root_path
-
-        if not os.path.exists(target) or not os.path.isdir(target):
+        target = self._inside(folder_path)
+        if target is None or not os.path.isdir(target):
             return []
 
         items: List[RemoteFileItem] = []
@@ -160,10 +168,8 @@ class LocalFSProvider(BaseSEPProvider):
         """
         Opens file binary stream safely from local filesystem.
         """
-        clean_rel = file_id.lstrip("/").replace("\\", "/")
-        target = os.path.abspath(os.path.join(self.root_path, clean_rel))
-
-        if not target.startswith(self.root_path) or not os.path.exists(target) or os.path.isdir(target):
+        target = self._inside(file_id)
+        if target is None or not os.path.isfile(target):
             raise FileNotFoundError(f"File '{file_id}' not found under local SEP root '{self.root_path}'")
 
         file_obj = open(target, "rb")

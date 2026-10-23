@@ -40,16 +40,18 @@ COPY src/ src/
 # Skill packs (RFC 0006): the API loads skills/*.yaml from the working directory.
 COPY skills/ skills/
 COPY --from=frontend /app/dist dist/
+COPY bin/docker-entrypoint.sh bin/
 
 RUN mkdir -p /data/ssd
 
 ENV NODE_ENV=production
 ENV PYTHONPATH=/app
 ENV KAE_SSD_PATH=/data/ssd
-# CMD below already runs uvicorn; stop server.ts from racing it for port 8000.
+# The entrypoint runs uvicorn; stop server.ts from racing it for port 8000.
 ENV KAE_SPAWN_BACKEND=0
 
 EXPOSE 3000
 EXPOSE 8000
 
-CMD ["sh", "-c", "python3 -m uvicorn src.api.app:app --host 0.0.0.0 --port 8000 & node dist/server.cjs"]
+# Both servers, each stopping the container when it stops (see the script).
+CMD ["bash", "bin/docker-entrypoint.sh"]

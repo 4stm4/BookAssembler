@@ -2,12 +2,6 @@ services:
   kae:
     build:
       context: .
-      network: host
-      extra_hosts:
-        - "deb.debian.org:151.101.2.132"
-    dns:
-      - 8.8.8.8
-      - 8.8.4.4
     container_name: kae-engine
     restart: unless-stopped
     ports:
@@ -16,11 +10,14 @@ services:
     volumes:
       - /data/kae:/data/ssd
       - kae-db:/app/data
+    # Settings from .env (see .env.example), when there is one.
+    env_file:
+      - path: .env
+        required: false
     environment:
       - NODE_ENV=production
       - KAE_SSD_PATH=/data/ssd
       - KAE_DATA_DIR=/data/ssd/.kae
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
     deploy:
       resources:
