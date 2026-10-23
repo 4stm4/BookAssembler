@@ -2338,7 +2338,10 @@ def _deflate_boxes(np, pymupdf, page, table) -> int:
             over = [r for r in runs[:-1] if r[1] - r[0] >= own / 2]
             if len(over) > 1 or (over and over[0][0] > 0):
                 continue
-            lines.append((cell, clip, runs[-1][0] / _RULE_ZOOM))
+            # The pixmap starts at the whole pixel at or over the clip's
+            # top, not at it: its rows are read from there.
+            origin = pix.y / _RULE_ZOOM - clip.y0
+            lines.append((cell, clip, origin + runs[-1][0] / _RULE_ZOOM))
     if not lines:
         return 0
     margins = sorted(top for _, _, top in lines)
@@ -2348,7 +2351,11 @@ def _deflate_boxes(np, pymupdf, page, table) -> int:
         if top <= usual + _INFLATED_SLACK_PT:
             continue
         vl = cell.visual_layout
-        vl.bounding_box = replace(vl.bounding_box, y0=(clip.y0 + top - usual) / ph)
+        # Never under the box's own foot: a line at a cell's very bottom
+        # with a usual margin of nothing turned the scanned spec table's
+        # box upside down (y0 0.77150 over y1 0.77122) and the analyzer
+        # failed, every table of the page lost with it.
+        vl.bounding_box = replace(vl.bounding_box, y0=min(clip.y0 + top - usual, clip.y1) / ph)
         deflated += 1
     return deflated
 

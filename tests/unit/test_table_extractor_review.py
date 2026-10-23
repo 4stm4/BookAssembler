@@ -1624,6 +1624,35 @@ class TestDeflateBoxes:
         _deflate_boxes(np, pymupdf, page, table)
         assert table.grid[3][1].visual_layout.bounding_box == before
 
+    def test_a_line_at_a_box_s_very_foot_never_turns_it_upside_down(self):
+        # The pixmap of a clip starts at the whole pixel over its top: read
+        # from the clip's own top, a line in the last, partly covered pixel
+        # row stood under the box's foot, and the box was set upside down
+        # (the scanned spec table: y0 0.77150 over y1 0.77122) - the table
+        # analyzer failed, every table of the page with it.
+        import numpy as np
+        import pymupdf
+        from src.analyzers.table.rules import _deflate_boxes
+
+        def cell(y0, y1):
+            return TableCell(
+                content=[ParagraphBlock(inlines=[TextLineInline(spans=[StyledTextSpan(text="x1")])])],
+                visual_layout=VisualLayout(bounding_box=NormalizedRect(100 / 595, y0 / 842, 140 / 595, y1 / 842),
+                                           page_or_screen_index=0))
+
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        rows = []
+        for y in (600.0, 620.0):                 # ink from their tops: no margin is usual
+            page.draw_rect(pymupdf.Rect(100, y, 140, y + 3), color=None, fill=(0, 0, 0))
+            rows.append([cell(y, y + 3)])
+        page.draw_rect(pymupdf.Rect(100, 503.7, 140, 504.5), color=None, fill=(0, 0, 0))
+        rows.append([cell(500.2, 503.75)])       # its ink only at its very foot
+        table = TableBlock(grid=rows, row_count=3, column_count=1, visual_layout=rows[0][0].visual_layout)
+        assert _deflate_boxes(np, pymupdf, page, table) == 1
+        box = rows[2][0].visual_layout.bounding_box
+        assert box.y0 <= box.y1 and abs(box.y1 * 842 - 503.75) < 1e-6
+
 
 class TestTypeface:
     @staticmethod
@@ -1940,6 +1969,18 @@ class TestBoxGrid:
                 page.draw_rect(pymupdf.Rect(100 + 100 * c, 100 + 30 * r, 200 + 100 * c, 130 + 30 * r),
                                color=(0, 0, 0), width=0.7)
                 page.insert_text((110 + 100 * c, 120 + 30 * r), f"v{r}{c}", fontsize=10)
+        assert _box_grid(np, pymupdf, page) is None
+
+    def test_a_scanned_ruled_table_crowded_with_type_is_no_box_grid(self):
+        # Its small cells hold little but type, and the grey of the letters'
+        # edges read as a fill: both spec tables of the page and the
+        # caption between them were taken for one table of coloured boxes.
+        import numpy as np
+        import pymupdf
+        from pathlib import Path
+        from src.analyzers.table.boxes import _box_grid
+        path = Path(__file__).resolve().parents[1] / "fixtures" / "z80_voltage_regulator_table.pdf"
+        page = pymupdf.open(path)[0]
         assert _box_grid(np, pymupdf, page) is None
 
     def test_a_box_grid_becomes_a_table_with_its_spans(self):
