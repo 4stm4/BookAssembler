@@ -476,11 +476,14 @@ export const CleanWorkspace: React.FC<CleanWorkspaceProps> = ({
             });
           return updateNode(prev);
         });
-      } else if (mode === 'agent' && result?.confidence) {
+      } else if (mode === 'agent' && typeof result?.confidence === 'number') {
+        // Read once here: a property's narrowing does not reach the updater below.
+        const confidence = result.confidence;
+        const suggestedType = result.llm_result?.type;
         setKrmNodes((prev) => {
           const updateNode = (nodes: KRMNode[]): KRMNode[] =>
             nodes.map((n) => {
-              if (n.id === nodeId) return { ...n, confidence_score: result.confidence, metadata: { ...n.metadata, llm_suggested_type: result.llm_result?.type } };
+              if (n.id === nodeId) return { ...n, confidence_score: confidence, metadata: { ...n.metadata, llm_suggested_type: suggestedType } };
               if (n.children) return { ...n, children: updateNode(n.children) };
               return n;
             });

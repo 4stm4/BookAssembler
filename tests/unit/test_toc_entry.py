@@ -1,7 +1,7 @@
 """Table of contents — read from the contents pages' geometry.
 
 An entry is a row that points to a page. The shapes below were each met on
-one of the ten test books (docs/deploy/testing-the-pipeline.md): dotted,
+one of the ten test books (the TOC bench, benchmark/toc/README.md): dotted,
 spaced and OCR'd leaders; a page far from its title with no leader at all;
 number, title and page as separate PDF lines; two columns; titles wrapped
 onto a second line; a margin label beside the list; annotation lines under

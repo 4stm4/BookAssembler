@@ -4,7 +4,7 @@ These are the attributes by which the entity is recognised. The methods that
 apply them live in rules.py (text) and layout.py (geometry); reading KRM
 nodes lives in the analyzer.
 
-Measured on ten books of different make (docs/deploy/testing-the-pipeline.md):
+Measured on ten books of different make (the TOC bench, benchmark/toc/README.md):
 TeX/texinfo/asciidoc output, Word-era manuals, 1970s scans with and without
 OCR errors, one and two columns, Russian and English.
 """

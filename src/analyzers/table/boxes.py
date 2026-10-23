@@ -168,6 +168,42 @@ def _ink_size(np, dark, cell: "BoxCell", z: float, inset: float) -> float:
     return (b - a) / z / share
 
 
+def _ground(np, arr, dark, cell: "BoxCell", z: float, inset: float) -> Optional[Rgb]:
+    """The colour a cell is printed on: the median of its pixels no ink
+    stands within a point of, its rules left out. None where there are
+    none - a cell its print fills.
+
+    Not every pixel that is not ink: a glyph's edges are grey, and a
+    small cell crowded with type has little else - on a scanned ruled
+    table on white paper ("25*C" in a 16 by 10pt cell) the median of
+    them read (203, 203, 203), a fill, and the page was taken for boxes
+    of colour."""
+    x0, y0, x1, y1 = (int(v * z) for v in cell.rect)
+    pad = int(inset)
+    block = arr[y0 + pad:y1 - pad, x0 + pad:x1 - pad]
+    ink = dark[y0 + pad:y1 - pad, x0 + pad:x1 - pad]
+    if not block.size:
+        return None
+    halo = int(round(z))
+    near = ink.copy()
+    for dy in range(-halo, halo + 1):
+        for dx in range(-halo, halo + 1):
+            shifted = np.roll(np.roll(ink, dy, axis=0), dx, axis=1)
+            if dy > 0:
+                shifted[:dy] = False
+            elif dy < 0:
+                shifted[dy:] = False
+            if dx > 0:
+                shifted[:, :dx] = False
+            elif dx < 0:
+                shifted[:, dx:] = False
+            near |= shifted
+    ground = block[~near]
+    if not len(ground):
+        return None
+    return tuple(int(v) for v in np.median(ground, axis=0))
+
+
 def _box_grid(np, pymupdf, page) -> Optional[BoxGrid]:
     """The grid of boxes drawn on a page, or None where there is none."""
     z = _BOX_ZOOM
@@ -282,8 +318,16 @@ def _box_grid(np, pymupdf, page) -> Optional[BoxGrid]:
     # Boxes of colour, not a ruled grid on paper: a ruled table's rows and
     # columns are its text's, and the text-layer detection reads them -
     # taken as boxes, the decimal/binary and pin description fixtures lost
-    # their rows' own structure (6.4% -> 15.6%, 17.5% -> 23.8%).
-    filled = [c for c in cells if c.words and c.fill is not None]
+    # their rows' own structure (6.4% -> 15.6%, 17.5% -> 23.8%). A box is
+    # of colour by its ground, not by the grey of the type crowding it: a
+    # scanned spec table on white paper (z80_voltage_regulator_table.pdf)
+    # was taken for boxes, both its tables and the caption between them
+    # made one, its label column left out.
+    def coloured(c) -> bool:
+        ground = _ground(np, arr, dark, c, z, near)
+        return ground is not None and min(ground) < _PAPER_LEVEL
+
+    filled = [c for c in cells if c.words and c.fill is not None and coloured(c)]
     if len(filled) < _MIN_CELLS:
         return None
     return BoxGrid([x / z for x in xs], [y / z for y in ys], cells)

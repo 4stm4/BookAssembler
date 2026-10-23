@@ -58,6 +58,16 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 \usepackage{amsmath}
 \usepackage{amsthm}
 \usepackage{graphicx}
+% A box of no height or no width has no size to scale from: an underscore
+% OCR read on its own ("\_") stands wholly under the baseline, height 0pt,
+% and \resizebox{w}{\height}{\_} stopped the whole build with graphics'
+% "Division by 0". Such a dimension is left at its own size (scale 1).
+\makeatletter
+\let\kae@Gscale@div\Gscale@div
+\def\Gscale@div#1#2#3{%
+  \setlength\dimen@{#3}%
+  \ifdim\dimen@=\z@ \def#1{1}\else \kae@Gscale@div#1{#2}{#3}\fi}
+\makeatother
 \usepackage{array}
 \usepackage{multirow}
 \usepackage{colortbl}  % \cellcolor; xcolor itself arrives via tikz below
@@ -2585,8 +2595,7 @@ def _set_table(table: TableBlock, corner: Optional[List[float]] = None) -> str:
     # instead, when a real measured width is available.
     def _narrow_align_prefix(i: int) -> str:
         # \leftskip / \rightskip, not \hspace: both were measured on an
-        # isolated table (tests/e2e/_debug_colindent_calib.py) and only
-        # the skips do the job. A trailing <{\hspace{}} on a \raggedleft
+        # isolated table and only the skips do the job. A trailing <{\hspace{}} on a \raggedleft
         # column moved its text by exactly nothing (its gap to the rule
         # stayed 1.7pt whether the hspace was there or not), while
         # \rightskip moved it to 8.3pt as asked. \hspace also indents
