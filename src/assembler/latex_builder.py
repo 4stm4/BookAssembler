@@ -58,6 +58,16 @@ _PREAMBLE = r"""\documentclass[11pt]{book}
 \usepackage{amsmath}
 \usepackage{amsthm}
 \usepackage{graphicx}
+% A box of no height or no width has no size to scale from: an underscore
+% OCR read on its own ("\_") stands wholly under the baseline, height 0pt,
+% and \resizebox{w}{\height}{\_} stopped the whole build with graphics'
+% "Division by 0". Such a dimension is left at its own size (scale 1).
+\makeatletter
+\let\kae@Gscale@div\Gscale@div
+\def\Gscale@div#1#2#3{%
+  \setlength\dimen@{#3}%
+  \ifdim\dimen@=\z@ \def#1{1}\else \kae@Gscale@div#1{#2}{#3}\fi}
+\makeatother
 \usepackage{array}
 \usepackage{multirow}
 \usepackage{colortbl}  % \cellcolor; xcolor itself arrives via tikz below
