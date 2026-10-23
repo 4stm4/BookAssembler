@@ -827,8 +827,14 @@ class TableDetectorAnalyzer(BaseAnalyzer):
                     # (_table_from_lines). The Intel 3000 manual's logic
                     # equations, "Cn + 8 = Y7X7 + Y7Y6X6 + ...", a line to
                     # a block, 62 characters a line, came out a table of
-                    # one column.
-                    if is_single_col and avg_text_len > _SINGLE_COL_PROSE_LEN and not has_separators:
+                    # one column. Lines, that is: rows the page's geometry
+                    # sets out in several cells are none, however their text
+                    # reads - the uA7912 table's rows of six cells and five,
+                    # their blocks' text one run each, averaged 60.8
+                    # characters once a condition of theirs scan_noise had
+                    # wrongly dropped came back, and the table was lost.
+                    if (is_single_col and not has_multi_cell_row
+                            and avg_text_len > _SINGLE_COL_PROSE_LEN and not has_separators):
                         continue
 
                     grid: List[List[TableCell]] = []
