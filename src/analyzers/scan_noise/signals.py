@@ -49,11 +49,17 @@ MAX_DOMINANT_LETTER_SHARE = 0.6
 # punctuation inside one token ("K,8I"). Not by a hyphen or a slash: that is
 # how a part number is written ("MCS-4/40", "MCS-80/85"), and Intel's
 # contents lost three of its entries to this rule.
+#
+# Nor by an operator, which is no debris punctuation here either: a
+# spec table's conditions are written so ("V|N<22V", "-55*C < Tj", OCR's
+# "*" for a degree sign), and a scanned page of the uA7812's and uA7912's
+# characteristics lost four of its rows to this rule. Nor is a letter, a
+# digit and a letter with nothing between them debris: that is OCR taking
+# an O for a 0 ("l0UT" for IOUT). Debris breaks its letters with a digit
+# AND punctuation ("K,8I").
 _REPEAT_RE = re.compile(r"([^\W\d_])\1\1", re.IGNORECASE)
-_BREAK = r"[^\w\s\-/]"
-_BROKEN_TOKEN_RE = re.compile(
-    rf"[^\W\d_]{_BREAK}*\d{_BREAK}*[^\W\d_]|[^\W\d_]{_BREAK}+\d|\d{_BREAK}+[^\W\d_]"
-)
+_BREAK = r"[^\w\s\-/" + re.escape("".join(sorted(OPERATORS))) + "]"
+_BROKEN_TOKEN_RE = re.compile(rf"[^\W\d_]{_BREAK}+\d|\d{_BREAK}+[^\W\d_]")
 
 # A character prints no narrower than this share of its line's height ("i",
 # "l" take a quarter of it). OCR of glyphs cut off by the page's edge boxes
