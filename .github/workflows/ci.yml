@@ -29,10 +29,14 @@ jobs:
 
   e2e:
     # The reference tests (TESTS_STOPLIST.md) and the other end-to-end tests:
-    # each PDF through the whole pipeline and the XeLaTeX build. They skip
-    # where the TeX toolchain is missing, so the toolchain is the image's
-    # (Dockerfile) and a run that skips any of them fails.
+    # each PDF through the whole pipeline and the XeLaTeX build - on the
+    # image's own base (Debian bookworm, Python 3.13) with its TeX packages
+    # at their pins (tex-packages.txt), so the overlays are measured on the
+    # TeX the service sets books with, not the runner's Ubuntu one (TeX Live
+    # 2025 to the image's 2022). They skip where the toolchain is missing,
+    # so a run that skips any of them fails.
     runs-on: ubuntu-latest
+    container: python:3.13-slim-bookworm
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -44,28 +48,25 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/tex-debs
-          key: tex-debs-${{ runner.os }}-${{ hashFiles('.github/workflows/ci.yml') }}
-          restore-keys: tex-debs-${{ runner.os }}-
+          key: tex-debs-bookworm-${{ hashFiles('tex-packages.txt') }}
+          restore-keys: tex-debs-bookworm-
 
       - name: Install the TeX toolchain the image ships
         # A slow mirror fails here, by name, not as the tests cancelled.
         timeout-minutes: 20
         run: |
           mkdir -p ~/tex-debs/partial
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            -o Dir::Cache::Archives="$HOME/tex-debs" -o Acquire::Retries=3 \
-            texlive-xetex texlive-latex-recommended texlive-latex-extra \
-            texlive-lang-cyrillic texlive-fonts-recommended fonts-dejavu \
-            fonts-texgyre
-          # apt keeps them as root; the cache is saved as the runner's user
-          sudo rm -f ~/tex-debs/lock
-          sudo chown -R "$USER" ~/tex-debs
+          apt-get update
+          grep -v '^#' tex-packages.txt | xargs apt-get install -y --no-install-recommends \
+            -o Dir::Cache::Archives="$HOME/tex-debs" -o Acquire::Retries=3
+          rm -f ~/tex-debs/lock
 
-      - uses: actions/setup-python@v7
+      - name: Restore pip's cache
+        uses: actions/cache@v6
         with:
-          python-version: "3.13"
-          cache: pip
+          path: ~/.cache/pip
+          key: pip-bookworm-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
+          restore-keys: pip-bookworm-
 
       - name: Install dependencies
         run: |

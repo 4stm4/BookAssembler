@@ -20,32 +20,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-get install -y --no-install-recommends nodejs && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# RFC 0012 §3.3: XeLaTeX toolchain for target-document assembly (Cyrillic-capable).
-# fonts-texgyre adds TeX Gyre Termes/Heros/Cursor - metric-compatible OTF
-# clones of Times/Helvetica/Courier - so a Latin-only cell whose source was
-# actually set in one of those (common in scanned technical books) can
-# render in a font close to the source's own, instead of DejaVu Serif or
-# Latin Modern Roman (neither is a Times/Helvetica/Courier match). DejaVu
-# stays the document's main font for Cyrillic; TeX Gyre is Latin-only too
-# (same gap Latin Modern has), selected per-cell in latex_builder.py.
-#
-# Each package at its version (RFC 0012 §3.3: the same input builds the
-# same PDF), the engine (texlive-binaries) and its base too: the tables'
-# overlay tests measure the rebuild to a few percent, and a TeX Live that
-# moved under them would move every measure. When Debian moves one of
-# these (texlive-binaries took +deb12u2 in a point release) the build stops
-# here, by name: take the new version, run the e2e tests, and set it here.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    texlive-binaries=2022.20220321.62855-5.1+deb12u2 \
-    texlive-base=2022.20230122-3 \
-    texlive-latex-base=2022.20230122-3 \
-    texlive-xetex=2022.20230122-3 \
-    texlive-latex-recommended=2022.20230122-3 \
-    texlive-latex-extra=2022.20230122-4 \
-    texlive-lang-cyrillic=2022.20230122-1 \
-    texlive-fonts-recommended=2022.20230122-3 \
-    fonts-dejavu=2.37-6 \
-    fonts-texgyre=20180621-6 && \
+# RFC 0012 §3.3: XeLaTeX toolchain for target-document assembly
+# (Cyrillic-capable), each package at its version - tex-packages.txt, which
+# the e2e job of CI installs too, on this same Debian.
+COPY tex-packages.txt /tmp/
+RUN apt-get update && grep -v '^#' /tmp/tex-packages.txt | \
+    xargs apt-get install -y --no-install-recommends && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
