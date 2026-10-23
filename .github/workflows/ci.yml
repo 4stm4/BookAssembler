@@ -13,7 +13,8 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          # The version the image ships (Dockerfile: python:3.13-slim).
+          python-version: "3.13"
           cache: pip
 
       - name: Install dependencies
@@ -26,24 +27,52 @@ jobs:
           PYTHONPATH: .
         run: pytest tests/unit tests/contract -q --asyncio-mode=auto
 
-  benchmark:
-    # RFC 0009 §5.3: quality regressions block the merge, they do not just get logged.
+  frontend:
     runs-on: ubuntu-latest
-    if: hashFiles('benchmark/corpus/**/input.*') != ''
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.11"
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+  benchmark:
+    # RFC 0009 §5.3: quality regressions block the merge, they do not just get logged.
+    # The job runs only when the repository holds a corpus. hashFiles() is not
+    # allowed in a job-level `if:` (the whole workflow is rejected then, with
+    # no job run), so the check is a step and the rest follow its answer.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Look for a corpus
+        id: corpus
+        run: echo "present=${{ hashFiles('benchmark/corpus/**/input.*') != '' }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        if: steps.corpus.outputs.present == 'true'
+        with:
+          python-version: "3.13"
           cache: pip
 
       - name: Install dependencies
+        if: steps.corpus.outputs.present == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Quality benchmark (strict)
+        if: steps.corpus.outputs.present == 'true'
         env:
           PYTHONPATH: .
         run: |
@@ -53,7 +82,7 @@ jobs:
             --strict-regression-check
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.corpus.outputs.present == 'true'
         with:
           name: benchmark-report
           path: benchmark-report.json
