@@ -42,7 +42,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import FileResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from src.adapters import create_default_registry
 from src.api.stores import BoundedLRU, DocStore
@@ -243,6 +243,19 @@ def create_app() -> FastAPI:
             options={"root_path": kae_ssd_path},
         )
         sep_manager.register_provider(nvme_config)
+
+    def _job_dir(job_id: str) -> str:
+        """The job's own directory on the SSD, or 404.
+
+        A job id is one path component. Starlette decodes the path before it
+        matches the route, so DELETE /api/v1/jobs/%2E%2E arrives as job_id
+        "..", and the job's directory joined from it was the data root's
+        parent - removed whole, with every job and whatever lay beside it.
+        """
+        if (job_id in ("", ".", "..") or "\x00" in job_id
+                or "/" in job_id or "\\" in job_id):
+            raise HTTPException(status_code=404, detail=f"No job '{job_id}'")
+        return os.path.join(kae_ssd_path, job_id)
 
     def _count_nodes(doc: KnowledgeDocument) -> int:
         count = 0
@@ -1057,7 +1070,7 @@ def create_app() -> FastAPI:
 
     def _infer_target_lang(job_id: str) -> str:
         """Best-effort: read target_lang from book.json, fall back to 'Russian'."""
-        book_json = os.path.join(kae_ssd_path, job_id, "book.json")
+        book_json = os.path.join(_job_dir(job_id), "book.json")
         if os.path.isfile(book_json):
             try:
                 with open(book_json) as f:
@@ -1874,6 +1887,7 @@ def create_app() -> FastAPI:
 
     @app.delete("/api/v1/jobs/{job_id}")
     async def delete_job(job_id: str) -> Dict[str, Any]:
+        ssd_dir = _job_dir(job_id)
         if job_id in docs_store:
             del docs_store[job_id]
         if job_id in graphs_store:
@@ -1881,7 +1895,6 @@ def create_app() -> FastAPI:
         json_path = os.path.join(_docs_dir, f"{job_id}.json")
         if os.path.exists(json_path):
             os.remove(json_path)
-        ssd_dir = os.path.join(kae_ssd_path, job_id)
         if os.path.isdir(ssd_dir):
             import shutil
             shutil.rmtree(ssd_dir, ignore_errors=True)
@@ -1981,6 +1994,15 @@ def create_app() -> FastAPI:
         target_lang: str = "Russian"
         page_aware: bool = True
 
+        @field_validator("target_lang")
+        @classmethod
+        def _one_file_name(cls, lang: str) -> str:
+            # The language names the output file; "x/../../elsewhere" wrote
+            # the book outside the job's directory.
+            if not lang or "/" in lang or "\\" in lang or "\x00" in lang:
+                raise ValueError("target_lang must be a language name, without path separators")
+            return lang
+
     class PreviewRequest(BaseModel):
         target_lang: str = ""
 
@@ -1996,7 +2018,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
         from src.assembler.translator import _generate_pdf
         lang = body.target_lang or _infer_target_lang(job_id)
-        output_path = os.path.join(kae_ssd_path, job_id, "preview_pages.pdf")
+        output_path = os.path.join(_job_dir(job_id), "preview_pages.pdf")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
         def _run():
@@ -2011,7 +2033,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/v1/jobs/{job_id}/download/preview")
     async def download_preview(job_id: str):
-        path = os.path.join(kae_ssd_path, job_id, "preview_pages.pdf")
+        path = os.path.join(_job_dir(job_id), "preview_pages.pdf")
         if not os.path.exists(path):
             raise HTTPException(status_code=404, detail="No preview PDF found")
         return FileResponse(path, filename=os.path.basename(path),
@@ -2029,7 +2051,7 @@ def create_app() -> FastAPI:
         if job_id in translation_runs:
             raise HTTPException(status_code=409, detail="Translation is still running")
         from src.assembler.translator import assemble_book
-        output_path = os.path.join(kae_ssd_path, job_id, f"translated_{body.target_lang.lower()}.pdf")
+        output_path = os.path.join(_job_dir(job_id), f"translated_{body.target_lang.lower()}.pdf")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
         counts = await asyncio.to_thread(assemble_book, doc, body.target_lang, output_path, job_id)
@@ -2175,7 +2197,7 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/jobs/{job_id}/download/translated")
     async def download_translated(job_id: str):
         import glob
-        pattern = os.path.join(kae_ssd_path, job_id, "translated_*.pdf")
+        pattern = os.path.join(glob.escape(_job_dir(job_id)), "translated_*.pdf")
         files = glob.glob(pattern)
         if not files:
             raise HTTPException(status_code=404, detail="No translated PDF found")

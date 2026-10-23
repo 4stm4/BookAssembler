@@ -193,3 +193,35 @@ if __name__ == "__main__":
     test_sep_manager_operations()
     test_fastapi_sep_endpoints()
     print("ALL SEP PROVIDER TESTS PASSED PERFECTLY!")
+
+
+def test_local_fs_provider_stays_inside_its_root(tmp_path) -> None:
+    """A sibling whose name starts with the root's is outside it: "/data/ssd"
+    is a prefix of "/data/ssd_secret", and the prefix test let "../ssd_secret"
+    through to be listed and read."""
+    root = tmp_path / "ssd"
+    (root / "books").mkdir(parents=True)
+    (root / "books" / "a.pdf").write_bytes(b"%PDF-1.4")
+    secret = tmp_path / "ssd_secret"
+    secret.mkdir()
+    (secret / "keys.txt").write_text("not the provider's")
+
+    provider = LocalFSProvider(SEPConfig(
+        name="Local SSD", sep_type=SEPType.LOCAL_FS, options={"root_path": str(root)},
+    ))
+
+    for folder in ("../ssd_secret", "/../ssd_secret", "books/../../ssd_secret", ".."):
+        assert asyncio.run(provider.list_directory(folder)) == []
+    for file_id in ("../ssd_secret/keys.txt", "/../ssd_secret/keys.txt",
+                    "books/../../ssd_secret/keys.txt", "..\\ssd_secret\\keys.txt"):
+        try:
+            asyncio.run(provider.get_file_stream(file_id)).close()
+        except FileNotFoundError:
+            continue
+        raise AssertionError(f"{file_id!r} was read from outside the root")
+
+    # What is inside is still there, by any spelling that stays inside.
+    assert [i.name for i in asyncio.run(provider.list_directory("books/../books"))] == ["a.pdf"]
+    stream = asyncio.run(provider.get_file_stream("/books/a.pdf"))
+    assert stream.read() == b"%PDF-1.4"
+    stream.close()
