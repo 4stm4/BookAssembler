@@ -27,6 +27,59 @@ jobs:
           PYTHONPATH: .
         run: pytest tests/unit tests/contract -q --asyncio-mode=auto
 
+  e2e:
+    # The reference tests (TESTS_STOPLIST.md) and the other end-to-end tests:
+    # each PDF through the whole pipeline and the XeLaTeX build. They skip
+    # where the TeX toolchain is missing, so the toolchain is the image's
+    # (Dockerfile) and a run that skips any of them fails.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the TeX toolchain the image ships
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            texlive-xetex texlive-latex-recommended texlive-latex-extra \
+            texlive-lang-cyrillic texlive-fonts-recommended fonts-dejavu \
+            fonts-texgyre
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: End-to-end tests
+        env:
+          PYTHONPATH: .
+        run: >-
+          pytest tests/e2e tests/test_page_assembler.py -q -rs
+          -n auto --dist load --asyncio-mode=auto
+          --junitxml=e2e-report.xml
+
+      - name: No end-to-end test skipped
+        run: |
+          python - <<'EOF'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("e2e-report.xml").getroot()
+          skipped = [
+              f"{case.get('classname')}::{case.get('name')}: {skip.get('message')}"
+              for case in root.iter("testcase") for skip in case.findall("skipped")
+          ]
+          if skipped:
+              print("Skipped, so not checked - the toolchain is incomplete:")
+              print("\n".join(skipped))
+              sys.exit(1)
+          EOF
+
   frontend:
     runs-on: ubuntu-latest
     steps:
