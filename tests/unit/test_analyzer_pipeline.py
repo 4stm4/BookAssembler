@@ -285,3 +285,35 @@ def test_security_violation_child_node_tombstone() -> None:
 
     with pytest.raises(SecurityViolationError, match="TOMBSTONE"):
         runner.execute(doc, ReadingGraph(), KnowledgeGraph())
+
+
+class CrashingAnalyzer(BaseAnalyzer):
+    def __init__(self) -> None:
+        super().__init__(AnalyzerManifest(
+            name="CrashingAnalyzer",
+            version="1.0.0",
+            description="Fails halfway through its run.",
+            krm_permissions={KRMPermission.READ, KRMPermission.MUTATE_ATTRIBUTES},
+            rg_permissions=set(),
+            kg_permissions=set(),
+            depends_on=[],
+        ))
+
+    def run(self, doc, rg, kg, context=None) -> None:
+        doc.title = "half done"
+        raise ValueError("Invalid NormalizedRect dimensions")
+
+
+def test_a_failing_analyzer_is_rolled_back_and_recorded() -> None:
+    """RFC 0005 §6.1 rolls a failing analyzer back and runs on; the runner
+    says which failed and why, for a caller to see what is missing."""
+    runner = PipelineRunner([CrashingAnalyzer(), MockLayoutAnalyzer()])
+    doc = KnowledgeDocument(title="Original Title")
+    runner.execute(doc, ReadingGraph(), KnowledgeGraph())
+
+    assert runner.failures == [("CrashingAnalyzer", "ValueError: Invalid NormalizedRect dimensions")]
+    assert doc.title == "Analyzed Document Title"      # rolled back, then the next one ran
+
+    runner = PipelineRunner([MockLayoutAnalyzer()])
+    runner.execute(KnowledgeDocument(title="t"), ReadingGraph(), KnowledgeGraph())
+    assert runner.failures == []
