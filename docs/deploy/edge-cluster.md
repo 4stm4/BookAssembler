@@ -151,8 +151,8 @@ See [colab/README.md](../../colab/README.md) for details.
 ## Health Checks
 
 ```bash
-# KAE Engine
-curl http://rpi5:8000/health
+# KAE Engine: through the gateway, with its login (port 8000 is local to rpi5)
+curl -u admin:"$KAE_AUTH_PASSWORD" http://rpi5:3000/api/v1/documents
 
 # Manager
 curl http://rpi5:8080/health
