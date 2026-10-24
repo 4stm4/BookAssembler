@@ -111,7 +111,7 @@ flowchart TD
 ```
 BookAssembler/
 ├── Dockerfile               # backend (FastAPI) + frontend (Vite) + XeLaTeX (texlive)
-├── docker-compose.yml       # kae-engine: порт 3000 (UI) / 8000 (API), volume /data
+├── docker-compose.yml       # kae-engine: порт 3000 (UI и API, с логином) / 8000 (API, только локально)
 ├── requirements.txt         # Python зависимости (fastapi, pymupdf, opencv, reportlab…)
 ├── server.ts                # Node gateway: раздаёт SPA + проксирует /api на FastAPI
 │
@@ -147,12 +147,14 @@ BookAssembler/
 Backend, frontend и XeLaTeX собираются в один образ.
 
 ```bash
-cp .env.example .env   # необязательно: адреса Ollama, ключ OpenAI, лимиты
+cp .env.example .env   # задай KAE_AUTH_PASSWORD; остальное (Ollama, OpenAI, лимиты) — по желанию
 docker compose up -d --build
 ```
 
-- UI: `http://<host>:3000` (API для UI проксируется шлюзом по `/api/v1`)
-- API: `http://<host>:8000/api/v1`
+- UI: `http://<host>:3000` — браузер спросит логин (`admin` или `KAE_AUTH_USER`)
+  и пароль (`KAE_AUTH_PASSWORD`). Без пароля в `.env` compose сервис не запустит.
+- API через шлюз, с тем же логином: `curl -u admin:<пароль> http://<host>:3000/api/v1/documents`
+- API без логина: `http://127.0.0.1:8000/api/v1` — только с самой машины
 - Данные (импортированные PDF, KRM-JSON, сборки): `/data/kae` на хосте
 - LLM-агенты: адреса Ollama по умолчанию — из сети автора (`192.168.88.x`).
   На другой машине задай свои в `.env` (`LLM_AGENT_URL` и др., см.

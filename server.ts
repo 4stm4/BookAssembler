@@ -7,6 +7,8 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import { createHmac, timingSafeEqual } from 'crypto';
+import type { IncomingMessage } from 'http';
 import type { Socket } from 'net';
 import dotenv from 'dotenv';
 import { spawn } from 'child_process';
@@ -24,6 +26,60 @@ const PORT = 3000;
 const API_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 
 app.use(cors());
+
+// The login for the UI and the API behind it: KAE_AUTH_USER (default
+// "admin") and KAE_AUTH_PASSWORD. The browser asks once (HTTP Basic); a
+// session cookie then carries it to the job's WebSocket too, where not
+// every browser sends Basic credentials. Without a password the gateway is
+// open - `npm run dev` on one's own machine; docker-compose.yml does not
+// start without one.
+const AUTH_USER = process.env.KAE_AUTH_USER || 'admin';
+const AUTH_PASSWORD = process.env.KAE_AUTH_PASSWORD || '';
+const SESSION_COOKIE = 'kae_session';
+const SESSION = AUTH_PASSWORD
+  ? createHmac('sha256', AUTH_PASSWORD).update(`kae-session:${AUTH_USER}`).digest('hex')
+  : '';
+
+function same(given: string, expected: string): boolean {
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** How the request proves the login: 'basic', 'cookie', or null for not at all. */
+function login(req: IncomingMessage): 'basic' | 'cookie' | null {
+  for (const part of (req.headers.cookie ?? '').split(';')) {
+    const [name, value] = part.trim().split('=', 2);
+    if (name === SESSION_COOKIE && value && same(value, SESSION)) return 'cookie';
+  }
+  const header = req.headers.authorization ?? '';
+  if (header.startsWith('Basic ')) {
+    const pair = Buffer.from(header.slice(6), 'base64').toString('utf8');
+    const colon = pair.indexOf(':');
+    if (colon >= 0 && same(pair.slice(0, colon), AUTH_USER)
+        && same(pair.slice(colon + 1), AUTH_PASSWORD)) {
+      return 'basic';
+    }
+  }
+  return null;
+}
+
+if (AUTH_PASSWORD) {
+  app.use((req, res, next) => {
+    const how = login(req);
+    if (how === null) {
+      res.set('WWW-Authenticate', 'Basic realm="BookAssembler", charset="UTF-8"');
+      res.status(401).send('Login required');
+      return;
+    }
+    if (how === 'basic') {
+      res.append('Set-Cookie', `${SESSION_COOKIE}=${SESSION}; Path=/; HttpOnly; SameSite=Strict`);
+    }
+    next();
+  });
+} else {
+  console.warn('KAE_AUTH_PASSWORD is not set: the UI and the API are open to anyone who reaches this port.');
+}
 
 const apiProxy = createProxyMiddleware({
   target: 'http://127.0.0.1:8000',
@@ -78,7 +134,9 @@ async function startServer() {
   // middleware sees: without this the browser's handshake hung unanswered.
   // Nothing else here takes one (Vite's HMR has a port of its own).
   server.on('upgrade', (req, socket, head) => {
-    if (req.url?.startsWith('/api/v1/')) {
+    if (AUTH_PASSWORD && login(req) === null) {
+      socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+    } else if (req.url?.startsWith('/api/v1/')) {
       apiProxy.upgrade(req, socket as Socket, head);
     } else {
       socket.destroy();
