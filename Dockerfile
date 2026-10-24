@@ -1,8 +1,8 @@
 FROM node:22-bookworm-slim AS frontend
 
 WORKDIR /app
-# npm ci installs what package-lock.json pins; npm reads no bun.lock, and
-# `npm install` without the lock resolved the ranges afresh on every build.
+# npm ci installs what package-lock.json pins; `npm install` resolved the
+# ranges afresh on every build.
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY index.html vite.config.ts tsconfig.json server.ts ./

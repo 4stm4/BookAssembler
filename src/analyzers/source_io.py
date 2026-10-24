@@ -52,9 +52,11 @@ def resolve_source_path(doc: KnowledgeDocument) -> Optional[str]:
         p = uri[len("file://"):]
         return p if os.path.exists(p) else None
     if uri.startswith("upload://"):
-        filename = uri.replace("upload://", "")
+        # The upload is saved under its base name in its job's directory;
+        # a name with "../" in it led out of the data root.
+        filename = os.path.basename(uri.replace("upload://", ""))
         ssd = os.environ.get("KAE_SSD_PATH", "/data/kae")
-        for d in os.listdir(ssd) if os.path.isdir(ssd) else []:
+        for d in os.listdir(ssd) if os.path.isdir(ssd) and filename else []:
             cand = os.path.join(ssd, d, filename)
             if os.path.isfile(cand):
                 return cand
@@ -71,8 +73,11 @@ def resolve_source_path(doc: KnowledgeDocument) -> Optional[str]:
             "/data/kae", "/data/ssd",
         ]
         for root in roots:
-            cand = os.path.join(root, rel)
-            if os.path.exists(cand):
+            root = os.path.abspath(root)
+            cand = os.path.abspath(os.path.join(root, rel))
+            # What a provider serves is inside its root (LocalFSProvider);
+            # "sep://x/../../etc/..." is not a file of any.
+            if os.path.commonpath([root, cand]) == root and os.path.exists(cand):
                 return cand
         return None
     return uri if os.path.isabs(uri) and os.path.exists(uri) else None

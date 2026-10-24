@@ -9,7 +9,6 @@ services:
       - "8000:8000"
     volumes:
       - /data/kae:/data/ssd
-      - kae-db:/app/data
     # Settings from .env (see .env.example), when there is one.
     env_file:
       - path: .env
@@ -23,6 +22,3 @@ services:
       resources:
         limits:
           memory: 3G
-
-volumes:
-  kae-db:

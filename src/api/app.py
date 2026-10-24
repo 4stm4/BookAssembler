@@ -99,6 +99,23 @@ class DocumentUploadRequest(BaseModel):
     source_uri: Optional[str] = None
     content: Optional[str] = None
 
+    @field_validator("source_uri")
+    @classmethod
+    def _names_no_file_here(cls, uri: Optional[str]) -> Optional[str]:
+        # A text payload carries its content; its name is a label. One that
+        # names a file on this server - file://, upload://, sep://, a path -
+        # had the analyzers read that file as the document's source
+        # (source_io.resolve_source_path): any PDF on the host, or another
+        # job's.
+        if uri is None:
+            return uri
+        name = uri.strip()
+        if (name.lower().startswith(("file:", "upload:", "sep:"))
+                or name.startswith(("/", "\\")) or os.path.isabs(name)):
+            raise ValueError(
+                "source_uri of a text payload must not name a file on the server")
+        return uri
+
 
 class DocumentUploadResponse(BaseModel):
     job_id: str
@@ -1139,7 +1156,11 @@ def create_app() -> FastAPI:
         raw_bytes: Optional[bytes] = None
 
         if file is not None and file.filename:
-            source_uri = f"upload://{file.filename}"
+            # The name it is saved under below: "../../x.pdf" stays x.pdf in
+            # the job's directory, and the uri named the path, which
+            # resolve_source_path then followed out of it.
+            name = os.path.basename(file.filename.replace("\\", "/"))
+            source_uri = f"upload://{name}"
             raw_bytes = await file.read()
         elif payload is not None and payload.source_uri:
             source_uri = payload.source_uri
