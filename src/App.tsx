@@ -159,7 +159,10 @@ export const App: React.FC = () => {
         lastLoggedStage = '';
         setEventLog((prev) => [{ time, text: '✓ Завершено' }, ...prev].slice(0, 50));
         setTimeout(() => setGlobalJobStatus('Готов'), 3000);
-        if ((event as any).job_type === 'translate') loadTranslationData();
+        // An import's document is served once it is finished (409 before),
+        // so the translation view loads it then, as it does after a translation.
+        const kind = (event as any).job_type;
+        if (kind === 'translate' || kind === 'import') loadTranslationData();
       } else if (event.event === 'job_failed') {
         setGlobalJobStatus('Ошибка');
         setIsJobRunning(false);

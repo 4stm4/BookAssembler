@@ -90,6 +90,7 @@ from src.krm.models import (
     TextLineInline,
     BlankPageBlock,
     TitlePageBlock,
+    UnknownBlock,
 )
 
 
@@ -474,7 +475,11 @@ def create_app() -> FastAPI:
                 if lines:
                     result["lines"] = lines
                 return result
-            elif isinstance(node, ParagraphBlock):
+            elif isinstance(node, (ParagraphBlock, UnknownBlock)):
+                # An UnknownBlock is a paragraph no analyzer has claimed yet
+                # (the adapter's output, before UnknownResolver). It fell to
+                # the fallback below, which keeps only id and type: saved so,
+                # its text was gone, and the editor drew "UnknownBlock NaN%".
                 text_parts = []
                 for inline in (node.inlines or []):
                     if hasattr(inline, "spans"):
@@ -483,7 +488,7 @@ def create_app() -> FastAPI:
                                 text_parts.append(span.text)
                 result = {
                     "id": node.id,
-                    "type": "ParagraphBlock",
+                    "type": type(node).__name__,
                     "text": " ".join(text_parts),
                     "confidence_score": node.confidence_score,
                     "extraction_confidence": node.extraction_confidence,
@@ -825,8 +830,8 @@ def create_app() -> FastAPI:
                 for ch in n.get("children", []):
                     c.children.append(rebuild_node(ch))
                 return c
-            elif t == "ParagraphBlock":
-                p = ParagraphBlock(
+            elif t in ("ParagraphBlock", "UnknownBlock"):
+                p = (ParagraphBlock if t == "ParagraphBlock" else UnknownBlock)(
                     confidence_score=n.get("confidence_score", 1.0),
                     inlines=_restore_lines(n)
                     or [TextLineInline(spans=[StyledTextSpan(text=n.get("text", ""))])],
@@ -1099,11 +1104,42 @@ def create_app() -> FastAPI:
                 pass
         return "Russian"
 
-    def _persist_doc(job_id: str, doc: KnowledgeDocument) -> None:
+    # Imports a restart cut short: what is saved of them is the adapter's
+    # output, before any analyzer ran.
+    INTERRUPTED = "Обработка прервана перезапуском сервера; загрузите документ заново"
+    interrupted_imports: set = set()
+
+    def _settled_doc(job_id: str) -> KnowledgeDocument:
+        """The job's document once its import is over; 409 while it is not.
+
+        The import puts the parsed document in the store before the pipeline
+        runs over it, in another thread. Read then, every block was still an
+        UnknownBlock, and the editor - which polls the job's progress while
+        the result answers an error - took it for the finished result and
+        never reloaded it. Written then, it raced the analyzers.
+        """
+        job = job_manager.get_job(job_id)
+        if job is not None and job.status == JobStatus.RUNNING:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Job '{job_id}' is still being imported",
+            )
+        if job_id in interrupted_imports:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=INTERRUPTED)
+        doc = docs_store.get(job_id)
+        if doc is None:
+            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        return doc
+
+    def _persist_doc(job_id: str, doc: KnowledgeDocument, analyzed: bool = True) -> None:
         path = os.path.join(_docs_dir, f"{job_id}.json")
         data = _serialize_document(doc)
         data["_source_uri"] = doc.source_uri
         data["_source_type"] = doc.source_type
+        # False for the adapter's output saved before the pipeline runs: if
+        # the server stops before the analyzed one replaces it, the restart
+        # must not take it for a finished document (_load_persisted_docs).
+        data["_analyzed"] = analyzed
         job = job_manager.get_job(job_id)
         if job:
             data["_created_at"] = job.created_at
@@ -1124,10 +1160,18 @@ def create_app() -> FastAPI:
             try:
                 with open(os.path.join(_docs_dir, fname)) as f:
                     data = json.load(f)
+                analyzed = data.get("_analyzed", True)  # older saves: finished ones
                 job_manager.restore_job(
-                    job_id, data.get("_source_uri", ""), "COMPLETED",
+                    job_id, data.get("_source_uri", ""),
+                    "COMPLETED" if analyzed else "FAILED",
                     created_at=data.get("_created_at", ""),
                 )
+                if not analyzed:
+                    job_manager.update_status(job_id, JobStatus.FAILED, error=INTERRUPTED)
+                    interrupted_imports.add(job_id)
+                    progress_store[job_id] = {
+                        "step": 0, "total": 1, "stage": INTERRUPTED, "error": INTERRUPTED,
+                    }
             except Exception:
                 logging.getLogger(__name__).exception(
                     "Failed to restore job record for '%s'; skipping", job_id
@@ -1500,7 +1544,7 @@ def create_app() -> FastAPI:
                 None, adapter.parse, file_stream, job.source_uri
             )
             docs_store[job_id] = doc
-            _persist_doc(job_id, doc)
+            _persist_doc(job_id, doc, analyzed=False)
 
             progress_store[job_id] = {"step": 2, "total": 10, "stage": "Запуск анализаторов..."}
 
@@ -1694,9 +1738,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/v1/jobs/{job_id}/result")
     async def get_job_result(job_id: str) -> Dict[str, Any]:
-        doc = docs_store.get(job_id)
-        if doc is None:
-            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        doc = _settled_doc(job_id)
         return _serialize_document(doc)
 
     @app.get("/api/v1/jobs/{job_id}/pages")
@@ -1707,9 +1749,7 @@ def create_app() -> FastAPI:
         the decision from here instead of holding a second implementation that
         could drift out of step with the one that builds the PDF.
         """
-        doc = docs_store.get(job_id)
-        if doc is None:
-            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        doc = _settled_doc(job_id)
         if not (doc.metadata or {}).get("page_sizes_pt"):
             # Processed before the adapter recorded page sizes: read them from
             # the source — without them the editor draws every page as A4.
@@ -1807,9 +1847,7 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/jobs/{job_id}/diagram/{block_id}")
     async def get_diagram_image(job_id: str, block_id: str) -> Response:
         """Render a DiagramBlock's source page region as an image (scan crop)."""
-        doc = docs_store.get(job_id)
-        if doc is None:
-            raise HTTPException(status_code=404, detail="Document not found")
+        doc = _settled_doc(job_id)
         node = _find_node(doc, block_id)
         if node is None or not isinstance(node, DiagramBlock):
             raise HTTPException(status_code=404, detail="Diagram not found")
@@ -1882,9 +1920,7 @@ def create_app() -> FastAPI:
         """Send a table region to the `table`-role agent (GOT-OCR/MinerU) and store
         the returned LaTeX on the TableBlock (used as-is at book assembly)."""
         import base64
-        doc = docs_store.get(job_id)
-        if doc is None:
-            raise HTTPException(404, "Document not found")
+        doc = _settled_doc(job_id)
         node = _find_node(doc, block_id)
         if node is None or not isinstance(node, TableBlock):
             raise HTTPException(404, "Table not found")
@@ -1909,6 +1945,7 @@ def create_app() -> FastAPI:
     @app.delete("/api/v1/jobs/{job_id}")
     async def delete_job(job_id: str) -> Dict[str, Any]:
         ssd_dir = _job_dir(job_id)
+        interrupted_imports.discard(job_id)
         if job_id in docs_store:
             del docs_store[job_id]
         if job_id in graphs_store:
@@ -1923,9 +1960,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/v1/jobs/{job_id}/chunks")
     async def get_job_chunks(job_id: str) -> Dict[str, Any]:
-        doc = docs_store.get(job_id)
-        if doc is None:
-            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        doc = _settled_doc(job_id)
         graphs = graphs_store.get(job_id, {})
         rg = graphs.get("rg", ReadingGraph())
         kg = graphs.get("kg", KnowledgeGraph())
@@ -1939,9 +1974,7 @@ def create_app() -> FastAPI:
         if kind not in ("instruction", "qa"):
             raise HTTPException(status_code=400, detail="kind must be 'instruction' or 'qa'")
 
-        doc = docs_store.get(job_id)
-        if doc is None:
-            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        doc = _settled_doc(job_id)
 
         graphs = graphs_store.get(job_id, {})
         chunks = SemanticChunker().build_chunks(
@@ -1990,9 +2023,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/v1/jobs/{job_id}/translate")
     async def translate_page(job_id: str, body: TranslateRequest) -> Dict[str, Any]:
-        doc = docs_store.get(job_id)
-        if doc is None:
-            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        doc = _settled_doc(job_id)
         from src.assembler.translator import _build_translate_prompt, _call_target, translation_targets
         prompt = _build_translate_prompt(body.source_text, body.target_lang)
 
@@ -2034,9 +2065,7 @@ def create_app() -> FastAPI:
         Pass target_lang (e.g. "Russian") to render translations;
         omit it for a source-language preview.
         """
-        doc = docs_store.get(job_id)
-        if doc is None:
-            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        doc = _settled_doc(job_id)
         from src.assembler.translator import _generate_pdf
         lang = body.target_lang or _infer_target_lang(job_id)
         output_path = os.path.join(_job_dir(job_id), "preview_pages.pdf")
@@ -2066,9 +2095,7 @@ def create_app() -> FastAPI:
         recorded (POST .../translate/start). Nothing is translated here: this
         used to translate the whole book again inside the request, under a
         one-hour budget, and whatever did not fit went out in English."""
-        doc = docs_store.get(job_id)
-        if doc is None:
-            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        doc = _settled_doc(job_id)
         if job_id in translation_runs:
             raise HTTPException(status_code=409, detail="Translation is still running")
         from src.assembler.translator import assemble_book
@@ -2109,9 +2136,7 @@ def create_app() -> FastAPI:
         saved as the job goes, and starting again skips every unit already
         translated from the same text with the same prompt (§2.2).
         """
-        doc = docs_store.get(job_id)
-        if doc is None:
-            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        doc = _settled_doc(job_id)
         if job_id in translation_runs:
             raise HTTPException(status_code=409, detail="Translation is already running")
 
@@ -2426,9 +2451,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/v1/jobs/{job_id}/refine")
     async def refine_node(job_id: str, body: RefineRequest) -> Dict[str, Any]:
-        doc = docs_store.get(job_id)
-        if doc is None:
-            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        doc = _settled_doc(job_id)
 
         def find_node(containers, node_id):
             for c in containers:
@@ -2523,9 +2546,7 @@ def create_app() -> FastAPI:
         once (with its text and page image) and classifies the undetermined ones.
         More context than per-block refine, so it fixes what single blocks miss.
         """
-        doc = docs_store.get(job_id)
-        if doc is None:
-            raise HTTPException(status_code=404, detail=f"No document for job '{job_id}'")
+        doc = _settled_doc(job_id)
         from src.analyzers.llm_refinement import VALID_TYPES
         from src.analyzers.llm_refinement.rules import _call_ollama
 
